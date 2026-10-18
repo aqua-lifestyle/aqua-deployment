@@ -114,8 +114,17 @@ function fixture() {
   };
   const sourceApi=api.gh;
   api.gh=async(route,...args)=>route.startsWith('/actions/workflows/release.yml/runs?') ?
-    {total_count:0,workflow_runs:[]} : sourceApi(route,...args);
+    {total_count:1,workflow_runs:[{id:38912818702,run_number:1,run_attempt:1,
+      repository:{full_name:targets.repository},head_repository:{full_name:targets.repository},
+      path:'.github/workflows/release.yml',head_branch:'main',event:'workflow_run',status:'completed',name:'Qualified production release'}]} :
+    route.startsWith('/actions/runs/38912818702/') ? {total_count:2,jobs:[{name:'Qualify immutable source candidate'},
+      {name:'Unattended recovery release',conclusion:'skipped'}]} : sourceApi(route,...args);
   api.executor=async route=>{
+    if(route==='/git/ref/heads/main')return {object:{sha:state.candidate.executorSha}};
+    if(route===`/actions/runs/${state.candidate.releaseRunId}`)return {id:Number(state.candidate.releaseRunId),
+      run_attempt:state.candidate.releaseRunAttempt,run_number:1,head_sha:state.candidate.executorSha,head_branch:'main',
+      event:'workflow_dispatch',path:'.github/workflows/deploy.yml',name:'Qualified production executor',status:'in_progress',
+      repository:{full_name:targets.executor.repository},head_repository:{full_name:targets.executor.repository}};
     if(route.startsWith('/environments/'))return sourceApi(route);
     if(route.startsWith('/rules/branches/main'))return ['deletion','non_fast_forward'].map(type=>({type,ruleset_id:99}));
     if(route==='/rulesets/99')return {enforcement:'active',source:targets.executor.repository,source_type:'Repository',target:'branch',bypass_actors:[],rules:[{type:'deletion'},{type:'non_fast_forward'}]};

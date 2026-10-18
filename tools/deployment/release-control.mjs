@@ -155,7 +155,7 @@ export function validateMainGovernance(rules, ruleset) {
     rows.some(checksRequired)), 'MAIN_CI_GOVERNANCE_REQUIRED');
 }
 
-export async function validateInfrastructure(api) {
+export async function validateInfrastructure(api, identity) {
   const rules = await api.gh('/rules/branches/main?per_page=100');
   requireThat(Array.isArray(rules) && rules.length > 0 && rules.length < 100,
     'MAIN_GOVERNANCE_UNVERIFIABLE');
@@ -171,6 +171,14 @@ export async function validateInfrastructure(api) {
   requireThat(page.total_count === page.branch_policies?.length, 'ENVIRONMENT_BRANCH_INVENTORY_INCOMPLETE');
   validateEnvironment(environment, page.branch_policies);
   if (external) {
+    validateReleaseIdentity(identity);
+    const head = await api.executor('/git/ref/heads/main');
+    requireThat(head.object?.sha === identity.executorSha, 'STALE_EXECUTOR_REVISION');
+    const current = await api.executor(`/actions/runs/${identity.releaseRunId}`);
+    validateReleaseRun(current);
+    requireThat(String(current.id) === identity.releaseRunId && current.head_sha === identity.executorSha &&
+      current.run_attempt === identity.releaseRunAttempt && current.status === 'in_progress',
+      'EXECUTOR_ATTEMPT_CHANGED');
     const environment = await api.executor(`/environments/${targets.environment}`);
     const page = await api.executor(`/environments/${targets.environment}/deployment-branch-policies?per_page=100`);
     requireThat(page.total_count === page.branch_policies?.length, 'ENVIRONMENT_BRANCH_INVENTORY_INCOMPLETE');
@@ -196,10 +204,27 @@ export async function validateInfrastructure(api) {
 
 export async function validateLegacyHistory(api) {
   if (!external) return;
-  const result = await api.gh('/actions/workflows/release.yml/runs?branch=main&per_page=100');
-  requireThat(result.total_count === result.workflow_runs?.length && result.total_count < 100,
-    'LEGACY_RELEASE_HISTORY_REQUIRES_RECONCILIATION');
-  for (const run of result.workflow_runs) {
+  const runs = [];
+  let count;
+  for (let page = 1; page <= 20; page++) {
+    const result = await api.gh(`/actions/workflows/release.yml/runs?branch=main&per_page=100&page=${page}`);
+    requireThat(Number.isSafeInteger(result.total_count) && result.total_count >= 1 &&
+      Array.isArray(result.workflow_runs) && (count === undefined || count === result.total_count),
+      'LEGACY_RELEASE_HISTORY_REQUIRES_RECONCILIATION');
+    count = result.total_count;
+    runs.push(...result.workflow_runs);
+    requireThat(runs.length <= count && new Set(runs.map(r => r.id)).size === runs.length,
+      'LEGACY_RELEASE_HISTORY_REQUIRES_RECONCILIATION');
+    if (runs.length === count) break;
+    requireThat(result.workflow_runs.length === 100 && page < 20, 'LEGACY_RELEASE_HISTORY_INCOMPLETE');
+  }
+  // This existing first run was observed before takeover. Losing it or a later
+  // run cannot be interpreted as absence of historical provider activity.
+  requireThat(positiveId(execution.legacyFirstRunId) && runs.some(r =>
+    String(r.id) === execution.legacyFirstRunId && r.run_number === 1) &&
+    runs.every(r => positiveAttempt(r.run_number) && r.run_number <= count) &&
+    new Set(runs.map(r => r.run_number)).size === count, 'LEGACY_RELEASE_HISTORY_GAP_RECONCILE');
+  for (const run of runs) {
     requireThat(run.repository?.full_name === targets.repository && run.head_repository?.full_name === targets.repository &&
       run.path === '.github/workflows/release.yml' && run.head_branch === 'main' && run.event === 'workflow_run' &&
       (run.status === 'completed' || run.name === 'Automatic deployment trigger') &&
@@ -581,7 +606,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   const guard = async () => {
     validatePolicy(qualified, options.env ?? process.env, policy);
     await requalify(api, qualified);
-    await validateInfrastructure(api);
+    await validateInfrastructure(api, qualified);
     await validateCandidateProvenance(api, qualified);
   };
   await guard();
@@ -825,7 +850,7 @@ export async function main(env, options = {}) {
   }
   if (mode === 'candidate') {
     // Detect accidental reviewer/wait gates before entering the environment job.
-    await validateInfrastructure(api);
+    await validateInfrastructure(api, q);
     await validateCandidateProvenance(api, q);
     const archive = sourceArchive(q.sha);
     writeFileSync(`${env.CANDIDATE_DIR}/source.tar`, archive);
@@ -841,7 +866,7 @@ export async function main(env, options = {}) {
   const report = createAuditWriter(q, row => appendFileSync(env.RELEASE_REPORT, JSON.stringify(row) + '\n'));
   failureReport = code => report({ phase: 'failed', code });
   validatePolicy(q, env, policy);
-  await validateInfrastructure(api);
+  await validateInfrastructure(api, q);
   await validateCandidateProvenance(api, q);
   const plan = await evidencePlan(api, q, policy);
   if (mode === 'admit') {

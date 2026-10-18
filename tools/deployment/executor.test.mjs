@@ -84,7 +84,7 @@ test('external receipts and history belong to executor, never application runs',
   r.head_sha=source;await assert.rejects(evidencePlan(api,q,standingPolicy));
 });
 test('legacy application provider ambiguity is preserved during executor takeover',async()=>{
-  const legacy={id:9,run_attempt:1,repository:{full_name:targets.repository},head_repository:{full_name:targets.repository},
+  const legacy={id:38912818702,run_number:1,run_attempt:1,repository:{full_name:targets.repository},head_repository:{full_name:targets.repository},
     path:'.github/workflows/release.yml',head_branch:'main',event:'workflow_run',status:'completed',name:'Qualified production release'};
   const job={name:'Unattended recovery release',conclusion:'failure',steps:[{name:'Revalidate policy, provenance, providers and recovery before automatic deployment',conclusion:'skipped'}]};
   const api={gh:async route=>route.includes('/jobs?')?{total_count:2,jobs:[{name:'Qualify immutable source candidate'},job]}:{total_count:1,workflow_runs:[legacy]}};
@@ -156,7 +156,7 @@ test('real Git source passes candidate, admission and deployment entries without
     const current={id:456,run_attempt:1,run_number:1,head_sha:executorSha,head_branch:'main',event:'workflow_dispatch',
       path:'.github/workflows/deploy.yml',name:'Qualified production executor',status:'in_progress',
       repository:{full_name:targets.executor.repository},head_repository:{full_name:targets.executor.repository}};
-    f.api.executor=async route=>route==='/actions/runs/456'?current:route.startsWith('/actions/workflows/deploy.yml/runs?')?
+    f.api.executor=async route=>route==='/git/ref/heads/main'?{object:{sha:executorSha}}:route==='/actions/runs/456'?current:route.startsWith('/actions/workflows/deploy.yml/runs?')?
       {total_count:1,workflow_runs:[current]}:executorApi(route);
     await main(env,{mode:'candidate',api:f.api});assert.equal(f.posts.length,0);
     const manifest=JSON.parse(readFileSync(join(candidate,'candidate.json')));
@@ -188,8 +188,46 @@ test('verified predecessor binds its own executor commit and its independently r
 });
 
 test('application trigger still running does not create a recurring race barrier',async()=>{
-  const trigger={id:9,run_attempt:1,repository:{full_name:targets.repository},head_repository:{full_name:targets.repository},
-    path:'.github/workflows/release.yml',head_branch:'main',event:'workflow_run',status:'in_progress',name:'Automatic deployment trigger'};
-  await validateLegacyHistory({gh:async route=>route.includes('/jobs?')?
-    {total_count:1,jobs:[{name:'Dispatch qualified executor',status:'in_progress'}]}:{total_count:1,workflow_runs:[trigger]}});
+  const f=fixture();const read=f.api.gh;f.api.gh=async route=>{
+    const result=await read(route);
+    if(route.startsWith('/actions/workflows/release.yml/runs?')){
+      result.total_count=2;result.workflow_runs.push({...result.workflow_runs[0],id:9,run_number:2,
+        status:'in_progress',name:'Automatic deployment trigger'});
+    }
+    if(route.startsWith('/actions/runs/9/'))return {total_count:1,jobs:[{name:'Dispatch qualified executor',status:'in_progress'}]};
+    return result;
+  };
+  await validateLegacyHistory(f.api);
+});
+
+test('old executor commits and replaced executor attempts cannot make provider mutations',async()=>{
+  for(const staleSha of [true,false]){
+    const f=fixture();const read=f.api.executor;f.api.executor=async route=>{
+      const value=await read(route);
+      if(staleSha&&route==='/git/ref/heads/main')value.object.sha=previous;
+      if(!staleSha&&route.startsWith('/actions/runs/'))value.run_attempt++;
+      return value;
+    };
+    await assert.rejects(f.execute(),/STALE_EXECUTOR|EXECUTOR_ATTEMPT_CHANGED/);assert.equal(f.posts.length,0);
+  }
+});
+
+test('legacy history paginates beyond 100 triggers and rejects gaps, duplicates and truncation',async()=>{
+  const f=fixture();const first=(await f.api.gh('/actions/workflows/release.yml/runs?')).workflow_runs[0];
+  const rows=[first,...Array.from({length:100},(_,i)=>({...first,id:i+1000,run_number:i+2,name:'Automatic deployment trigger'}))];
+  const api={gh:async route=>route.includes('/actions/workflows/')?
+    {total_count:101,workflow_runs:rows.slice((Number(new URL('https://fixture.invalid'+route).searchParams.get('page'))-1)*100,
+      Number(new URL('https://fixture.invalid'+route).searchParams.get('page'))*100)}:
+    route.startsWith('/actions/runs/38912818702/')?{total_count:2,jobs:[{}, {name:'Unattended recovery release',conclusion:'skipped'}]}:
+    {total_count:1,jobs:[{name:'Dispatch qualified executor'}]}};
+  await validateLegacyHistory(api);
+  const original=api.gh;
+  api.gh=async route=>{const r=await original(route);if(route.includes('page=2'))r.workflow_runs=[rows[0]];return r;};
+  await assert.rejects(validateLegacyHistory(api),/RECONCILIATION/);
+  api.gh=async route=>{const r=await original(route);if(route.includes('page=1'))r.workflow_runs=r.workflow_runs.slice(1);return r;};
+  await assert.rejects(validateLegacyHistory(api),/INCOMPLETE/);
+  const gap=structuredClone(rows);gap[50].run_number=500;
+  api.gh=async route=>{const r=await original(route);if(r.workflow_runs)r.workflow_runs=r.workflow_runs.map(x=>gap.find(y=>y.id===x.id));return r;};
+  await assert.rejects(validateLegacyHistory(api),/GAP_RECONCILE/);
+  api.gh=async()=>({total_count:0,workflow_runs:[]});await assert.rejects(validateLegacyHistory(api));
 });

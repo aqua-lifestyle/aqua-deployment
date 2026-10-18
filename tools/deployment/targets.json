@@ -21,6 +21,7 @@
   },
   "executor": {
     "repository": "aqua-lifestyle/aqua-deployment",
+    "legacyFirstRunId": "38912818702",
     "workflow": "deploy.yml",
     "name": "Qualified production executor",
     "event": "workflow_dispatch"

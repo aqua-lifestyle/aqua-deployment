@@ -58,6 +58,11 @@ Receipts are retained as immutable GitHub artifacts for90days. Expired/missing,
 partial or ambiguous history blocks rather than fabricating a predecessor. No
 automatic rollback is attempted after financial/schema uncertainty or a lost POST.
 Reconcile provider IDs and original receipts before any authorized retry.
+The application takeover anchor38912818702 is an observed failed historical run,
+not a successful deployment receipt or release token. Its attempts are checked for
+positive evidence of no provider execution. Both histories reject missing runs;
+pagination is bounded at2000runs and20attempts per run. Exceeding bounds or losing
+history requires reconciliation rather than silently discarding evidence.
 
 Independent security-verifier custody is still BLOCKED. The17 GitHub job successes
 do not prove candidate-controlled test bodies were not weakened. This task does not
