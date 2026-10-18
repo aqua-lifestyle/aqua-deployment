@@ -1,76 +1,104 @@
 # One-time setup and production holds
 
-Implementation branch: `feature/automatic-qualified-executor`. This executor
-reuses the reviewed PR106 controller; `tools/deployment/upstream.json` records
-its source and digest. Never refresh executable files, targets or policy from an
-application release candidate. Review any executor change under custodian control.
+Implementation branch: `feature/automatic-qualified-executor`. This branch
+contains credential-free executor code. It reuses the PR106 release controller;
+`tools/deployment/upstream.json` records the reviewed source and digest. The
+application's successful `main` CI `workflow_run` automatically calls GitHub's
+workflow-dispatch API with only source SHA, CI run ID and attempt. No person needs
+to open the Actions page or dispatch a release. The executor workflow's event is
+`workflow_dispatch` because that is the API event used by the automatic trigger;
+it is not a per-release manual action.
 
-Inputs are only source SHA and CI run/attempt hints. The executor independently
-qualifies all17 exact jobs and Actions App15368, current application main and merged
-PR, executor workflow revision/run/attempt, archive bytes, governance and provider
-safety. It fetches application Git objects without checkout or execution. Provider
-secrets are referenced only in the fresh dependent production job running executor
-code. Render deploy/health/revision precede Vercel exact-source/alias/revision and
-public readiness; immutable receipts preserve both source and executor identity.
-Unknown/failed/ambiguous operations stop automatically. No manual dispatch,
-activation token or recurring approval is required by the automatic route.
+The executor re-fetches and qualifies the exact application main source, CI run and
+attempt, all 17 named checks and Actions App 15368, merged PR provenance, executor
+workflow identity and deployment environment. Candidate source is fetched as inert
+Git objects and never checked out or executed. Provider calls use fixed executor
+code and targets. Render exact-commit deployment, health and revision checks must
+pass before Vercel deployment and production revision checks. Existing serialized
+operations, immutable receipts, no-blind-retry handling and fail-closed ambiguity
+checks remain. This is implementation and mock-test evidence; it does not prove
+credential isolation or live provider behavior.
 
-Before credentials or live deployment:
+## Current observed executor state
 
-1. Establish custodian-exclusive executor source and secret-management custody.
-   Designated custodian: `aqualifestyleclub`; `Xolani-M` currently retains admin by
-   explicit owner instruction. Audit inherited org/team/App/automation permissions.
-   This is BLOCKED, not established by a separate repository or synthetic tests.
-2. Apply prepared main deletion/non-fast-forward rules, no bypass actors;
-   main-only `production-release`, admin bypass false, no reviewers/wait/custom
-   approval. Keep Actions tokens read and PR approval disabled. Require full-SHA
-   actions and allow only checkout/setup-node/upload-artifact/download-artifact.
-3. Separately authorize installing this reviewed branch on main and application
-   PR106. The existing executor main is documentation only. Do not perform a live
-   test dispatch to production during preparation.
-4. Provision an executor-only GitHub App with Actions:write/Metadata:read and no
-   Contents/Workflows/Admin/Secrets write. Application CI automatically calls
-   deploy.yml on main using its installation token. Application configuration is
-   `DEPLOYMENT_TRIGGER_APP_ID` (variable) and
-   `DEPLOYMENT_TRIGGER_APP_PRIVATE_KEY` (trigger-only secret). No provider keys go
-   into the application repository. A compromised trigger can abuse availability;
-   it cannot supply targets/code or obtain executor provider keys under the scoped
-   App and qualified custody model.
-5. Verify job-token access to public application Actions, checks, PRs, rulesets
-   (including bypass visibility) and environments; executor governance/history and
-   immutable artifacts. Missing evidence fails closed. Default repository tokens
-   have not been live-qualified for all these reads. Do not grant the deployment
-   runner admin merely to make the check pass. Resolve a supported observation
-   permission route before claiming readiness.
-6. Only after verified isolation, separately authorize persistent provider tokens in
-   this repository's `production-release` environment: `RENDER_API_KEY` and
-   `VERCEL_TOKEN`. No secrets have been added. Render's existing ADMIN key is
-   broader than one service; qualify a dedicated narrower identity. Local Vercel
-   CLI sign-in is not persistent automation authentication.
-7. Retain native Render auto-deploy off and prevent native Vercel deployment races.
-   Qualify the existing Git-source route's project/repository access, public build
-   inputs and existing baseline revision. Current unlinked Vercel configuration
-   remains blocked; this implementation does not reconnect it. Preserve runtime
-   restrictions and qualify actual DB authority, backups/restore, alerts and receipt
-   retention using the application infrastructure plan. No runtime flag was relaxed.
+Read-only GitHub inspection on 2026-10-18 found `main` at
+`eb4dbcb188eb4d1ee1d0fdde73f072de3aa65fc5`, unprotected, with no rulesets,
+environments or provider secrets. Actions are enabled with all actions allowed
+and SHA pinning off. The default workflow token is read-only and cannot approve PR
+reviews. `aqualifestyleclub` is the sole listed organization owner and effective
+repository admin; `Xolani-M` retains a direct repository-admin grant by owner
+instruction. Installed GitHub Apps and some inherited organization permissions
+remain unobservable to this session. Executor PR #1 is still open at
+`68bd6ecbbf56229c0207df26bc37c1f173d95286`; that branch is not installed on `main`.
 
-Receipts are retained as immutable GitHub artifacts for90days. Expired/missing,
-partial or ambiguous history blocks rather than fabricating a predecessor. No
-automatic rollback is attempted after financial/schema uncertainty or a lost POST.
-Reconcile provider IDs and original receipts before any authorized retry.
-The application takeover anchor38912818702 is an observed failed historical run,
-not a successful deployment receipt or release token. Its attempts are checked for
-positive evidence of no provider execution. Both histories reject missing runs;
-pagination is bounded at2000runs and20attempts per run. Exceeding bounds or losing
-history requires reconciliation rather than silently discarding evidence.
+The exact target-state contract is recorded in
+[`governance/expected-github-state.json`](governance/expected-github-state.json).
+It is a proposal and audit checklist, not an applied GitHub payload or proof of
+readback. Do not report any proposed value as configured.
 
-Independent security-verifier custody is still BLOCKED. The17 GitHub job successes
-do not prove candidate-controlled test bodies were not weakened. This task does not
-install a protected mandatory-test authority or claim protection against the
-currently shared repository administrator. Source identity is not provider build
-artifact attestation, and mocks do not establish production privilege isolation.
+## Governance and custody blockers
 
-Validate locally on Node24+: `node --test tools/deployment/executor.test.mjs`.
-Tests never call providers or production databases. Review-branch CI runs the same
-credential-free suite. No secret provisioning, provider setting, production
-deployment, B6/B7 commissioning or business capability activation is included.
+1. **Independent source and policy.** Create a separately controlled verifier
+   repository and issuer identity. Neither ordinary application contributors nor
+   administrators of `aqua-deployment` may be able to change the verifier source,
+   mandatory inventory, trust pins or issuer. Require its immutable workflow through
+   an organization-level ruleset for both application `main` and executor `main`.
+   Its policy must pin all 17 check identities and App identity, exact test IDs,
+   expected execution counts, definitions, relevant workflow/job/harness/reporter/
+   lockfile bytes, and exact run/attempt. Execute the pinned tests in a fixed,
+   clean worker without candidate workflows, scripts, hooks, caches, credentials or
+   signer access; issue a trusted result bound to repository, commit, CI run and
+   attempt. Candidate-owned check names, manifests, uploads and self-hashes are not
+   independent evidence.
+2. **GitHub plan limitation.** The organization was observed on GitHub Free. GitHub
+   documents repository rulesets for public Free repositories, but organization
+   rulesets are a Team/Enterprise capability; the required-workflow rule is
+   organization/enterprise-level. The existing repository ruleset cannot establish
+   owner-only governance while `Xolani-M` remains a repository admin. `aqualifestyleclub`
+   must authorize a qualifying plan/configuration route and read back effective
+   organization rules. No owner/admin setting was changed here.
+3. **Executor protection.** Apply the proposed active main ruleset with no bypass
+   actors, PR-only changes without required human approvals, deletion and
+   non-fast-forward protections, exact required checks, and the independent
+   required verifier. Configure Actions to allow only the four full-SHA-pinned
+   dependencies listed in the contract, require SHA pinning, retain read-only
+   workflow tokens and keep PR-review approval disabled. Configure
+   `production-release` for `main` only, `can_admins_bypass=false`, no reviewers and
+   no wait. Read back each effective setting. These settings are NOT applied.
+4. **Credential isolation.** Do not put Render or Vercel secrets in
+   `aqua-deployment` while `Xolani-M` remains its administrator: repository admins
+   can modify workflows, Actions settings, environment protections and secrets.
+   The owner must select an owner-exclusive deployment control plane or a broker
+   whose credential issuance is bound to the independently verified workflow and
+   cannot be redirected by this repository's admins. The current shared-admin
+   boundary is BLOCKED; a separate repository name alone does not resolve it.
+5. **Trigger identity.** Only after the executor/control-plane trust boundary is
+   established, provision a trigger-only GitHub App with Actions:write and
+   Metadata:read on the trusted executor. Store only that App's key in the
+   application repository. It must have no provider permissions or access to
+   executor secrets. Confirm the trigger can dispatch only the fixed workflow and
+   that wrong/stale inputs are rejected before credential availability.
+6. **Provider and runtime readiness.** After custody and independent verification,
+   separately authorize persistent provider credentials in the trusted control
+   plane, qualify Render credential scope and runtime/database privileges, Vercel
+   project authentication and exact-source route, recovery and monitoring. Native
+   provider auto-deploy must remain disabled to avoid races. No provider was
+   contacted and no credential was provisioned in this preparation.
+
+GitHub's documented plan and policy limits are linked from
+[organization rulesets](https://docs.github.com/en/organizations/managing-organization-settings/creating-rulesets-for-repositories-in-your-organization),
+[available rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets),
+[required workflow enforcement](https://docs.github.com/en/code-security/how-tos/secure-at-scale/configure-organization-security/configure-specific-tools/enforce-dependency-review),
+and [Actions settings](https://docs.github.com/en/rest/actions/permissions).
+
+No production secrets, provider settings, production deployments, financial or
+messaging capabilities, B6/B7 commissioning or live verification are part of this
+branch. Do not describe production automatic deployment as operational until the
+external custody, governance readbacks, provider prerequisites and a live authorized
+rollout have passed.
+
+Credential-free executor tests previously passed on PR #1 at
+`68bd6ecbbf56229c0207df26bc37c1f173d95286` (27 passed, 0 failed, 0 skipped), and
+PR #106's CI previously passed at `b57c2810bc15d1f7893126697a0bfbb3f5b3ade2`.
+Those results are carried forward; this documentation/configuration update does
+not alter executor behavior and does not require repeating the test suites.
