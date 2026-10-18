@@ -100,5 +100,14 @@ rollout have passed.
 Credential-free executor tests previously passed on PR #1 at
 `68bd6ecbbf56229c0207df26bc37c1f173d95286` (27 passed, 0 failed, 0 skipped), and
 PR #106's CI previously passed at `b57c2810bc15d1f7893126697a0bfbb3f5b3ade2`.
-Those results are carried forward; this documentation/configuration update does
-not alter executor behavior and does not require repeating the test suites.
+Those are carried-forward results for their exact earlier commits. The current PR
+commit also runs the complete credential-free executor and attestation suites. The
+attestation-specific command is
+`node --test tools/deployment/authorization-attestation.test.mjs`.
+
+The credential-free v2 attestation consumer prototype and its limits are documented
+in [`docs/attestation-boundary.md`](docs/attestation-boundary.md). It reuses the
+existing 17 required check names but is intentionally not wired into provider
+admission: the verifier trust root, owner-controlled issuer, required external
+workflow, and atomic durable replay store do not yet exist. Prototype acceptance
+must not be reported as independent enforcement or production readiness.
