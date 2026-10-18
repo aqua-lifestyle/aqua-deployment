@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "epoch": "recovery-automatic-v2",
+  "profile": "recovery-only",
+  "baseline": "automatic"
+}

@@ -1,0 +1,8 @@
+{
+  "repository": "aqua-lifestyle/aqua-lifestyle",
+  "baseCommit": "92eabe0a01e84a4ac6eca728db3012f76137a860",
+  "sourcePr": 106,
+  "controllerSha256": "5d18fd0294dfb838854bfd42c052e69d2cd1151f0848b2b76f0f435cbd78d45b",
+  "note": "Shared controller adapted on PR106; copied bytes are reviewed executor code, never fetched from a release candidate at runtime.",
+  "sourceCommit": "ac59ba6b07c96c45a6e1ca554b9dd4f106eff9b4"
+}
