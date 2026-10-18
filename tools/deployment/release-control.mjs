@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
 
 export const targets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 // Only the executor's reviewed targets.json selects this mode. Candidate input
@@ -603,6 +604,7 @@ export async function deploymentHistory(api, provider) {
 
 export async function deploy(api, qualified, policy, report, options = {}) {
   validateReleaseIdentity(qualified);
+  await requireDeploymentAttestation(options.authorization, qualified);
   const guard = async () => {
     validatePolicy(qualified, options.env ?? process.env, policy);
     await requalify(api, qualified);
@@ -801,6 +803,26 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     renderDeployId: render.id, vercelDeployId: vercel.id });
 }
 
+// This is the last controller boundary before any provider read or mutation. The
+// trust root and complete test inventory must be supplied by an independent caller;
+// the executor workflow currently has no such source and therefore fails closed.
+export async function requireDeploymentAttestation(authorization, qualified, { reserveReplay = true } = {}) {
+  requireThat(authorization && typeof authorization === 'object', 'INDEPENDENT_ATTESTATION_REQUIRED');
+  const { expected, trustRoot } = authorization;
+  requireThat(expected?.audience === `${targets.executor.repository}:${targets.environment}` &&
+    expected?.source?.repository === qualified.repository && expected.source.commitSha === qualified.sha &&
+    expected.source.ciRunId === qualified.ciRunId && expected.source.ciRunAttempt === qualified.ciRunAttempt &&
+    expected.policyDigest === qualified.policySha256 &&
+    Array.isArray(expected.mandatoryChecks) && expected.mandatoryChecks.length === requiredJobs.length &&
+    requiredJobs.every(context => expected.mandatoryChecks.filter(x => x.context === context &&
+      x.integrationId === 15368).length === 1), 'ATTESTATION_RELEASE_CONTEXT_MISMATCH');
+  try { return await verifyPrototypeAttestation({ ...authorization, reserveReplay }); }
+  catch (error) {
+    if (error instanceof AttestationDenied) throw new ReleaseFailure(error.code);
+    throw new ReleaseFailure('ATTESTATION_UNVERIFIABLE');
+  }
+}
+
 let failureReport;
 export async function main(env, options = {}) {
   failureReport = undefined;
@@ -863,6 +885,8 @@ export async function main(env, options = {}) {
   verifyCandidate(JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/candidate.json`)), q,
     readFileSync(`${env.CANDIDATE_DIR}/source.tar`),
     sourceArchive(q.sha));
+  await requireDeploymentAttestation(options.authorization ?? options.deploymentOptions?.authorization, q,
+    { reserveReplay: false });
   const report = createAuditWriter(q, row => appendFileSync(env.RELEASE_REPORT, JSON.stringify(row) + '\n'));
   failureReport = code => report({ phase: 'failed', code });
   validatePolicy(q, env, policy);

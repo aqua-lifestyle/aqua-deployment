@@ -1,6 +1,8 @@
 // Provider substitutes reused from PR106's controller tests, not live evidence.
 import {readFileSync} from 'node:fs';
+import {generateKeyPairSync, sign, randomUUID} from 'node:crypto';
 import {deploy,createAuditWriter,freezeCandidate,validateRun,targets,standingPolicy,requiredJobs} from '../release-control.mjs';
+import {attestationContractVersion} from '../authorization-attestation.mjs';
 const source = 'c'.repeat(40), previous = 'b'.repeat(40);
 const run = () => ({ id: 123, run_attempt: 1, repository: { full_name: targets.repository },
   head_repository: { full_name: targets.repository }, event: 'push', head_branch: 'main',
@@ -44,6 +46,50 @@ const health = sha => ({ status: 200, recovery: 'true', body: { result: { status
   buildId: sha, environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy',
   dataProtectionKeyStoreStatus: 'Healthy' } } });
 const immediate = { attempts: 3, pause: async () => {} };
+const signer = generateKeyPairSync('ed25519');
+const verifier = { identity: 'fixture-verifier', repository: 'UNCONFIGURED', workflow: 'UNCONFIGURED', revision: 'e'.repeat(40) };
+const testInventory = [
+  { id: 'AQUA-SEC-0001', file: 'tools/deployment/release-control.test.mjs',
+    name: 'successful full push inventory qualifies the exact current main source',
+    definitionSha256: '66852c046d7f4de7e8411865559eb7ca6f0943228aea0f8c02bca62a24753e45', expectedExecutions: 1 },
+  { id: 'AQUA-SEC-0002', file: 'tools/deployment/release-control.test.mjs',
+    name: 'unqualified CI conclusion=failure cannot qualify a source candidate',
+    definitionSha256: '66852c046d7f4de7e8411865559eb7ca6f0943228aea0f8c02bca62a24753e45', expectedExecutions: 1 }
+];
+class ReplayStore {
+  ids = new Set(); keys = new Set();
+  async consumeOnce({attestationId, replayKey}) {
+    if (this.ids.has(attestationId) || this.keys.has(replayKey)) return false;
+    this.ids.add(attestationId); this.keys.add(replayKey); return true;
+  }
+}
+function authorizationFor(qualified, edit = x => x) {
+  const policyVersion = 'fixture-policy-v1';
+  const audience = `${targets.executor.repository}:${targets.environment}`;
+  const publicKeyPem = signer.publicKey.export({type:'spki',format:'pem'});
+  const expected = { audience, policyVersion, policyDigest: qualified.policySha256,
+    source:{repository:qualified.repository,commitSha:qualified.sha,ciRunId:qualified.ciRunId,ciRunAttempt:qualified.ciRunAttempt},
+    verifier, mandatoryChecks:requiredJobs.map(context=>({context,integrationId:15368})),
+    tests:testInventory };
+  const trustRoot = {version:1,audience,policy:{version:policyVersion,sha256:qualified.policySha256,status:'active'},
+    maxLifetimeSeconds:300,clockSkewSeconds:30,revokedPolicies:[],revokedKeyIds:[],revokedAttestationIds:[],
+    issuers:[{identity:'fixture-issuer',keyId:'fixture-key',status:'active',publicKeyPem,verifier}]};
+  const now = Date.now();
+  const claim = edit({contract:'aqua.deployment.authorization-attestation',version:attestationContractVersion,
+    attestationId:randomUUID(),issuer:{identity:'fixture-issuer',keyId:'fixture-key'},verifier,audience,
+    source:expected.source,policy:{version:policyVersion,sha256:qualified.policySha256},
+    issuedAt:new Date(now-1000).toISOString(),expiresAt:new Date(now+60_000).toISOString(),
+    mandatoryChecks:expected.mandatoryChecks.map(x=>({...x,status:'completed',conclusion:'success',
+      commitSha:qualified.sha,ciRunId:qualified.ciRunId,ciRunAttempt:qualified.ciRunAttempt})),
+    tests:testInventory.map(x=>({id:x.id,file:x.file,name:x.name,definitionSha256:x.definitionSha256,
+      outcome:'passed',executions:x.expectedExecutions})),executionEvidenceSha256:'f'.repeat(64),verdict:'PASS'});
+  const canonical = value => value && typeof value==='object' ? Array.isArray(value) ? value.map(canonical) :
+    Object.fromEntries(Object.keys(value).sort().map(k=>[k,canonical(value[k])])) : value;
+  const payload=Buffer.from(JSON.stringify(canonical(claim)));
+  return {expected,trustRoot,replayStore:new ReplayStore(),now:()=>now,
+    envelope:{keyId:'fixture-key',payload:payload.toString('base64url'),
+      signature:sign(null,payload,signer.privateKey).toString('base64url')}};
+}
 
 function fixture() {
   const state = { service: service(), vars: variables(), project: project(),
@@ -55,7 +101,8 @@ function fixture() {
     pr: { number: 1, merged: true, state: 'closed', merge_commit_sha: source,
       base: { ref: 'main', repo: { full_name: targets.repository } }, head: { sha: 'd'.repeat(40) },
       user: { login: 'author', id: 1 }, merged_at: '2026-10-16T10:00:00Z' },
-    publicVars: publicVars(), newRender: undefined, newVercel: undefined, renderReads: 0, vercelReads: 0 };
+    publicVars: publicVars(), newRender: undefined, newVercel: undefined, renderReads: 0, vercelReads: 0,
+    providerCalls: 0 };
   const posts = [], reports = [];
   const api = {
     gh: async route => {
@@ -75,6 +122,7 @@ function fixture() {
       throw new Error('Unexpected GitHub fixture route');
     },
     render: async (route, body) => {
+      state.providerCalls++;
       if (body) { posts.push({ provider: 'render', route, body });
         state.newRender = { id: 'dep-new', status: 'build_in_progress', commit: { id: source } };
         state.renderRows.unshift(state.newRender);
@@ -92,6 +140,7 @@ function fixture() {
       return state.service;
     },
     vercel: async (route, body) => {
+      state.providerCalls++;
       if (body) { posts.push({ provider: 'vercel', route, body });
         state.newVercel = { id: 'dpl_New', readyState: 'BUILDING', target: 'production',
           projectId: targets.vercel.id, gitSource: { sha: source, repoId: '789' }, meta: body.meta };
@@ -130,13 +179,14 @@ function fixture() {
     if(route==='/rulesets/99')return {enforcement:'active',source:targets.executor.repository,source_type:'Repository',target:'branch',bypass_actors:[],rules:[{type:'deletion'},{type:'non_fast_forward'}]};
     throw Error('Unexpected executor route '+route);
   };
-  const execute = async () => {
+  const execute = async (options = {}) => {
     return deploy(api, state.candidate, state.policy,
       createAuditWriter(state.candidate, r => reports.push(r)), { ...immediate, env: state.env,
+        authorization: Object.hasOwn(options,'authorization') ? options.authorization : authorizationFor(state.candidate),
         evidencePlan: state.plan ?? { policySha256: state.candidate.policySha256, baseline: null, resume: null },
         receiptRows: state.receiptRows, baselineRows: state.baselineRows });
   };
-  return { state, api, posts, reports, execute };
+  return { state, api, posts, reports, execute, authorizationFor };
 }
 
 

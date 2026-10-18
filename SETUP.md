@@ -105,9 +105,11 @@ commit also runs the complete credential-free executor and attestation suites. T
 attestation-specific command is
 `node --test tools/deployment/authorization-attestation.test.mjs`.
 
-The credential-free v2 attestation consumer prototype and its limits are documented
-in [`docs/attestation-boundary.md`](docs/attestation-boundary.md). It reuses the
-existing 17 required check names but is intentionally not wired into provider
-admission: the verifier trust root, owner-controlled issuer, required external
-workflow, and atomic durable replay store do not yet exist. Prototype acceptance
-must not be reported as independent enforcement or production readiness.
+The credential-free v2 attestation consumer and its limits are documented in
+[`docs/attestation-boundary.md`](docs/attestation-boundary.md). `release-control.mjs`
+now requires a valid attestation at the start of its provider deployment sequence.
+The current workflow cannot supply one, has no separate pre-secret verifier job,
+and therefore fails closed before deployment mutations. Independent verifier
+custody, the trusted full test inventory, authenticated evidence retrieval, and a
+durable replay store remain unconfigured; this controller gate is not proof of
+administrator-resistant enforcement or production readiness.

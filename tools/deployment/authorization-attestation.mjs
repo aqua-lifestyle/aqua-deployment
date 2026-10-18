@@ -157,7 +157,8 @@ const nodeCrypto = Object.freeze({
  * must implement the atomic persistent contract documented in docs/attestation-boundary.md.
  */
 export async function verifyPrototypeAttestation({ envelope, trustRoot, expected, replayStore,
-  now = Date.now, cryptoProvider = nodeCrypto, replayTimeoutMs = DEFAULT_REPLAY_TIMEOUT_MS } = {}) {
+  now = Date.now, cryptoProvider = nodeCrypto, replayTimeoutMs = DEFAULT_REPLAY_TIMEOUT_MS,
+  reserveReplay = true } = {}) {
   try {
     if (!cryptoProvider || typeof cryptoProvider.importEd25519PublicKey !== 'function' ||
         typeof cryptoProvider.verifyEd25519 !== 'function') deny('CRYPTO_DEPENDENCY_UNAVAILABLE');
@@ -202,11 +203,22 @@ export async function verifyPrototypeAttestation({ envelope, trustRoot, expected
     if (expires <= issued || expires - issued > trustRoot.maxLifetimeSeconds * 1000)
       deny('ATTESTATION_LIFETIME_INVALID');
 
+    if (reserveReplay === false) return Object.freeze({ verdict: 'PASS', enforcement: 'PROTOTYPE_ONLY',
+      replayReserved: false, attestationId: claim.attestationId, audience: claim.audience,
+      repository: claim.source.repository, commitSha: claim.source.commitSha,
+      ciRunId: claim.source.ciRunId, ciRunAttempt: claim.source.ciRunAttempt,
+      policyVersion: claim.policy.version, verifierRevision: claim.verifier.revision,
+      checksVerified: claim.mandatoryChecks.length, testsVerified: claim.tests.length,
+      executionEvidenceSha256: claim.executionEvidenceSha256 });
+
     if (!replayStore || typeof replayStore.consumeOnce !== 'function') deny('REPLAY_STORE_UNAVAILABLE');
     if (!Number.isSafeInteger(replayTimeoutMs) || replayTimeoutMs < 1) deny('REPLAY_STORE_UNAVAILABLE');
+    // A new authorization may be issued for a qualified retry after the release
+    // controller reconciles an earlier partial attempt. Replaying this attestation
+    // still collides on both durable coordinates.
     const replayKey = sha256(Buffer.from(JSON.stringify([
       claim.audience, claim.source.repository, claim.source.commitSha, claim.source.ciRunId,
-      claim.source.ciRunAttempt, claim.policy.version, claim.policy.sha256
+      claim.source.ciRunAttempt, claim.policy.version, claim.policy.sha256, claim.attestationId
     ])));
     let consumed;
     let timeout;
@@ -219,7 +231,7 @@ export async function verifyPrototypeAttestation({ envelope, trustRoot, expected
     } catch { deny('REPLAY_STORE_UNAVAILABLE'); }
     finally { clearTimeout(timeout); }
     if (consumed !== true) deny('ATTESTATION_REPLAYED');
-    return Object.freeze({ verdict: 'PASS', enforcement: 'PROTOTYPE_ONLY', attestationId: claim.attestationId,
+    return Object.freeze({ verdict: 'PASS', enforcement: 'PROTOTYPE_ONLY', replayReserved: true, attestationId: claim.attestationId,
       audience: claim.audience, repository: claim.source.repository, commitSha: claim.source.commitSha,
       ciRunId: claim.source.ciRunId, ciRunAttempt: claim.source.ciRunAttempt,
       policyVersion: claim.policy.version, verifierRevision: claim.verifier.revision,

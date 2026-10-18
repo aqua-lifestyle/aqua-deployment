@@ -2,13 +2,25 @@
 
 ## Status and scope
 
-This is a local, credential-free consumer prototype. It does not issue signatures,
-create a trusted policy, access GitHub, store replay state durably, or gate the
-existing production workflow. `verifyPrototypeAttestation` returns
-`enforcement: PROTOTYPE_ONLY` and is not called by `release-control.mjs` or
-`.github/workflows/deploy.yml`. Do not connect it to provider credentials until the
-external trust root, issuer, required enforcement and atomic replay store have been
-independently provisioned and observed. Production remains BLOCKED.
+This is a credential-free consumer prototype, now required by both the controller's
+`admit` preflight and the beginning of `release-control.mjs`'s `deploy()` provider
+mutation sequence. Admission verifies without consuming replay state; the mutation
+boundary verifies again and atomically reserves the attestation. Missing or invalid
+authorization denies before provider API reads or mutations in these paths.
+The verifier returns `enforcement: PROTOTYPE_ONLY`; it does not issue signatures,
+create a trusted policy, access GitHub, or store replay state durably. The existing
+workflow does not supply the required authorization, so its deployment path fails
+closed at the controller boundary. Production remains BLOCKED.
+
+This is not yet a pre-secret workflow gate. The current workflow places the
+`production-release` environment on its production job before its admission steps,
+so any configured environment secrets become available to that job before the
+controller runs. At the time of this change, a read-only GitHub API check returned
+404 for that environment, `main` had no branch protection, the repository had no
+rulesets, and Actions allowed all actions. No provider credentials were provisioned
+or inspected here. An independent attestation job must run without provider
+credentials and become a required dependency before this environment job can be
+considered safe.
 
 The consumer uses Node's built-in `node:crypto` Ed25519 verification. The only
 private signing key used in tests is ephemeral test material; this repository has no
@@ -111,10 +123,58 @@ admitted. Retention, backup, restore and multi-region consistency must be qualif
 before use. A process-local `Set`, cache, or mock store is only a test fixture and
 cannot establish production replay safety.
 
-The replay key is derived from audience, repository, source SHA, CI run ID/attempt
-and policy version/digest. This prevents a newly issued UUID for the same deployment
-authorization tuple from evading the one-use rule. The signed UUID separately
-prevents reuse of the exact envelope.
+The replay key is derived from audience, repository, source SHA, CI run ID/attempt,
+policy version/digest and attestation ID. Reusing one signed authorization is
+denied. A trusted verifier may issue a fresh ID for a retry only after the release
+controller has reconciled the prior attempt; the controller's immutable receipts
+remain responsible for preventing duplicate or ambiguous provider mutations. This
+allows the existing safe retry path without accepting the old signature again.
+
+## Authorization path and bypass inventory
+
+At the inspected app PR #106 head, the release trigger dispatches only
+`ci_run_id`, `ci_run_attempt` and `sha` to the executor. It carries no verifier run,
+attestation artifact or trust-root identity. The executor's candidate job fetches
+and archives the exact app Git source without executing it. The production job then
+enters `production-release`, downloads the candidate, performs admission, and calls
+`release-control.mjs deploy`. That controller's `deploy()` function is the sole
+Render/Vercel mutation sequence in the existing executor and now requires a signed
+authorization before its first API operation.
+
+The remaining paths and limits are concrete:
+
+- Direct or malformed workflow dispatch still reaches the same controller; it
+  cannot reach provider API reads or mutations without a supplied valid
+  authorization. The CLI has no trusted authorization source; its current workflow
+  therefore denies with `INDEPENDENT_ATTESTATION_REQUIRED` before provider
+  configuration admission reads.
+- The production job receives any configured environment secrets before the
+  controller-level check. The separate no-secret verifier job and `needs` edge are
+  not installed because neither an independent verifier artifact nor its
+  authenticated retrieval identity exists.
+- The application repo remains connected to Vercel in the controller's intended
+  configuration. A provider-native Git deployment could bypass this controller
+  if enabled; its live status was not checked, as provider contact was prohibited.
+  The source controller requires Render auto-deploy to be off, but live Render
+  state likewise remains unverified.
+- An executor administrator can currently change workflow/controller code and
+  there is no main protection/ruleset. `Xolani-M` remains an administrator by
+  owner instruction. Repository-local validator code therefore cannot establish
+  administrator-resistant enforcement.
+- Candidate code cannot supply the `authorization` object to the production CLI,
+  but there is not yet an independent verifier to provide it. Do not add a
+  candidate artifact, app CI manifest or executor-owned public key as a substitute.
+- The controller's current deployment receipt and retry checks remain in force.
+  A new verifier attestation ID is needed for a retry after the prior attempt is
+  reconciled; a consumed signature cannot be replayed. The atomic store mock used
+  by tests is not durable.
+
+The focused integration tests prove that the controller denies absent, altered,
+expired, stale, wrong-run/attempt and unverifiable attestations before Render or
+Vercel is called; concurrent use of one signed authorization admits at most one
+controller invocation. Existing Render-failure tests continue to prove Vercel is
+not called after a failed backend deployment. These are local controller tests,
+not a GitHub job-boundary or production credential-isolation proof.
 
 ## Enforcement boundary and remaining setup
 
@@ -139,9 +199,12 @@ To become independently enforceable:
    cannot be modified by application authors or administrators of the current
    `aqua-deployment` repository. `Xolani-M` remains its administrator; therefore it
    must not hold production provider secrets under the current access model.
-7. The deployment workflow verifies the attestation and revalidates source/run /
-   attempt immediately before secret availability and provider mutation. No
-   candidate source or candidate-provided script may execute with provider keys.
+7. The deployment workflow must verify the attestation in a separate job with no
+   provider credentials, require that job before entering the production
+   environment, and revalidate source/run/attempt immediately before provider
+   mutation. No candidate source or candidate-provided script may execute with
+   provider keys. The current workflow does not yet have this pre-secret verifier
+   job or a trusted evidence source.
 
 Current observations show `aqua-deployment` `main` is unprotected, has no environment
 or secrets, and the organization is on GitHub Free. Owner-level organization

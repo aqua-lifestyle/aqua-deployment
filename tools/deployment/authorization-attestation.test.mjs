@@ -159,13 +159,13 @@ test('missing, renamed, duplicate or weakened mandatory test definitions are den
   await denied(verify({ envelope: count }), 'MANDATORY_TEST_NOT_VERIFIED');
 });
 
-test('replay is denied, reissuance for the same source tuple is denied, and replay-store failure never authorizes', async () => {
+test('exact replay is denied, a newly issued authorization for a qualified retry is distinct, and store failure denies', async () => {
   const store = new TestReplayStore(), envelope = signedEnvelope();
   const args = { envelope, trustRoot: trustRoot(), expected, replayStore: store, now: () => NOW };
   assert.equal((await verifyPrototypeAttestation(args)).verdict, 'PASS');
   await denied(verifyPrototypeAttestation(args), 'ATTESTATION_REPLAYED');
   const reissued = signedEnvelope(c => { c.attestationId = '223e4567-e89b-42d3-a456-426614174000'; return c; });
-  await denied(verifyPrototypeAttestation({ ...args, envelope: reissued }), 'ATTESTATION_REPLAYED');
+  assert.equal((await verifyPrototypeAttestation({ ...args, envelope: reissued })).verdict, 'PASS');
   const concurrentStore = new TestReplayStore(), concurrentEnvelope = signedEnvelope(c => { c.attestationId = '323e4567-e89b-42d3-a456-426614174000'; return c; });
   const concurrentArgs = { ...args, envelope: concurrentEnvelope, replayStore: concurrentStore };
   const concurrent = await Promise.allSettled([verifyPrototypeAttestation(concurrentArgs), verifyPrototypeAttestation(concurrentArgs)]);
@@ -208,4 +208,15 @@ test('store receives both unique replay coordinates and the verified payload dig
   assert.match(captured[0].replayKey, /^[a-f0-9]{64}$/);
   assert.match(captured[0].payloadSha256, /^[a-f0-9]{64}$/);
   assert.equal(captured[0].expiresAt, '2026-10-18T12:04:00.000Z');
+});
+
+test('read-only admission preflight does not consume the authorization needed by the mutation boundary', async () => {
+  const store = new TestReplayStore();
+  const args = { envelope: signedEnvelope(), trustRoot: trustRoot(), expected, replayStore: store, now: () => NOW };
+  const preflight = await verifyPrototypeAttestation({ ...args, reserveReplay: false });
+  assert.equal(preflight.verdict, 'PASS');
+  assert.equal(preflight.replayReserved, false);
+  const mutation = await verifyPrototypeAttestation(args);
+  assert.equal(mutation.replayReserved, true);
+  await denied(verifyPrototypeAttestation(args), 'ATTESTATION_REPLAYED');
 });

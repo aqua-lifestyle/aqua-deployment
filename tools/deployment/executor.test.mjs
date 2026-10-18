@@ -20,6 +20,33 @@ test('external rollout preserves exact Render-first sequence and independently b
   assert.equal(f.reports.at(-1).executorRepository,targets.executor.repository);
   assert.equal(f.reports.at(-1).executorSha,'d'.repeat(40));
 });
+test('missing, altered, expired, mismatched or unverifiable attestation is denied before provider access',async()=>{
+  const seed=fixture(),valid=seed.authorizationFor(seed.state.candidate);
+  const cases=[
+    ['missing',null],
+    ['altered signature',{...valid,envelope:{...valid.envelope,signature:'A'.repeat(86)}}],
+    ['stale source',seed.authorizationFor(seed.state.candidate,c=>{c.source.commitSha=previous;return c;})],
+    ['wrong run',seed.authorizationFor(seed.state.candidate,c=>{c.source.ciRunId='999';return c;})],
+    ['wrong attempt',seed.authorizationFor(seed.state.candidate,c=>{c.source.ciRunAttempt=2;return c;})],
+    ['expired',seed.authorizationFor(seed.state.candidate,c=>{c.expiresAt='2000-01-01T00:00:00.000Z';return c;})],
+    ['unavailable verifier',{...valid,cryptoProvider:null}]
+  ];
+  for(const [label,authorization] of cases){
+    const f=fixture();
+    await assert.rejects(f.execute({authorization}),undefined,label);
+    assert.equal(f.posts.length,0,label);
+    assert.equal(f.state.providerCalls,0,label);
+    assert.equal(f.state.renderReads,0,label);
+    assert.equal(f.state.vercelReads,0,label);
+  }
+});
+test('same signed authorization cannot concurrently reach two provider deployments',async()=>{
+  const f=fixture(),authorization=f.authorizationFor(f.state.candidate);
+  const results=await Promise.allSettled([f.execute({authorization}),f.execute({authorization})]);
+  assert.equal(results.filter(x=>x.status==='fulfilled').length,1);
+  assert.equal(results.filter(x=>x.status==='rejected').length,1);
+  assert.equal(f.posts.filter(x=>x.provider==='render').length,1);
+});
 for(const [label,mutate] of [
   ['missing credentials',f=>{delete f.state.env.RENDER_API_KEY;}],
   ['wrong main',f=>{f.state.main=previous;}],
@@ -160,10 +187,17 @@ test('real Git source passes candidate, admission and deployment entries without
       {total_count:1,workflow_runs:[current]}:executorApi(route);
     await main(env,{mode:'candidate',api:f.api});assert.equal(f.posts.length,0);
     const manifest=JSON.parse(readFileSync(join(candidate,'candidate.json')));
+    const authorization=f.authorizationFor(manifest);
     assert.equal(manifest.sha,sha);assert.equal(manifest.executorSha,executorSha);
     assert.ok(readFileSync(join(candidate,'source.tar')).length>0);
-    await main(env,{mode:'admit',api:f.api});assert.equal(f.posts.length,0);
-    await main(env,{mode:'deploy',api:f.api,deploymentOptions:{attempts:3,pause:async()=>{}}});
+    await assert.rejects(main(env,{mode:'admit',api:f.api}),/INDEPENDENT_ATTESTATION_REQUIRED/);
+    assert.equal(f.state.providerCalls,0);
+    await main(env,{mode:'admit',api:f.api,authorization});assert.equal(f.posts.length,0);
+    await assert.rejects(main(env,{mode:'deploy',api:f.api,deploymentOptions:{attempts:3,pause:async()=>{}}}),
+      /INDEPENDENT_ATTESTATION_REQUIRED/);
+    assert.equal(f.posts.length,0);
+    await main(env,{mode:'deploy',api:f.api,deploymentOptions:{attempts:3,pause:async()=>{},
+      authorization}});
     assert.deepEqual(f.posts.map(x=>x.provider),['render','vercel']);
     const final=JSON.parse(readFileSync(env.RELEASE_REPORT,'utf8').trim().split('\n').at(-1));
     assert.equal(final.phase,'verified');assert.equal(final.sha,sha);assert.equal(final.executorSha,executorSha);
