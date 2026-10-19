@@ -38,15 +38,18 @@ validation limitations are in [`docs/github-evidence-admission.md`](docs/github-
 The signed-attestation and PostgreSQL replay code remains an inactive prototype;
 it is not a fallback or setup prerequisite for the selected policy.
 
-## Existing observations, not applied setup
+## Applied executor setup and carried-forward application observations
 
-The latest carried-forward metadata readback (2026-10-19) found executor main
-unprotected with no environment, rulesets or shared/repository secrets; Actions
-allowed all dependencies and did not enforce SHA pinning. Both trusted accounts
-were effective repository administrators. Application main retained its 17-check
-ruleset #25297647 and main-only unattended production environment. These observations
-are not readback of the proposed executor configuration below. No settings or
-credentials were changed by this implementation.
+Owner-authorized setup on 2026-10-19 created executor ruleset #25403847 and the
+empty main-only environment, applied the four pinned Actions dependencies and SHA
+enforcement, and preserved read-only workflow defaults. Fresh administrator reads
+verified the effective branch rules, zero approvals/bypass actors, environment
+policy and zero repository/environment secrets. Original metadata is retained in
+[`governance/executor-configuration-readback.json`](governance/executor-configuration-readback.json)
+and [`governance/ruleset-readbacks.json`](governance/ruleset-readbacks.json).
+No credentials, merge or deployment were authorized or performed by this setup.
+The application 17-check ruleset #25297647 and environment are carried-forward
+observations; application PR #106 remains unchanged.
 
 ## Minimum remaining one-time configuration
 
@@ -54,15 +57,10 @@ Each mutation needs separate owner authorization and authoritative readback.
 
 1. Review and merge PR #1 through one of the trusted administrators only when
    authorized. Runtime requires GitHub evidence that the exact executor main SHA
-   was merged by their user ID and login. Configure repository main history and
-   PR protections and required `Executor safety tests`, without recurring release
-   reviewers, timers or bypass actors. No organization-plan upgrade is required
-   merely to resist the trusted administrators.
-2. Apply the proposed repository Actions and environment settings in
-   [`governance/expected-github-state.json`](governance/expected-github-state.json).
-   Pin/allow the existing Actions dependencies, retain read-only token defaults,
-   restrict executor write/settings access to trusted administrators and configure
-   `production-release` main only, no reviewers/wait, `can_admins_bypass=false`.
+   was merged by their user ID and login. Main history/PR protections and the
+   required `Executor safety tests` are now applied; merge remains unauthorized.
+2. Preserve the applied Actions and environment settings recorded above, and
+   executor write/settings access restricted to trusted administrators.
    Provider secrets belong only to that environment, never application workflows,
    candidate/admission jobs, repository-wide or shared organization exposure.
 3. Separately authorize an expiring fine-grained GitHub PAT scoped to only these
@@ -99,8 +97,10 @@ Each mutation needs separate owner authorization and authoritative readback.
 
 ## Qualification and authorization
 
-Exact prepared API request bodies, not applied settings, are in
+The original prepared API request bodies are in
 [`governance/qualification-setup-requests.json`](governance/qualification-setup-requests.json).
+Their historical preparation status is not current state; all six executor settings
+requests were applied and independently read back in the evidence linked above.
 The bounded setup/merge/evidence checklist and readback limits are in
 [`docs/permission-unblocking.md`](docs/permission-unblocking.md).
 

@@ -8,8 +8,15 @@
 Owner authorization: bounded permission corrections on executor PR #1, starting
 at `15e0f5092e119dc671e23d2c4a7420eb336280b5`. Branch:
 `feature/automatic-qualified-executor`. The two named administrators are trusted.
-No settings, secrets, provider operations, dispatch or merge is authorized here.
+That code-only authorization excluded settings, secrets, provider operations,
+dispatch and merge.
 Application PR #106 remains unchanged; B6/B7 are separate.
+
+Subsequent explicit owner authorization at baseline `61d9e44` permits only the six
+prepared executor settings requests, original readback capture/commit, focused tests
+and hosted safety CI. Those settings were applied and independently read back on
+2026-10-19 by authenticated administrator `Xolani-M` (86495928). No merge, PAT,
+provider credential or qualification dispatch is authorized by that setup task.
 
 Implemented: explicit read-only GitHub credential wiring; GET-only evidence
 transport without fallback; administrator-readback binding for hidden ruleset
@@ -35,9 +42,15 @@ independently of GitHub metadata or resist a trusted administrator changing poli
 An unexpected/missing revision, visible bypass, unapproved ruleset or altered
 public rule denies. Do not refresh approval automatically from the runtime.
 
-Executor settings do not yet exist. No executor ruleset ID/readback is fabricated.
-If its read token cannot see bypass actors, admission remains blocked until an
-authorized original readback is added to the approved executor revision.
+Executor ruleset #25403847 is active on main; its full original administrator
+response, including `bypass_actors: []`, is now retained in the same readbacks file.
+The original response includes GitHub defaults not specified by the prepared
+request. In particular, `require_extra_approval_for_unattributed_changes: true`
+has no effect with zero required approvals, per GitHub's ruleset documentation;
+it was preserved. Effective rules and environment/Actions settings are recorded in
+`governance/executor-configuration-readback.json`. The environment and repository
+secret inventories are both empty. Approval through the exact trusted executor
+merge and actual evidence-read credential operation remain unverified.
 
 ## Exact operations requiring separate owner authorization
 
@@ -45,15 +58,15 @@ Prepared bodies are `governance/qualification-setup-requests.json`. Compare curr
 settings before application; preserve unrelated protections and read back each
 result. These are requests, not an executable auto-configuration script.
 
-1. Create the active executor-main ruleset: deletion/non-fast-forward protections,
+1. **Completed and read back.** Create the active executor-main ruleset: deletion/non-fast-forward protections,
    PR required, zero reviews/last-push approval, no bypass actors, strict
    `Executor safety tests` bound to App 15368. Existing application ruleset is
    unchanged. Create empty `production-release`, main branch only, no wait or
    reviewers, `can_admins_bypass=false`. No provider secret is needed.
-2. Apply selected-actions restrictions for the four existing exact SHA pins and
+2. **Completed and read back.** Apply selected-actions restrictions for the four existing exact SHA pins and
    SHA enforcement; retain read-only token defaults and no workflow PR approval.
-3. An authorized administrator obtains the new executor ruleset via
-   `GET /repos/aqua-lifestyle/aqua-deployment/rulesets/ACTUAL_ID`, including explicit
+3. **Original captured; PR commit/CI recorded with this handoff.** An authorized administrator obtains the new executor ruleset via
+   `GET /repos/aqua-lifestyle/aqua-deployment/rulesets/25403847`, including explicit
    `bypass_actors: []`. Retain the `id`, `name`, `target`, `source_type`, `source`,
    `enforcement`, `conditions`, `rules`, `bypass_actors`, `updated_at` fields in a
    new `rulesets` entry with `repository` and original `observedAt`. Remove that
@@ -114,11 +127,16 @@ node --test tools/deployment/evidence-access.test.mjs tools/deployment/executor.
 git diff --check
 ```
 
-61 passed, 0 failed, 0 skipped. Hosted safety CI is bound to the pushed commit and
+Baseline `61d9e44`: 61 passed, 0 failed, 0 skipped. Hosted safety CI is bound to the pushed commit and
 reported in PR #1. Tests use controlled GitHub/provider substitutes; they do not
 establish token installation, live secret scope, live timestamp changes or actual
-admission. Next owner action: authorize the exact configuration operations and
-original executor readback completion before merge. Production remains blocked.
+admission. For the setup evidence change, focused validation is
+`node --test tools/deployment/evidence-access.test.mjs tools/deployment/qualification-only.test.mjs`;
+14 passed, 0 failed, 0 skipped; `git diff --check` passed. The pushed commit's
+hosted CI is reported in PR #1. No controller or inventory
+change was made during setup. Next owner actions: separately authorize the scoped
+read credential, exact trusted executor merge, fresh application-main evidence and
+one qualification-only dispatch. Production remains blocked.
 
 Supported platform contracts: [repository-scoped job token](https://docs.github.com/en/actions/concepts/security/github_token),
 [artifact authentication](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact),

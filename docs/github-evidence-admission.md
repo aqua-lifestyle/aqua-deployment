@@ -112,8 +112,9 @@ rules, enforcement and `updated_at`, must match the original privileged readback
 Missing approval, missing revision or drift denies. An explicit live bypass value
 always takes precedence and a nonempty/malformed value denies. This is standing
 administrator-approved configuration evidence, not a claim of live visibility of
-hidden actors or cryptographic independence. Executor approval is pending until
-its actual settings exist and an administrator readback is committed and approved.
+hidden actors or cryptographic independence. Actual executor settings and the
+original administrator readback are now recorded; their runtime policy authority
+still requires the separately authorized trusted-administrator merge of PR #1.
 See the exact assumptions and next actions in
 [`permission-unblocking.md`](permission-unblocking.md).
 
