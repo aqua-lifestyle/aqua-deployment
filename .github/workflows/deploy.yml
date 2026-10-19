@@ -1,0 +1,192 @@
+name: Qualified production executor
+
+on:
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        required: true
+        type: string
+      ci_run_attempt:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+      qualification_only:
+        description: Run candidate and admission checks without entering production
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  checks: read
+  pull-requests: read
+
+# One rollout at a time. Never cancel an in-flight provider
+# operation when another main update arrives. Stale waiting commits fail admission.
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: Qualify immutable source candidate
+    if: github.ref == 'refs/heads/main' && github.repository == 'aqua-lifestyle/aqua-deployment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.candidate.outputs.sha }}
+      qualification_only: ${{ steps.candidate.outputs.qualification_only }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      # Only executor code is checked out and executed; source is inert Git objects.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Qualify completed main push and publish source evidence
+        id: candidate
+        env:
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
+          SOURCE_DIR: ${{ runner.temp }}/source-git
+          CANDIDATE_DIR: ${{ runner.temp }}/candidate
+        run: |
+          mkdir -p "$CANDIDATE_DIR"
+          node tools/deployment/fetch-source.mjs
+          node tools/deployment/release-control.mjs candidate
+      - name: Retain immutable candidate and source digest
+        id: upload
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: source-candidate-${{ steps.candidate.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate
+          if-no-files-found: error
+          retention-days: 90
+      - name: Candidate evidence
+        env:
+          SOURCE_SHA: ${{ steps.candidate.outputs.sha }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          printf 'Qualified source: `%s`\n\nImmutable artifact digest: `%s`\n\nStanding deployment policy and runtime safety govern automatic admission.\n' "$SOURCE_SHA" "$ARTIFACT_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+  admission:
+    name: Verify approved GitHub evidence before provider access
+    needs: candidate
+    if: needs.candidate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      baseline-artifact-id: ${{ steps.admission.outputs.baseline-artifact-id }}
+      baseline-run-id: ${{ steps.admission.outputs.baseline-run-id }}
+      receipt-artifact-id: ${{ steps.admission.outputs.receipt-artifact-id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.artifact-id }}
+          path: ${{ runner.temp }}/candidate
+          merge-multiple: true
+      - name: Fetch exact source as inert Git objects
+        env:
+          SOURCE_DIR: ${{ runner.temp }}/source-git
+        run: node tools/deployment/fetch-source.mjs
+      - name: Authenticate exact GitHub execution evidence and release history
+        id: admission
+        env:
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
+          AQUA_ADMISSION_RECEIPT_OUTPUT: ${{ runner.temp }}/admission/admission-receipt.json
+          SOURCE_DIR: ${{ runner.temp }}/source-git
+          CANDIDATE_DIR: ${{ runner.temp }}/candidate
+          RELEASE_REPORT: ${{ runner.temp }}/admission-report.jsonl
+        run: |
+          mkdir -p "${{ runner.temp }}/admission"
+          node tools/deployment/release-control.mjs admit
+          cp "${{ runner.temp }}/candidate/evidence-plan.json" "${{ runner.temp }}/admission/evidence-plan.json"
+      - name: Retain immutable admission evidence
+        id: upload
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: verified-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/admission
+          if-no-files-found: error
+          retention-days: 90
+
+  production:
+    name: Unattended recovery release
+    needs: [candidate, admission]
+    if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production-release
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.artifact-id }}
+          path: ${{ runner.temp }}/candidate
+          merge-multiple: true
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.admission.outputs.artifact-id }}
+          path: ${{ runner.temp }}/admission
+          merge-multiple: true
+      - name: Restore the frozen GitHub evidence plan
+        run: cp "${{ runner.temp }}/admission/evidence-plan.json" "${{ runner.temp }}/candidate/evidence-plan.json"
+      - name: Fetch exact source as inert Git objects
+        env:
+          SOURCE_DIR: ${{ runner.temp }}/source-git
+        run: node tools/deployment/fetch-source.mjs
+      - name: Read verified predecessor audit from its exact producing release run
+        if: needs.admission.outputs.baseline-artifact-id != ''
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.admission.outputs.baseline-artifact-id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.admission.outputs.baseline-run-id }}
+          path: ${{ runner.temp }}/baseline-release
+          merge-multiple: true
+      - name: Read immutable audit chain from every earlier attempt of this release run
+        if: needs.admission.outputs.receipt-artifact-id != ''
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.admission.outputs.receipt-artifact-id }}
+          path: ${{ runner.temp }}/prior-release
+          merge-multiple: false
+      - name: Revalidate policy, provenance, providers and recovery before automatic deployment
+        env:
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          AQUA_ADMISSION_RECEIPT_FILE: ${{ runner.temp }}/admission/admission-receipt.json
+          SOURCE_DIR: ${{ runner.temp }}/source-git
+          CANDIDATE_DIR: ${{ runner.temp }}/candidate
+          RELEASE_REPORT: ${{ runner.temp }}/release-report.jsonl
+          BASELINE_RECEIPT_FILE: ${{ runner.temp }}/baseline-release/release-report.jsonl
+          RESUME_RECEIPT_DIR: ${{ runner.temp }}/prior-release
+        run: node tools/deployment/release-control.mjs deploy
+      - name: Retain redacted release audit
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: production-release-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-report.jsonl
+          if-no-files-found: warn
+          retention-days: 90

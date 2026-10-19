@@ -1,0 +1,103 @@
+{
+  "status": "PROPOSED_NOT_APPLIED",
+  "repository": "aqua-lifestyle/aqua-deployment",
+  "observed": {
+    "visibility": "public",
+    "organizationPlan": "free",
+    "mainProtected": false,
+    "rulesets": [],
+    "productionReleaseEnvironment": false,
+    "actionsAllowedActions": "all",
+    "actionsShaPinningRequired": false,
+    "workflowDefaultTokenPermission": "read",
+    "workflowCanApprovePullRequestReviews": false,
+    "providerSecretsPresent": false,
+    "directExecutorAdmins": [
+      "Xolani-M"
+    ],
+    "designatedCustodian": "aqualifestyleclub"
+  },
+  "executorMain": {
+    "authority": "repository-ruleset-trusted-administrator-managed",
+    "targetRepository": "aqua-deployment",
+    "targetBranch": "refs/heads/main",
+    "enforcement": "active",
+    "bypassActors": [],
+    "requirePullRequest": true,
+    "requiredHumanApprovals": 0,
+    "requireLastPushApproval": false,
+    "rules": [
+      "deletion",
+      "non_fast_forward",
+      "required_status_checks"
+    ],
+    "requiredStatusChecks": [
+      {
+        "context": "Executor safety tests",
+        "integrationId": 15368
+      }
+    ]
+  },
+  "actions": {
+    "enabled": true,
+    "allowedActions": "selected",
+    "shaPinningRequired": true,
+    "allowedDependencies": [
+      "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+      "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+      "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+      "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131"
+    ],
+    "defaultWorkflowTokenPermission": "read",
+    "canApprovePullRequestReviews": false
+  },
+  "productionReleaseEnvironment": {
+    "name": "production-release",
+    "canAdminsBypass": false,
+    "branchPolicy": {
+      "mode": "custom",
+      "branches": [
+        "main"
+      ]
+    },
+    "waitTimerMinutes": 0,
+    "requiredReviewers": [],
+    "onlyProtectionRuleTypes": [
+      "branch_policy"
+    ]
+  },
+  "credentialBoundary": {
+    "providerSecretsMayBeStoredInThisRepository": true,
+    "scope": "production-release environment only",
+    "candidateAndAdmissionMayReceiveProviderSecrets": false,
+    "applicationMayReceiveProviderSecrets": false,
+    "reason": "Both current repository administrators are explicitly trusted. Settings and provisioning require separate owner authorization."
+  },
+  "trustModel": {
+    "name": "trusted-administrator-mvp",
+    "administrators": [
+      {
+        "login": "Xolani-M",
+        "id": 86495928
+      },
+      {
+        "login": "aqualifestyleclub",
+        "id": 307076734
+      }
+    ],
+    "administratorResistanceRequired": false,
+    "externalCustodianRequired": false
+  },
+  "githubEvidence": {
+    "policyVersion": 3,
+    "mode": "github-evidence-v1",
+    "approvedInventory": "tools/deployment/approved-security-tests.json",
+    "mandatoryTests": 240,
+    "protectedSources": 25,
+    "requiredChecks": 17,
+    "ciAppId": 15368,
+    "maxCiAgeSeconds": 86400,
+    "maxAdmissionAgeSeconds": 3600,
+    "approval": "trusted-administrator-executor-merge"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "repository": "aqua-lifestyle/aqua-lifestyle",
+  "baseCommit": "92eabe0a01e84a4ac6eca728db3012f76137a860",
+  "sourcePr": 106,
+  "controllerSha256": "830a6995cde10d3922ef2c4c3a8a49421b45f54ec64853ab8281a44613c37c96",
+  "note": "Shared controller adapted on PR106; copied bytes are reviewed executor code, never fetched from a release candidate at runtime.",
+  "sourceCommit": "b57c2810bc15d1f7893126697a0bfbb3f5b3ade2",
+  "securityEvidence": {
+    "sourceCommit": "b57c2810bc15d1f7893126697a0bfbb3f5b3ade2",
+    "inventoryPath": "tools/deployment/approved-security-tests.json",
+    "inventorySha256": "85e0b5175527509de9badd368d4db82da2429cf6e295345f25049f913674fa9f",
+    "classifierPath": "tools/deployment/mandatory-security.mjs",
+    "classifierSha256": "71ceb25ef698df249073bce0f35db099a41e05ed1a0aae314758c99545f1c41f",
+    "mandatoryTests": 240,
+    "protectedSources": 25
+  }
+}

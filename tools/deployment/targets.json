@@ -1,0 +1,29 @@
+{
+  "repository": "aqua-lifestyle/aqua-lifestyle",
+  "excludedCommits": [
+    "ac7dfe968ec13fd8c743504e4b531ab5afd2e5e7"
+  ],
+  "environment": "production-release",
+  "profile": "recovery-only",
+  "render": {
+    "id": "srv-d9f0k8e1a83c73d8n1b0",
+    "name": "aqualifestyle-api",
+    "healthUrl": "https://aqualifestyle-api.onrender.com/api/health"
+  },
+  "vercel": {
+    "id": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "teamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+    "name": "aqua-lifestyle",
+    "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend",
+    "publicApiUrl": "https://aqualifestyle-api.onrender.com",
+    "defaultTenantName": "Default",
+    "productionUrl": "https://www.aqualifestyleclub.co.za"
+  },
+  "executor": {
+    "repository": "aqua-lifestyle/aqua-deployment",
+    "legacyFirstRunId": "38912818702",
+    "workflow": "deploy.yml",
+    "name": "Qualified production executor",
+    "event": "workflow_dispatch"
+  }
+}
