@@ -93,6 +93,15 @@ Each mutation needs separate owner authorization and authoritative readback.
 
 ## Qualification and authorization
 
+The workflow supports an optional boolean `qualification_only: true` alongside
+the exact source SHA and CI run/attempt. It runs normal candidate qualification
+and admission, then skips the production job entirely. Its purpose-bound receipt
+cannot authorize deployment. Omitting the flag preserves normal deployment mode.
+This implements the provider-free path; it does not authorize a live dispatch,
+merge or configuration change. Existing main provenance, read permissions,
+mandatory evidence and history requirements must still pass. Qualification does
+not produce a deployed predecessor or relax rerun reconciliation.
+
 Focused local and hosted executor tests use provider substitutes. They do not prove
 live secret isolation, cross-repository permissions, production runtime or actual
 Render/Vercel deployment. Qualify the automatic trigger, admission and failures in

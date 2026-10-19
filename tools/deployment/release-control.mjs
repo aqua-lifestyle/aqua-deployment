@@ -97,14 +97,28 @@ export async function validateExecutorApproval(api, identity, policy = standingP
   'EXECUTOR_ADMINISTRATOR_APPROVAL_REQUIRED');
 }
 
-export function freezeCandidate(qualified, env, policy = standingPolicy) {
+export function validateDispatchInputs(inputs) {
+  requireThat(inputs && typeof inputs === 'object' && !Array.isArray(inputs) &&
+    Object.keys(inputs).every(k => ['ci_run_id', 'ci_run_attempt', 'sha', 'qualification_only'].includes(k)) &&
+    positiveId(inputs.ci_run_id) && positiveId(inputs.ci_run_attempt) && shaPattern.test(inputs.sha),
+  'EXECUTOR_INPUT_INVALID');
+  // workflow_dispatch's event payload uses strings; accept native booleans too,
+  // without coercing null, empty strings, numbers or other truthy input.
+  const mode = Object.hasOwn(inputs, 'qualification_only') ? inputs.qualification_only : false;
+  requireThat([true, false, 'true', 'false'].includes(mode), 'EXECUTOR_INPUT_INVALID');
+  return { ci_run_id: inputs.ci_run_id, ci_run_attempt: inputs.ci_run_attempt, sha: inputs.sha,
+    qualificationOnly: mode === true || mode === 'true' };
+}
+
+export function freezeCandidate(qualified, env, policy = standingPolicy, qualificationOnly = false) {
+  requireThat(typeof qualificationOnly === 'boolean', 'EXECUTOR_INPUT_INVALID');
   requireThat(env.GITHUB_REPOSITORY === execution.repository && positiveId(env.GITHUB_RUN_ID) &&
     positiveId(env.GITHUB_RUN_ATTEMPT) && positiveAttempt(Number(env.GITHUB_RUN_ATTEMPT)) &&
     env.GITHUB_REF === 'refs/heads/main' &&
     env.GITHUB_WORKFLOW_REF === `${execution.repository}/.github/workflows/${execution.workflow}@refs/heads/main` &&
     (!external || (shaPattern.test(env.GITHUB_SHA) && env.GITHUB_WORKFLOW_SHA === env.GITHUB_SHA)),
   'RELEASE_CONTEXT_UNVERIFIABLE');
-  const candidate = { ...qualified, version: external ? 4 : 3,
+  const candidate = { ...qualified, version: external ? 4 : 3, qualificationOnly,
     ...(external ? { executorRepository: execution.repository, executorSha: env.GITHUB_SHA } : {}), releaseRunId: env.GITHUB_RUN_ID,
     releaseRunAttempt: Number(env.GITHUB_RUN_ATTEMPT), policySha256: policyDigest(policy), ...targetIdentity };
   validateReleaseIdentity(candidate);
@@ -129,6 +143,8 @@ export function releaseKey(identity) {
 
 export function verifyCandidate(candidate, qualified, archive, trustedArchive) {
   validateReleaseIdentity(candidate);
+  requireThat(typeof qualified.qualificationOnly === 'boolean' &&
+    candidate.qualificationOnly === qualified.qualificationOnly, 'CANDIDATE_PURPOSE_MISMATCH');
   for (const key of releaseIdentityFields)
     requireThat(candidate[key] === qualified[key], 'CANDIDATE_PROVENANCE_MISMATCH');
   requireThat(candidate.sourceSha256 === createHash('sha256').update(archive).digest('hex'),
@@ -139,6 +155,7 @@ export function verifyCandidate(candidate, qualified, archive, trustedArchive) {
 
 export function validatePolicy(qualified, env, policy = standingPolicy) {
   validateReleaseIdentity(qualified);
+  requireThat(qualified.qualificationOnly === false, 'QUALIFICATION_ONLY_CANNOT_DEPLOY');
   requireThat(env.GITHUB_REPOSITORY === execution.repository && env.GITHUB_RUN_ID === qualified.releaseRunId &&
     env.GITHUB_RUN_ATTEMPT === String(qualified.releaseRunAttempt) &&
     env.GITHUB_REF === 'refs/heads/main' &&
@@ -700,6 +717,7 @@ export async function deploymentHistory(api, provider) {
 
 export async function deploy(api, qualified, policy, report, options = {}) {
   validateReleaseIdentity(qualified);
+  requireThat(qualified.qualificationOnly === false, 'QUALIFICATION_ONLY_CANNOT_DEPLOY');
   policyDigest(policy); // Explicit mode selection; signed bundles never select a fallback.
   const readSource = options.readSourceDigest ?? (path => gitSourceDigest(options.env?.SOURCE_DIR, qualified.sha, path));
   const evidence = await verifyGitHubEvidence(api, qualified, policy, readSource, options.now);
@@ -964,14 +982,11 @@ export async function main(env, options = {}) {
   if (external) {
     requireThat(env.GITHUB_EVENT_NAME === 'workflow_dispatch', 'EXECUTOR_DISPATCH_REQUIRED');
     const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH));
-    const inputs = event.inputs;
-    requireThat(inputs && Object.keys(inputs).sort().join(',') === 'ci_run_attempt,ci_run_id,sha' &&
-      positiveId(inputs.ci_run_id) && positiveId(inputs.ci_run_attempt) && shaPattern.test(inputs.sha),
-      'EXECUTOR_INPUT_INVALID');
+    const inputs = validateDispatchInputs(event.inputs);
     const qualified = await qualify(api, inputs.ci_run_id);
     requireThat(qualified.sha === inputs.sha && String(qualified.ciRunAttempt) === inputs.ci_run_attempt,
       'CI_EVENT_PROVENANCE_MISMATCH');
-    q = freezeCandidate(qualified, env, policy);
+    q = freezeCandidate(qualified, env, policy, inputs.qualificationOnly);
     requireThat(execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim() === q.executorSha,
       'EXECUTOR_CHECKOUT_MISMATCH');
   } else {
@@ -997,10 +1012,11 @@ export async function main(env, options = {}) {
     writeFileSync(`${env.CANDIDATE_DIR}/source.tar`, archive);
     writeFileSync(`${env.CANDIDATE_DIR}/candidate.json`, JSON.stringify({ ...q,
       sourceSha256: createHash('sha256').update(archive).digest('hex') }, null, 2) + '\n');
-    appendFileSync(env.GITHUB_OUTPUT, `sha=${q.sha}\n`);
+    appendFileSync(env.GITHUB_OUTPUT, `sha=${q.sha}\nqualification_only=${q.qualificationOnly}\n`);
     return;
   }
   requireThat(mode === 'deploy' || mode === 'admit', 'RELEASE_MODE_INVALID');
+  requireThat(mode !== 'deploy' || q.qualificationOnly === false, 'QUALIFICATION_ONLY_CANNOT_DEPLOY');
   verifyCandidate(JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/candidate.json`)), q,
     readFileSync(`${env.CANDIDATE_DIR}/source.tar`),
     sourceArchive(q.sha));

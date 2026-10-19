@@ -12,6 +12,11 @@ on:
       sha:
         required: true
         type: string
+      qualification_only:
+        description: Run candidate and admission checks without entering production
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,6 +38,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.candidate.outputs.sha }}
+      qualification_only: ${{ steps.candidate.outputs.qualification_only }}
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       # Only executor code is checked out and executed; source is inert Git objects.
@@ -120,7 +126,7 @@ jobs:
   production:
     name: Unattended recovery release
     needs: [candidate, admission]
-    if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' }}
+    if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production-release

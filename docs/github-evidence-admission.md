@@ -84,16 +84,33 @@ an ordinary application PR cannot silently update the approved copy.
    remain. Partial provider failures stop; there is no automatic rollback or
    blind retry of an uncertain request.
 
-Receipt contract `aqua.github-evidence-admission`, version 1, binds:
+Receipt contract `aqua.github-evidence-admission`, version 2, binds:
 repository, source SHA, CI ID/attempt, executor repository/revision, release
 ID/attempt, policy digest, environment/profile, provider identities, approved
-inventory digest and the canonical evidence digest. That evidence includes the
-artifact ID/name/archive digest, report digest and CI completion time. The receipt
+inventory digest, qualification-only purpose and the canonical evidence digest.
+That evidence includes the artifact ID/name/archive digest, report digest and CI
+completion time. The receipt
 has an issuance/expiry time (at most one hour, never beyond CI evidence expiry)
 and deterministic authorization ID. Unknown fields or mismatches deny. Hashes
 bind observed bytes; they are not independent signatures. Authenticity comes from
 the approved executor workflow, GitHub artifact provenance and same-run job checks.
 Production audit rows retain authorization/evidence/inventory and artifact IDs.
+
+### Qualification-only dispatch
+
+The optional boolean `qualification_only` defaults to `false`, preserving the
+existing three-field application trigger. A `true` dispatch runs the same candidate
+and admission checks without entering the production job or its environment.
+Only the controller's validated literal `false` output permits that job to run;
+missing or unrecognized output denies entry. Invalid dispatch values are rejected.
+
+Candidate artifacts and version-2 admission receipts bind the purpose. Receipts
+from qualification cannot authorize deployment, and both deployment entrypoints
+reject qualification-only candidates before provider access. Older receipt versions
+are rejected. Qualification is not evidence of a deployed predecessor. Existing
+history and rerun reconciliation remain unchanged; a repeated attempt lacking a
+required prior-attempt audit fails closed. Use a fresh qualification run rather
+than treating a missing audit as permission to retry.
 
 Artifact retrieval follows GitHub's authenticated numeric-ID endpoint to its
 short-lived HTTPS storage URL without forwarding GitHub/provider credentials.
@@ -157,7 +174,7 @@ permissions, production configuration, provider behavior or deployment.
 Run the affected suites:
 
 ```bash
-node --test tools/deployment/github-evidence.test.mjs tools/deployment/executor.test.mjs tools/deployment/authorization-attestation.test.mjs
+node --test tools/deployment/qualification-only.test.mjs tools/deployment/executor.test.mjs tools/deployment/github-evidence.test.mjs
 git diff --check
 ```
 
@@ -165,8 +182,16 @@ The existing executor CI also runs the unchanged prototype PostgreSQL suite agai
 its disposable service. No production database or provider is involved. See
 [`SETUP.md`](../SETUP.md) for remaining one-time configuration and authorization.
 
-Local affected-suite validation on Node 26.6.0: **60 passed, 0 failed, 0 skipped**.
+Baseline `e3e1608` local affected-suite validation on Node 26.6.0:
+**60 passed, 0 failed, 0 skipped**.
 `git diff --check` passed. Standalone `actionlint` is unavailable locally; workflow
 ordering/dependencies/secret placement are covered by focused source checks. The
 Node-24 hosted CI result is reported against the pushed commit in PR #1; it is
 separate from these local results. No full application CI suite was rerun.
+
+Qualification-only change: the command above passed **54 tests, 0 failed,
+0 skipped**, including seven mode-specific cases. They cover strict dispatch
+parsing, production-job exclusion, candidate/receipt isolation, unchanged mandatory
+evidence rejection and provider-free controller entrypoints. The existing normal
+deployment sequence also passed against provider substitutes. This is not a live
+qualification dispatch or proof of deployed GitHub configuration.

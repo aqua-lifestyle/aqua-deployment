@@ -122,10 +122,10 @@ export async function verifyGitHubEvidence(api, qualified, policy, readSourceDig
 
 const receiptBindings = ['repository', 'sha', 'ciRunId', 'ciRunAttempt', 'executorRepository', 'executorSha',
   'releaseRunId', 'releaseRunAttempt', 'policySha256', 'environment', 'profile',
-  'renderServiceId', 'vercelProjectId', 'vercelTeamId'];
+  'renderServiceId', 'vercelProjectId', 'vercelTeamId', 'qualificationOnly'];
 export function createGitHubAdmission(qualified, policy, evidence, now = Date.now) {
   const time = now();
-  check(Number.isFinite(time) && evidence.mode === 'github-evidence-v1' &&
+  check(Number.isFinite(time) && typeof qualified.qualificationOnly === 'boolean' && evidence.mode === 'github-evidence-v1' &&
     evidence.inventorySha256 === policy.authorization.inventorySha256 &&
     ['repository', 'sha', 'ciRunId', 'ciRunAttempt', 'policySha256'].every(k => evidence[k] === qualified[k]),
   'ADMISSION_EVIDENCE_MISMATCH');
@@ -135,7 +135,7 @@ export function createGitHubAdmission(qualified, policy, evidence, now = Date.no
   const expiry = Math.min(time + policy.authorization.maxAdmissionAgeSeconds * 1000,
     Date.parse(evidence.completedAt) + policy.authorization.maxCiAgeSeconds * 1000);
   check(expiry > time, 'ADMISSION_EVIDENCE_EXPIRED');
-  return { contract: 'aqua.github-evidence-admission', version: 1, mode: 'github-evidence-v1', ...binding,
+  return { contract: 'aqua.github-evidence-admission', version: 2, mode: 'github-evidence-v1', ...binding,
     evidenceSha256, inventorySha256: inventoryDigest,
     authorizationId: objectDigest({ ...binding, evidenceSha256 }),
     issuedAt: new Date(time).toISOString(), expiresAt: new Date(expiry).toISOString() };

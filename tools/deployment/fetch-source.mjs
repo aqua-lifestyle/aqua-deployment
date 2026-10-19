@@ -3,12 +3,10 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { targets, requireThat } from './release-control.mjs';
+import { targets, requireThat, validateDispatchInputs } from './release-control.mjs';
 
 export function fetchSource(env, execute = execFileSync) {
-  const inputs = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH)).inputs;
-  requireThat(inputs && Object.keys(inputs).sort().join(',') === 'ci_run_attempt,ci_run_id,sha' &&
-    /^[a-f0-9]{40}$/.test(inputs.sha), 'EXECUTOR_INPUT_INVALID');
+  const inputs = validateDispatchInputs(JSON.parse(readFileSync(env.GITHUB_EVENT_PATH)).inputs);
   requireThat(env.SOURCE_DIR && env.SOURCE_DIR !== env.GITHUB_WORKSPACE, 'INERT_SOURCE_DIRECTORY_REQUIRED');
   mkdirSync(env.SOURCE_DIR, { recursive: true });
   const gitEnv = { PATH: env.PATH ?? process.env.PATH, HOME: env.RUNNER_TEMP ?? env.SOURCE_DIR,
