@@ -161,6 +161,21 @@ explicitly apply its `readpat-SHA` label. Do not merge or dispatch qualification
 part of this implementation task. Read success will not prove the token has no
 write permissions or that the old main artifact qualifies for deployment.
 
+### PAT owner correction
+
+The owner subsequently confirmed that the existing PAT was created by the approved
+administrator `aqualifestyleclub`. Trusted GitHub account metadata from
+`GET /users/aqualifestyleclub` returned numeric ID `307076734`; the corresponding
+`Xolani-M` metadata returned `86495928`. Credential owner validation now reuses the
+existing standing policy's exact username/ID pairs. Trusted merge, approval-label,
+scope and release requirements are unchanged. New focused cases accept each
+approved pair and reject unapproved users, swapped IDs, missing fields and string
+IDs. This corrects the identity-only rejection in run `39304224153`; it does not
+establish that the remaining authenticated reads pass. A new exact-head label is
+required after this correction. No token, secret or permission was changed.
+Focused credential-check tests: 8 passed, 0 failed, 0 skipped;
+`git diff --check` passed. Real authenticated cross-repository checks were not rerun.
+
 ### Carried-forward implementation evidence
 
 Local command:

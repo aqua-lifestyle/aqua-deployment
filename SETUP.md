@@ -48,7 +48,8 @@ policy and zero repository/environment secrets. Original metadata is retained in
 [`governance/executor-configuration-readback.json`](governance/executor-configuration-readback.json)
 and [`governance/ruleset-readbacks.json`](governance/ruleset-readbacks.json).
 No credentials, merge or deployment were authorized or performed by this setup.
-Subsequently, Xolani-M reported creating the evidence PAT; GitHub metadata confirms
+Subsequently, the owner confirmed creating the PAT as `aqualifestyleclub`;
+GitHub metadata confirms
 repository secret `AQGREEN_EVIDENCE_READ_TOKEN` exists. Its access remains unverified
 until the trusted credential check below succeeds. No provider secret was added.
 The application 17-check ruleset #25297647 and environment are carried-forward
@@ -117,7 +118,9 @@ environment is used.
 The job checks out exactly the approved head. Before exposing the PAT to its
 verification step, a job-token-only step rechecks the current PR/label/head and
 successful safety check from App 15368. The PAT step repeats that check, verifies
-Xolani-M's authenticated identity and performs GitHub GET-only reads for source,
+the token owner's authenticated username/numeric ID pair against the existing
+approved administrators: `Xolani-M` / `86495928` or `aqualifestyleclub` / `307076734`.
+It performs GitHub GET-only reads for source,
 provenance, CI jobs/checks, a digest-verified artifact archive, governance,
 environments and run history in both repositories. It emits only static pass/fail
 codes, HTTP statuses and non-sensitive IDs. It stops on a failed required read,

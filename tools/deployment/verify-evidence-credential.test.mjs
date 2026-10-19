@@ -113,6 +113,23 @@ test('missing credentials and untrusted context deny before any network request'
   }
 });
 
+test('evidence token owners must match an approved username and its own immutable numeric ID', async () => {
+  for (const identity of [{ login: 'Xolani-M', id: 86495928 }, { login: 'aqualifestyleclub', id: 307076734 }]) {
+    const f = setup(); await f.run('verify', (url, options) => url.endsWith('/user') ?
+      Response.json(identity) : f.fetcher(url, options));
+    assert.equal(f.reports.at(-1).result, 'PASS');
+  }
+  for (const identity of [{ login: 'aqualifestyleclub', id: 86495928 },
+    { login: 'Xolani-M', id: 307076734 }, { login: 'aqualifestyleclub', id: 1 },
+    { login: 'contributor', id: 307076734 }, { login: 'contributor', id: 1 },
+    { login: 'aqualifestyleclub', id: '307076734' }, { id: 307076734 }, {}]) {
+    const f = setup(); await assert.rejects(f.run('verify', (url, options) => url.endsWith('/user') ?
+      Response.json(identity) : f.fetcher(url, options)), /IDENTITY_MISMATCH/);
+    assert.ok(!f.reports.some(r => r.check === 'evidence-read-access' && r.result === 'PASS'));
+    assert.ok(!f.calls.some(c => c.url.startsWith(`https://api.github.com/repos/${source}/`)));
+  }
+});
+
 test('any required read failure stops immediately without retry or scope fallback', async () => {
   for (const failedPath of ['/user', '/check-runs/200', '/actions/artifacts/7890/zip', '/contents/',
     '/rulesets/25403847', '/environments/production-release', '/actions/runs?per_page=1']) {

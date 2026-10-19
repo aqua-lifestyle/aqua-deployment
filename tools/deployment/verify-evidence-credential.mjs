@@ -60,7 +60,8 @@ export async function checkCredential(env, { event, checkoutSha, mode, fetcher =
     signal: AbortSignal.timeout(30_000), headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
   requireThat(identityResponse.ok, 'CREDENTIAL_CHECK_IDENTITY_UNAVAILABLE');
   const identity = await identityResponse.json();
-  requireThat(identity.login === 'Xolani-M' && identity.id === 86495928, 'CREDENTIAL_CHECK_IDENTITY_MISMATCH');
+  requireThat(standingPolicy.authorization.administrators.some(a =>
+    a.login === identity.login && a.id === identity.id), 'CREDENTIAL_CHECK_IDENTITY_MISMATCH');
 
   phase = 'application-ci-runs';
   const main = await api.gh('/git/ref/heads/main');
