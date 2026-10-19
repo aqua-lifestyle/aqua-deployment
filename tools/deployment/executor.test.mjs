@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {mkdtempSync,readFileSync,writeFileSync,rmSync,mkdirSync} from 'node:fs';
+import {mkdtempSync,readFileSync,writeFileSync,rmSync,mkdirSync,existsSync,readdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {fixture,qualified,runnerEnv,source,previous,run,jobs} from './fixtures/provider.mjs';
+import {fixture,qualified,runnerEnv,source,previous,run,jobs,fixtureNow} from './fixtures/provider.mjs';
 import {clients,freezeCandidate,validatePolicy,verifyCandidate,targets,standingPolicy,qualify,
   evidencePlan,releaseKey,validateLegacyHistory,main,validateResumeReceipt,validateBaselineReceipt,
-  validateAdmissionJob} from './release-control.mjs';
+  validateAdmissionJob,requireDeploymentAttestation,admissionJobName} from './release-control.mjs';
 import {fetchSource} from './fetch-source.mjs';
 
 test('external rollout preserves exact Render-first sequence and independently bound revisions',async()=>{
@@ -21,7 +21,7 @@ test('external rollout preserves exact Render-first sequence and independently b
   assert.equal(f.reports.at(-1).executorRepository,targets.executor.repository);
   assert.equal(f.reports.at(-1).executorSha,'d'.repeat(40));
 });
-test('missing, altered, expired, mismatched or unverifiable attestation is denied before provider access',async()=>{
+test('inactive prototype rejects missing, altered, expired, mismatched or unverifiable attestations',async()=>{
   const seed=fixture(),valid=seed.authorizationFor(seed.state.candidate);
   const cases=[
     ['missing',null],
@@ -34,19 +34,19 @@ test('missing, altered, expired, mismatched or unverifiable attestation is denie
   ];
   for(const [label,authorization] of cases){
     const f=fixture();
-    await assert.rejects(f.execute({authorization}),undefined,label);
+    await assert.rejects(requireDeploymentAttestation(authorization,f.state.candidate),undefined,label);
     assert.equal(f.posts.length,0,label);
     assert.equal(f.state.providerCalls,0,label);
     assert.equal(f.state.renderReads,0,label);
     assert.equal(f.state.vercelReads,0,label);
   }
 });
-test('same signed authorization cannot concurrently reach two provider deployments',async()=>{
+test('inactive prototype consumes the same signed authorization once in its test store',async()=>{
   const f=fixture(),authorization=f.authorizationFor(f.state.candidate);
-  const results=await Promise.allSettled([f.execute({authorization}),f.execute({authorization})]);
+  const results=await Promise.allSettled([requireDeploymentAttestation(authorization,f.state.candidate),requireDeploymentAttestation(authorization,f.state.candidate)]);
   assert.equal(results.filter(x=>x.status==='fulfilled').length,1);
   assert.equal(results.filter(x=>x.status==='rejected').length,1);
-  assert.equal(f.posts.filter(x=>x.provider==='render').length,1);
+  assert.equal(f.posts.length,0);
 });
 for(const [label,mutate] of [
   ['missing credentials',f=>{delete f.state.env.RENDER_API_KEY;}],
@@ -157,21 +157,24 @@ test('separate pre-secret admission gates the only provider-secret job',()=>{
   assert.ok(!candidate.includes('secrets.'));
   assert.ok(!admission.includes('environment:'));
   assert.doesNotMatch(admission,/secrets\.(RENDER_API_KEY|VERCEL_TOKEN)/);
-  assert.match(admission,/secrets\.ATTESTATION_REPLAY_DATABASE_URL/);
+  assert.doesNotMatch(admission,/secrets\./);
   assert.match(production,/needs: \[candidate, admission\]/);
   assert.match(production,/needs\.admission\.result == 'success'/);
   assert.match(production,/environment: production-release/);
   assert.match(production,/secrets\.RENDER_API_KEY/);
   assert.match(production,/secrets\.VERCEL_TOKEN/);
   assert.match(production,/ref: \$\{\{ github.sha \}\}/);
-  assert.doesNotMatch(candidate,/npm|npx/);assert.match(admission,/npm ci --ignore-scripts/);
+  assert.doesNotMatch(candidate,/npm|npx/);assert.doesNotMatch(admission,/npm|npx/);
   assert.doesNotMatch(production,/npm|npx/);
   assert.match(wf,/group: production-release\s+cancel-in-progress: false/);
   assert.match(wf,/github.ref == 'refs\/heads\/main'/);
   assert.doesNotMatch(wf,/\$\{\{ inputs\./);
   assert.doesNotMatch(admission,/api\.render\.com|api\.vercel\.com/);
-  assert.match(admission,/AQUA_AUTHORIZATION_BUNDLE_FILE/);
-  assert.match(admission,/ATTESTATION_REPLAY_DATABASE_URL/);
+  assert.match(admission,/AQUA_ADMISSION_RECEIPT_OUTPUT/);
+  assert.doesNotMatch(wf,/AQUA_AUTHORIZATION_BUNDLE|ATTESTATION_REPLAY_DATABASE_URL/);
+  assert.equal((production.match(/node tools\/deployment\/release-control\.mjs deploy/g)??[]).length,1);
+  for(const name of readdirSync(new URL('../../.github/workflows/',import.meta.url)).filter(n=>n.endsWith('.yml')&&n!=='deploy.yml'))
+    assert.doesNotMatch(readFileSync(new URL(`../../.github/workflows/${name}`,import.meta.url),'utf8'),/secrets\.(RENDER_API_KEY|VERCEL_TOKEN)/);
   for(const line of wf.split('\n').filter(l=>l.includes('uses:')))assert.match(line,/@[a-f0-9]{40}/);
 });
 
@@ -180,12 +183,12 @@ test('missing, skipped or wrong-attempt admission execution cannot qualify the p
   const route=`/actions/runs/${q.releaseRunId}/attempts/${q.releaseRunAttempt}/jobs?per_page=100`;
   const complete=[
     {name:'Qualify immutable source candidate',status:'completed',conclusion:'success'},
-    {name:'Verify independent authorization before provider access',status:'completed',conclusion:'success'},
+    {name:admissionJobName,status:'completed',conclusion:'success'},
     {name:'Unattended recovery release',status:'in_progress',conclusion:null}
   ].map(job=>({...job,run_id:Number(q.releaseRunId),run_attempt:q.releaseRunAttempt}));
-  for(const jobs of [complete.filter(x=>x.name!=='Verify independent authorization before provider access'),
-    complete.map(x=>x.name==='Verify independent authorization before provider access'?{...x,conclusion:'skipped'}:x),
-    complete.map(x=>x.name==='Verify independent authorization before provider access'?{...x,run_attempt:2}:x)]){
+  for(const jobs of [complete.filter(x=>x.name!==admissionJobName),
+    complete.map(x=>x.name===admissionJobName?{...x,conclusion:'skipped'}:x),
+    complete.map(x=>x.name===admissionJobName?{...x,run_attempt:2}:x)]){
     f.api.executor=async path=>path===route?{total_count:jobs.length,jobs}:read(path);
     await assert.rejects(validateAdmissionJob(f.api,q));
     assert.equal(f.state.providerCalls,0);
@@ -209,7 +212,8 @@ test('real Git source passes candidate, admission and deployment entries without
     const event=join(dir,'event.json');writeFileSync(event,JSON.stringify({inputs:{ci_run_id:'123',ci_run_attempt:'1',sha}}));
     const env={...runnerEnv(),GITHUB_SHA:executorSha,GITHUB_WORKFLOW_SHA:executorSha,GITHUB_EVENT_NAME:'workflow_dispatch',
       GITHUB_EVENT_PATH:event,SOURCE_DIR:repo,CANDIDATE_DIR:candidate,GITHUB_OUTPUT:join(dir,'outputs'),RELEASE_REPORT:join(dir,'report.jsonl')};
-    const f=fixture();const transform=value=>value===source?sha:Array.isArray(value)?value.map(transform):
+    const f=fixture();f.state.candidate={...f.state.candidate,sha,executorSha};f.state.report.context.sha=sha;
+    const transform=value=>value===source?sha:Array.isArray(value)?value.map(transform):
       value&&typeof value==='object'?Object.fromEntries(Object.entries(value).map(([k,v])=>[k,transform(v)])):value;
     for(const key of ['gh','render','vercel','health']){const original=f.api[key];f.api[key]=async(...args)=>transform(await original(...args));}
     const executorApi=f.api.executor;
@@ -218,26 +222,29 @@ test('real Git source passes candidate, admission and deployment entries without
       repository:{full_name:targets.executor.repository},head_repository:{full_name:targets.executor.repository}};
     f.api.executor=async route=>route==='/git/ref/heads/main'?{object:{sha:executorSha}}:route==='/actions/runs/456'?current:route.startsWith('/actions/workflows/deploy.yml/runs?')?
       {total_count:1,workflow_runs:[current]}:executorApi(route);
-    await main(env,{mode:'candidate',api:f.api});assert.equal(f.posts.length,0);
+    const publicEnv={...env};delete publicEnv.RENDER_API_KEY;delete publicEnv.VERCEL_TOKEN;
+    const dependencies={api:f.api,now:()=>fixtureNow,readSourceDigest:f.readSourceDigest};
+    await main(publicEnv,{mode:'candidate',...dependencies});assert.equal(f.posts.length,0);
     const manifest=JSON.parse(readFileSync(join(candidate,'candidate.json')));
-    const authorization=f.authorizationFor(manifest);
     assert.equal(manifest.sha,sha);assert.equal(manifest.executorSha,executorSha);
     assert.ok(readFileSync(join(candidate,'source.tar')).length>0);
-    await assert.rejects(main(env,{mode:'admit',api:f.api}),/TRUSTED_AUTHORIZATION_SOURCE_UNAVAILABLE/);
+    await assert.rejects(main(publicEnv,{mode:'admit',api:f.api,now:()=>fixtureNow}),/MANDATORY_SOURCE/);
     assert.equal(f.state.providerCalls,0);
     const admissionDir=join(dir,'admission');mkdirSync(admissionDir);
-    env.AQUA_ADMISSION_BUNDLE_OUTPUT=join(admissionDir,'authorization-bundle.json');
     env.AQUA_ADMISSION_RECEIPT_OUTPUT=join(admissionDir,'admission-receipt.json');
-    env.AQUA_AUTHORIZATION_BUNDLE_FILE=env.AQUA_ADMISSION_BUNDLE_OUTPUT;
     env.AQUA_ADMISSION_RECEIPT_FILE=env.AQUA_ADMISSION_RECEIPT_OUTPUT;
-    await main(env,{mode:'admit',api:f.api,authorization});assert.equal(f.posts.length,0);
+    publicEnv.AQUA_ADMISSION_RECEIPT_OUTPUT=env.AQUA_ADMISSION_RECEIPT_OUTPUT;
+    f.state.report.results[0].outcome='skipped';
+    await assert.rejects(main(publicEnv,{mode:'admit',...dependencies}),/MANDATORY_EXECUTION_NOT_QUALIFIED/);
+    assert.equal(existsSync(env.AQUA_ADMISSION_RECEIPT_OUTPUT),false);assert.equal(f.state.providerCalls,0);
+    f.state.report.results[0].outcome='passed';
+    await main(publicEnv,{mode:'admit',...dependencies});assert.equal(f.posts.length,0);
     assert.equal(f.state.providerCalls,0,'pre-secret admission must not read Render or Vercel');
     await assert.rejects(main({...env,AQUA_ADMISSION_RECEIPT_FILE:join(dir,'missing-receipt.json')},
-      {mode:'deploy',api:f.api,deploymentOptions:{attempts:3,pause:async()=>{},authorization}}),
+      {mode:'deploy',...dependencies,deploymentOptions:{attempts:3,pause:async()=>{}}}),
       /ADMISSION_RECEIPT_MISMATCH/);
     assert.equal(f.posts.length,0);
-    await main(env,{mode:'deploy',api:f.api,deploymentOptions:{attempts:3,pause:async()=>{},
-      authorization}});
+    await main(env,{mode:'deploy',...dependencies,deploymentOptions:{attempts:3,pause:async()=>{}}});
     assert.deepEqual(f.posts.map(x=>x.provider),['render','vercel']);
     const final=JSON.parse(readFileSync(env.RELEASE_REPORT,'utf8').trim().split('\n').at(-1));
     assert.equal(final.phase,'verified');assert.equal(final.sha,sha);assert.equal(final.executorSha,executorSha);

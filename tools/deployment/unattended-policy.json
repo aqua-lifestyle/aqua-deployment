@@ -1,6 +1,28 @@
 {
-  "version": 2,
-  "epoch": "recovery-automatic-v2",
+  "version": 3,
+  "epoch": "aqgreen-mvp-github-evidence-v1",
   "profile": "recovery-only",
-  "baseline": "automatic"
+  "baseline": "automatic",
+  "authorization": {
+    "kind": "github-evidence-v1",
+    "approval": "trusted-administrator-executor-merge",
+    "administrators": [
+      { "login": "Xolani-M", "id": 86495928 },
+      { "login": "aqualifestyleclub", "id": 307076734 }
+    ],
+    "inventorySourceCommit": "b57c2810bc15d1f7893126697a0bfbb3f5b3ade2",
+    "inventorySha256": "85e0b5175527509de9badd368d4db82da2429cf6e295345f25049f913674fa9f",
+    "maxCiAgeSeconds": 86400,
+    "maxAdmissionAgeSeconds": 3600
+  },
+  "scope": {
+    "repository": "aqua-lifestyle/aqua-lifestyle",
+    "branch": "main",
+    "executorRepository": "aqua-lifestyle/aqua-deployment",
+    "environment": "production-release",
+    "profile": "recovery-only",
+    "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+    "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY"
+  }
 }

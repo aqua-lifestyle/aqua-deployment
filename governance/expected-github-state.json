@@ -12,11 +12,13 @@
     "workflowDefaultTokenPermission": "read",
     "workflowCanApprovePullRequestReviews": false,
     "providerSecretsPresent": false,
-    "directExecutorAdmins": ["Xolani-M"],
+    "directExecutorAdmins": [
+      "Xolani-M"
+    ],
     "designatedCustodian": "aqualifestyleclub"
   },
   "executorMain": {
-    "authority": "organization_ruleset_required_for_independent_admin_boundary",
+    "authority": "repository-ruleset-trusted-administrator-managed",
     "targetRepository": "aqua-deployment",
     "targetBranch": "refs/heads/main",
     "enforcement": "active",
@@ -27,28 +29,12 @@
     "rules": [
       "deletion",
       "non_fast_forward",
-      "required_status_checks",
-      "required_workflows"
+      "required_status_checks"
     ],
     "requiredStatusChecks": [
       {
         "context": "Executor safety tests",
         "integrationId": 15368
-      },
-      {
-        "context": "Independent mandatory security verification",
-        "integrationId": null,
-        "blockedUntil": "owner-controlled-verifier-app-is-created-and-verified"
-      }
-    ],
-    "requiredWorkflows": [
-      {
-        "repository": null,
-        "repositoryId": null,
-        "path": ".github/workflows/executor-integrity.yml",
-        "ref": null,
-        "sha": null,
-        "blockedUntil": "separately-custodied-verifier-repository-and-immutable-workflow-revision-exist"
       }
     ]
   },
@@ -70,32 +56,48 @@
     "canAdminsBypass": false,
     "branchPolicy": {
       "mode": "custom",
-      "branches": ["main"]
+      "branches": [
+        "main"
+      ]
     },
     "waitTimerMinutes": 0,
     "requiredReviewers": [],
-    "onlyProtectionRuleTypes": ["branch_policy"]
-  },
-  "independentVerifier": {
-    "requiredAuthority": "separate-security-custodian-and-owner-controlled-github-organization-ruleset",
-    "sourceRepository": null,
-    "sourceCommit": null,
-    "issuerAppId": null,
-    "applicationAuthorsMayWritePolicy": false,
-    "executorAdminsMayWritePolicy": false,
-    "mustVerify": [
-      "all-17-required-check-identities-and-actions-app-identity",
-      "exact-current-main-ci-run-and-attempt-for-the-release-sha",
-      "stable-mandatory-test-identities-cardinality-and-test-definition-digests",
-      "relevant-workflow-harness-reporter-lockfile-and-execution-configuration-digests",
-      "no-missing-skipped-neutral-duplicate-renamed-or-stale-results"
-    ],
-    "execution": "fixed-trusted-harness-on-exact-commit-without-candidate-workflows-scripts-hooks-caches-or-secrets",
-    "receipt": "trusted-check-or-signed-evidence-bound-to-repository-commit-ci-run-and-attempt"
+    "onlyProtectionRuleTypes": [
+      "branch_policy"
+    ]
   },
   "credentialBoundary": {
-    "providerSecretsMayBeStoredInThisRepository": false,
-    "reason": "Xolani-M-remains-an-effective-executor-administrator-and-can-change-executor-workflows-settings-and-secrets",
-    "minimumResolution": "owner-exclusive-deployment-control-plane-or-provider-credential-broker-that-does-not-trust-this-repository-admin"
+    "providerSecretsMayBeStoredInThisRepository": true,
+    "scope": "production-release environment only",
+    "candidateAndAdmissionMayReceiveProviderSecrets": false,
+    "applicationMayReceiveProviderSecrets": false,
+    "reason": "Both current repository administrators are explicitly trusted. Settings and provisioning require separate owner authorization."
+  },
+  "trustModel": {
+    "name": "trusted-administrator-mvp",
+    "administrators": [
+      {
+        "login": "Xolani-M",
+        "id": 86495928
+      },
+      {
+        "login": "aqualifestyleclub",
+        "id": 307076734
+      }
+    ],
+    "administratorResistanceRequired": false,
+    "externalCustodianRequired": false
+  },
+  "githubEvidence": {
+    "policyVersion": 3,
+    "mode": "github-evidence-v1",
+    "approvedInventory": "tools/deployment/approved-security-tests.json",
+    "mandatoryTests": 240,
+    "protectedSources": 25,
+    "requiredChecks": 17,
+    "ciAppId": 15368,
+    "maxCiAgeSeconds": 86400,
+    "maxAdmissionAgeSeconds": 3600,
+    "approval": "trusted-administrator-executor-merge"
   }
 }

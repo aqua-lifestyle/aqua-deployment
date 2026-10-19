@@ -1,8 +1,9 @@
 # Aqua deployment executor
 
-Credential-free implementation is prepared on a review branch. Production
-credential provisioning is BLOCKED until the designated custodian's access is
-isolated from ordinary application contributors and automation.
+Credential-free implementation is prepared on PR #1. The MVP trusts `Xolani-M`
+and `aqualifestyleclub` to administer deployment policy and credentials. Ordinary
+application contributors and workflows must not receive provider credentials.
 
-This initial default branch contains no workflow, provider credential or deployment
-command. Installing reviewed execution code does not authorize production deployment.
+The GitHub-evidence policy, one-time setup and remaining production holds are in
+[SETUP.md](SETUP.md). Installing reviewed execution code does not authorize a merge,
+production setup or deployment. No production credentials are included.

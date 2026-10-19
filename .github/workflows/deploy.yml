@@ -69,7 +69,7 @@ jobs:
           printf 'Qualified source: `%s`\n\nImmutable artifact digest: `%s`\n\nStanding deployment policy and runtime safety govern automatic admission.\n' "$SOURCE_SHA" "$ARTIFACT_DIGEST" >> "$GITHUB_STEP_SUMMARY"
 
   admission:
-    name: Verify independent authorization before provider access
+    name: Verify approved GitHub evidence before provider access
     needs: candidate
     if: needs.candidate.result == 'success'
     runs-on: ubuntu-latest
@@ -87,7 +87,6 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
-      - run: npm ci --ignore-scripts
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           artifact-ids: ${{ needs.candidate.outputs.artifact-id }}
@@ -97,21 +96,10 @@ jobs:
         env:
           SOURCE_DIR: ${{ runner.temp }}/source-git
         run: node tools/deployment/fetch-source.mjs
-      - name: Require authenticated independent-verifier retrieval
-        env:
-          AQUA_AUTHORIZATION_BUNDLE_FILE: ${{ runner.temp }}/trusted-authorization.json
-        run: |
-          if [ ! -s "$AQUA_AUTHORIZATION_BUNDLE_FILE" ]; then
-            echo "::error::Trusted verifier retrieval is not configured; admission denies deployment."
-            exit 1
-          fi
-      - name: Verify signed authorization and reserve it atomically
+      - name: Authenticate exact GitHub execution evidence and release history
         id: admission
         env:
           GH_TOKEN: ${{ github.token }}
-          ATTESTATION_REPLAY_DATABASE_URL: ${{ secrets.ATTESTATION_REPLAY_DATABASE_URL }}
-          AQUA_AUTHORIZATION_BUNDLE_FILE: ${{ runner.temp }}/trusted-authorization.json
-          AQUA_ADMISSION_BUNDLE_OUTPUT: ${{ runner.temp }}/admission/authorization-bundle.json
           AQUA_ADMISSION_RECEIPT_OUTPUT: ${{ runner.temp }}/admission/admission-receipt.json
           SOURCE_DIR: ${{ runner.temp }}/source-git
           CANDIDATE_DIR: ${{ runner.temp }}/candidate
@@ -181,7 +169,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          AQUA_AUTHORIZATION_BUNDLE_FILE: ${{ runner.temp }}/admission/authorization-bundle.json
           AQUA_ADMISSION_RECEIPT_FILE: ${{ runner.temp }}/admission/admission-receipt.json
           SOURCE_DIR: ${{ runner.temp }}/source-git
           CANDIDATE_DIR: ${{ runner.temp }}/candidate

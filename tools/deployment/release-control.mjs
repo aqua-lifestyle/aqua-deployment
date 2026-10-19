@@ -3,7 +3,9 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
-import { createPostgresReplayStore } from './postgres-replay-store.mjs';
+import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
+  gitSourceDigest, verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission,
+  readGitHubArtifact, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
 
 export const targets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 // Only the executor's reviewed targets.json selects this mode. Candidate input
@@ -13,6 +15,7 @@ export const execution = targets.executor ?? { repository: targets.repository,
 const external = execution.repository !== targets.repository;
 const releaseApi = api => external ? api.executor : api.gh;
 export const standingPolicy = JSON.parse(readFileSync(new URL('./unattended-policy.json', import.meta.url)));
+export const admissionJobName = 'Verify approved GitHub evidence before provider access';
 export const requiredJobs = [
   'Backend application coverage partition', 'Backend web coverage partition',
   ...['application-administration', 'application-membership', 'application-authentication',
@@ -59,14 +62,39 @@ export function validateRun(run, jobs, mainSha) {
 }
 
 export function policyDigest(policy) {
-  requireThat(policy?.version === 2 && /^[a-z0-9-]{1,80}$/.test(policy.epoch) &&
+  const owns = (object, keys) => object && typeof object === 'object' && !Array.isArray(object) &&
+    Object.keys(object).sort().join(',') === keys.sort().join(',');
+  const a = policy?.authorization;
+  const expectedScope = { repository: targets.repository, branch: 'main', executorRepository: execution.repository, ...targetIdentity };
+  requireThat(policy?.version === 3 && /^[a-z0-9-]{1,80}$/.test(policy.epoch) &&
     policy.profile === targets.profile && policy.baseline === 'automatic' &&
-    Object.keys(policy).every(key => ['version', 'epoch', 'profile', 'baseline'].includes(key)),
+    owns(policy, ['version', 'epoch', 'profile', 'baseline', 'authorization', 'scope']) &&
+    owns(a, ['kind', 'approval', 'administrators', 'inventorySourceCommit', 'inventorySha256', 'maxCiAgeSeconds', 'maxAdmissionAgeSeconds']) &&
+    a.kind === 'github-evidence-v1' && a.approval === 'trusted-administrator-executor-merge' &&
+    a.inventorySha256 === inventoryDigest && shaPattern.test(a.inventorySourceCommit) &&
+    positiveAttempt(a.maxCiAgeSeconds) && a.maxCiAgeSeconds <= 86400 &&
+    positiveAttempt(a.maxAdmissionAgeSeconds) && a.maxAdmissionAgeSeconds <= 3600 &&
+    Array.isArray(a.administrators) && a.administrators.length === 2 &&
+    [{ login: 'Xolani-M', id: 86495928 }, { login: 'aqualifestyleclub', id: 307076734 }].every(admin =>
+      a.administrators.filter(x => owns(x, ['login', 'id']) && x.login === admin.login && x.id === admin.id).length === 1) &&
+    JSON.stringify(canonical(policy.scope)) === JSON.stringify(canonical(expectedScope)),
   'STANDING_POLICY_INVALID');
-  const canonical = value => value && typeof value === 'object' ?
-    (Array.isArray(value) ? value.map(canonical) :
-      Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))) : value;
   return createHash('sha256').update(JSON.stringify(canonical(policy))).digest('hex');
+}
+
+export async function validateExecutorApproval(api, identity, policy = standingPolicy) {
+  requireThat(identity.policySha256 === policyDigest(policy), 'STANDING_POLICY_CHANGED');
+  const rows = await api.executor(`/commits/${identity.executorSha}/pulls?per_page=100`);
+  requireThat(Array.isArray(rows) && rows.length < 100, 'EXECUTOR_APPROVAL_UNVERIFIABLE');
+  const matches = rows.filter(pr => pr.merge_commit_sha === identity.executorSha && pr.merged_at &&
+    pr.base?.ref === 'main' && pr.base.repo?.full_name === execution.repository);
+  requireThat(matches.length === 1 && positiveAttempt(matches[0].number), 'EXECUTOR_ADMINISTRATOR_APPROVAL_REQUIRED');
+  const pr = await api.executor(`/pulls/${matches[0].number}`);
+  requireThat(pr.number === matches[0].number && pr.merged === true && pr.state === 'closed' && pr.merge_commit_sha === identity.executorSha &&
+    pr.base?.ref === 'main' && pr.base.repo?.full_name === execution.repository &&
+    Number.isFinite(Date.parse(pr.merged_at)) &&
+    policy.authorization.administrators.some(a => a.id === pr.merged_by?.id && a.login === pr.merged_by?.login),
+  'EXECUTOR_ADMINISTRATOR_APPROVAL_REQUIRED');
 }
 
 export function freezeCandidate(qualified, env, policy = standingPolicy) {
@@ -157,7 +185,7 @@ export function validateMainGovernance(rules, ruleset) {
     rows.some(checksRequired)), 'MAIN_CI_GOVERNANCE_REQUIRED');
 }
 
-export async function validateInfrastructure(api, identity) {
+export async function validateInfrastructure(api, identity, policy = standingPolicy) {
   const rules = await api.gh('/rules/branches/main?per_page=100');
   requireThat(Array.isArray(rules) && rules.length > 0 && rules.length < 100,
     'MAIN_GOVERNANCE_UNVERIFIABLE');
@@ -174,6 +202,7 @@ export async function validateInfrastructure(api, identity) {
   validateEnvironment(environment, page.branch_policies);
   if (external) {
     validateReleaseIdentity(identity);
+    await validateExecutorApproval(api, identity, policy);
     const head = await api.executor('/git/ref/heads/main');
     requireThat(head.object?.sha === identity.executorSha, 'STALE_EXECUTOR_REVISION');
     const current = await api.executor(`/actions/runs/${identity.releaseRunId}`);
@@ -337,6 +366,35 @@ export function clients(env, fetcher = fetch) {
   return {
     gh: (route, body) => request(`https://api.github.com/repos/${targets.repository}`, env.GH_TOKEN, route, body),
     executor: (route, body) => request(`https://api.github.com/repos/${execution.repository}`, env.GH_TOKEN, route, body),
+    artifact: async (owner, id) => {
+      requireThat(['source', 'executor'].includes(owner) && positiveId(id) && env.GH_TOKEN,
+        'GITHUB_ARTIFACT_INPUT_INVALID');
+      try {
+        const repository = owner === 'source' ? targets.repository : execution.repository;
+        const response = await fetcher(`https://api.github.com/repos/${repository}/actions/artifacts/${id}/zip`, {
+          redirect: 'manual', signal: AbortSignal.timeout(30_000),
+          headers: { Authorization: `Bearer ${env.GH_TOKEN}`, Accept: 'application/vnd.github+json' }
+        });
+        requireThat(response.status === 302, 'GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
+        const url = new URL(response.headers.get('location'));
+        requireThat(url.protocol === 'https:' && !url.username && !url.password && !url.hash &&
+          (!url.port || url.port === '443'), 'GITHUB_ARTIFACT_REDIRECT_INVALID');
+        // GitHub supplies a short-lived archive URL. Never forward GitHub or
+        // provider credentials to storage, and never log this signed URL.
+        const archive = await fetcher(url.href, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+        requireThat(archive.ok && archive.body, 'GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
+        const chunks = []; let size = 0;
+        for await (const chunk of archive.body) {
+          size += chunk.length;
+          requireThat(size <= maxArtifactBytes, 'GITHUB_ARTIFACT_TOO_LARGE');
+          chunks.push(Buffer.from(chunk));
+        }
+        return Buffer.concat(chunks);
+      } catch (error) {
+        if (error instanceof ReleaseFailure) throw error;
+        throw new ReleaseFailure('GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
+      }
+    },
     render: (route, body) => request('https://api.render.com/v1', env.RENDER_API_KEY, route, body),
     vercel: (route, body) => request('https://api.vercel.com', env.VERCEL_TOKEN,
       route + (route.includes('?') ? '&' : '?') + `teamId=${targets.vercel.teamId}`, body),
@@ -392,7 +450,8 @@ export function createAuditWriter(identity, emit) {
   const known = {};
   return row => {
     for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt',
-      'baselineRenderDeployId', 'baselineVercelDeployId', 'baselineRenderSha', 'baselineVercelSha'])
+      'baselineRenderDeployId', 'baselineVercelDeployId', 'baselineRenderSha', 'baselineVercelSha',
+      'authorizationId', 'evidenceSha256', 'inventorySha256', 'evidenceArtifactId'])
       if (row[key] !== undefined) known[key] = row[key];
     emit({ ...row, ...Object.fromEntries(releaseIdentityFields.map(key => [key, identity[key]])), ...known });
   };
@@ -471,7 +530,7 @@ async function releaseProductionJob(api, run, attempt) {
     jobs.every(j => j.run_id === run.id && j.run_attempt === attempt && j.status === 'completed'),
   'PRIOR_RELEASE_EXECUTION_UNVERIFIABLE');
   const candidate = jobs.find(j => j.name === 'Qualify immutable source candidate');
-  const admission = jobs.find(j => j.name === 'Verify independent authorization before provider access');
+  const admission = jobs.find(j => [admissionJobName, 'Verify independent authorization before provider access'].includes(j.name));
   const production = jobs.find(j => ['Unattended recovery release', 'Authorized recovery release'].includes(j.name));
   requireThat(candidate && admission && production &&
     (production.conclusion !== 'success' || (candidate.conclusion === 'success' && admission.conclusion === 'success')),
@@ -523,6 +582,20 @@ export async function evidencePlan(api, candidate, policy) {
   }
   requireThat(successful.every(r => r.run_number < current.run_number), 'NEWER_RELEASE_ALREADY_COMPLETED');
   const latest = successful.sort((a, b) => b.run_number - a.run_number)[0];
+  // GitHub's workflow-level concurrency is the serialization boundary. Consume
+  // no portable ticket: authenticate every completed release's immutable audit.
+  // Deleted history, expired evidence or a previously deployed SHA denies even
+  // when the caller supplies another CI run/attempt or dispatches a fresh run.
+  const verifiedReleases = [];
+  for (const past of successful) {
+    const descriptor = await auditArtifact(api, past, past.run_attempt);
+    const rows = await readReleaseAudit(api, descriptor);
+    const proof = validateBaselineReceipt(rows, descriptor, candidate);
+    requireThat(proof.origin.sha !== candidate.sha, 'SOURCE_ALREADY_VERIFIED');
+    verifiedReleases.push({ ...descriptor, sourceSha: proof.origin.sha,
+      ciRunId: proof.origin.ciRunId, ciRunAttempt: proof.origin.ciRunAttempt,
+      receiptSha256: sha256(Buffer.from(JSON.stringify(rows))) });
+  }
   for (const run of runs.filter(r => r.id !== current.id &&
     r.run_number > (latest?.run_number ?? 0))) {
     // A failed prior run may have submitted a request whose history is not visible
@@ -541,9 +614,29 @@ export async function evidencePlan(api, candidate, policy) {
   const resumeChain = [];
   for (let attempt = 1; attempt < candidate.releaseRunAttempt; attempt++)
     resumeChain.push(await auditArtifact(api, current, attempt));
-  return { policySha256: candidate.policySha256,
+  if (resumeChain.length) {
+    const rows = [];
+    for (const descriptor of resumeChain) rows.push(...await readReleaseAudit(api, descriptor));
+    validateResumeReceipt(rows, candidate);
+  }
+  return { policySha256: candidate.policySha256, verifiedReleases,
     baseline: latest ? await auditArtifact(api, latest, latest.run_attempt) : null,
     resume: resumeChain.at(-1) ?? null, resumeChain };
+}
+
+async function readReleaseAudit(api, descriptor) {
+  const gh = releaseApi(api);
+  const metadata = await gh(`/actions/artifacts/${descriptor.artifactId}`);
+  const repository = await gh('');
+  const artifact = validateArtifact(metadata, descriptor.runId, descriptor.sha,
+    `production-release-audit-${descriptor.runId}-${descriptor.runAttempt}`, repository.id);
+  requireThat(artifact.id === descriptor.artifactId, 'AUDIT_ARTIFACT_SUBSTITUTED');
+  const bytes = await readGitHubArtifact(api, 'executor', artifact, 'release-report.jsonl');
+  try {
+    const lines = bytes.toString('utf8').trim().split('\n');
+    requireThat(lines.length > 0 && lines.length <= 100, 'AUDIT_RECEIPT_UNVERIFIABLE');
+    return lines.map(line => JSON.parse(line));
+  } catch { throw new ReleaseFailure('AUDIT_RECEIPT_UNVERIFIABLE'); }
 }
 
 export function validateBaselineReceipt(rows, descriptor, candidate) {
@@ -607,22 +700,31 @@ export async function deploymentHistory(api, provider) {
 
 export async function deploy(api, qualified, policy, report, options = {}) {
   validateReleaseIdentity(qualified);
-  await requireDeploymentAttestation(options.authorization, qualified,
-    { reserveReplay: options.replayAlreadyReserved !== true });
+  policyDigest(policy); // Explicit mode selection; signed bundles never select a fallback.
+  const readSource = options.readSourceDigest ?? (path => gitSourceDigest(options.env?.SOURCE_DIR, qualified.sha, path));
+  const evidence = await verifyGitHubEvidence(api, qualified, policy, readSource, options.now);
+  validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now);
+  await validateAdmissionJob(api, qualified);
   const guard = async () => {
     validatePolicy(qualified, options.env ?? process.env, policy);
     await requalify(api, qualified);
-    await validateInfrastructure(api, qualified);
+    validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now);
+    await validateInfrastructure(api, qualified, policy);
     await validateCandidateProvenance(api, qualified);
   };
   await guard();
   const plan = options.evidencePlan;
   requireThat(plan && plan.policySha256 === qualified.policySha256, 'FROZEN_EVIDENCE_PLAN_REQUIRED');
+  requireThat(objectDigest(await evidencePlan(api, qualified, policy)) === objectDigest(plan),
+    'RELEASE_EVIDENCE_PLAN_CHANGED');
   requireThat(!!plan.baseline === !!options.baselineRows, 'BASELINE_RECEIPT_REQUIRED');
   requireThat(qualified.releaseRunAttempt === 1 ? !plan.resume && !options.receiptRows :
     plan.resume?.runId === qualified.releaseRunId && plan.resume.runAttempt === qualified.releaseRunAttempt - 1 &&
     plan.resume.sha === (external ? qualified.executorSha : qualified.sha) && options.receiptRows, 'RESUME_RECEIPT_REQUIRED');
   const prior = options.receiptRows ? validateResumeReceipt(options.receiptRows, qualified) : {};
+  report({ phase: 'evidence-selected', authorizationId: options.admissionReceipt.authorizationId,
+    evidenceSha256: options.admissionReceipt.evidenceSha256, inventorySha256: evidence.inventorySha256,
+    evidenceArtifactId: evidence.artifact.id });
   const servicePath = `/services/${targets.render.id}`;
   const projectPath = `/v9/projects/${targets.vercel.id}`;
   const repository = await api.gh('');
@@ -807,9 +909,8 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     renderDeployId: render.id, vercelDeployId: vercel.id });
 }
 
-// This is the controller boundary before provider reads or mutations. The trust
-// root and complete inventory must come from an independent caller; without that
-// source the pre-secret admission job fails closed.
+// Inactive signed-attestation prototype, retained for its existing contract tests.
+// The v3 deployment path never invokes it or falls back to it.
 export async function requireDeploymentAttestation(authorization, qualified, { reserveReplay = true } = {}) {
   requireThat(authorization && typeof authorization === 'object', 'INDEPENDENT_ATTESTATION_REQUIRED');
   const { expected, trustRoot } = authorization;
@@ -827,56 +928,6 @@ export async function requireDeploymentAttestation(authorization, qualified, { r
   }
 }
 
-function readAuthorizationBundle(path) {
-  requireThat(typeof path === 'string' && path.length > 0, 'TRUSTED_AUTHORIZATION_SOURCE_UNAVAILABLE');
-  try {
-    const text = readFileSync(path, 'utf8');
-    requireThat(text.length <= 2 * 1024 * 1024, 'TRUSTED_AUTHORIZATION_SOURCE_UNAVAILABLE');
-    const bundle = JSON.parse(text);
-    requireThat(bundle && typeof bundle === 'object' && !Array.isArray(bundle) &&
-      Object.keys(bundle).sort().join(',') === 'envelope,expected,trustRoot',
-    'TRUSTED_AUTHORIZATION_SOURCE_UNAVAILABLE');
-    return bundle;
-  } catch (error) {
-    if (error instanceof ReleaseFailure) throw error;
-    throw new ReleaseFailure('TRUSTED_AUTHORIZATION_SOURCE_UNAVAILABLE');
-  }
-}
-
-function writeAdmissionEvidence(authorization, verification, qualified, env) {
-  requireThat(typeof env.AQUA_ADMISSION_BUNDLE_OUTPUT === 'string' &&
-    typeof env.AQUA_ADMISSION_RECEIPT_OUTPUT === 'string', 'ADMISSION_EVIDENCE_OUTPUT_UNAVAILABLE');
-  const payload = Buffer.from(authorization.envelope.payload, 'base64url');
-  const receipt = { version: 1, executorRepository: execution.repository, executorSha: qualified.executorSha,
-    workflow: execution.workflow, releaseRunId: qualified.releaseRunId,
-    releaseRunAttempt: qualified.releaseRunAttempt, repository: qualified.repository,
-    sourceSha: qualified.sha, ciRunId: qualified.ciRunId, ciRunAttempt: qualified.ciRunAttempt,
-    policySha256: qualified.policySha256, attestationId: verification.attestationId,
-    payloadSha256: createHash('sha256').update(payload).digest('hex') };
-  const bundle = { envelope: authorization.envelope, expected: authorization.expected, trustRoot: authorization.trustRoot };
-  writeFileSync(env.AQUA_ADMISSION_BUNDLE_OUTPUT, JSON.stringify(bundle) + '\n', { flag: 'wx', mode: 0o600 });
-  writeFileSync(env.AQUA_ADMISSION_RECEIPT_OUTPUT, JSON.stringify(receipt) + '\n', { flag: 'wx', mode: 0o600 });
-}
-
-function validateAdmissionReceipt(receipt, verification, qualified, env) {
-  requireThat(receipt && typeof receipt === 'object' && !Array.isArray(receipt) &&
-    Object.keys(receipt).sort().join(',') === [
-      'version', 'executorRepository', 'executorSha', 'workflow', 'releaseRunId', 'releaseRunAttempt',
-      'repository', 'sourceSha', 'ciRunId', 'ciRunAttempt', 'policySha256', 'attestationId', 'payloadSha256'
-    ].sort().join(',') && receipt.version === 1 &&
-    receipt.executorRepository === execution.repository && receipt.executorSha === qualified.executorSha &&
-    receipt.workflow === execution.workflow && receipt.releaseRunId === qualified.releaseRunId &&
-    receipt.releaseRunAttempt === qualified.releaseRunAttempt && receipt.repository === qualified.repository &&
-    receipt.sourceSha === qualified.sha && receipt.ciRunId === qualified.ciRunId &&
-    receipt.ciRunAttempt === qualified.ciRunAttempt && receipt.policySha256 === qualified.policySha256 &&
-    receipt.attestationId === verification.attestationId && /^[a-f0-9]{64}$/.test(receipt.payloadSha256),
-  'ADMISSION_RECEIPT_MISMATCH');
-  const bundle = readAuthorizationBundle(env.AQUA_AUTHORIZATION_BUNDLE_FILE);
-  const payload = Buffer.from(bundle.envelope.payload, 'base64url');
-  requireThat(createHash('sha256').update(payload).digest('hex') === receipt.payloadSha256,
-    'ADMISSION_RECEIPT_MISMATCH');
-}
-
 export async function validateAdmissionJob(api, qualified) {
   const page = await api.executor(`/actions/runs/${qualified.releaseRunId}/attempts/${qualified.releaseRunAttempt}/jobs?per_page=100`);
   requireThat(page.total_count === page.jobs?.length && page.jobs.length === 3 &&
@@ -884,7 +935,7 @@ export async function validateAdmissionJob(api, qualified) {
     page.jobs.every(job => job.run_id === Number(qualified.releaseRunId) &&
       job.run_attempt === qualified.releaseRunAttempt), 'ADMISSION_JOB_EVIDENCE_UNVERIFIABLE');
   const candidate = page.jobs.find(job => job.name === 'Qualify immutable source candidate');
-  const admission = page.jobs.find(job => job.name === 'Verify independent authorization before provider access');
+  const admission = page.jobs.find(job => job.name === admissionJobName);
   const production = page.jobs.find(job => job.name === 'Unattended recovery release');
   requireThat(candidate?.status === 'completed' && candidate.conclusion === 'success' &&
     admission?.status === 'completed' && admission.conclusion === 'success' &&
@@ -940,7 +991,7 @@ export async function main(env, options = {}) {
   }
   if (mode === 'candidate') {
     // Detect accidental reviewer/wait gates before entering the environment job.
-    await validateInfrastructure(api, q);
+    await validateInfrastructure(api, q, policy);
     await validateCandidateProvenance(api, q);
     const archive = sourceArchive(q.sha);
     writeFileSync(`${env.CANDIDATE_DIR}/source.tar`, archive);
@@ -953,33 +1004,22 @@ export async function main(env, options = {}) {
   verifyCandidate(JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/candidate.json`)), q,
     readFileSync(`${env.CANDIDATE_DIR}/source.tar`),
     sourceArchive(q.sha));
-  let authorization = options.authorization ?? options.deploymentOptions?.authorization ??
-    readAuthorizationBundle(env.AQUA_AUTHORIZATION_BUNDLE_FILE);
-  let verification = await requireDeploymentAttestation(authorization, q, { reserveReplay: false });
+  policyDigest(policy);
+  const readSource = options.readSourceDigest ?? (path => gitSourceDigest(env.SOURCE_DIR, q.sha, path));
+  const evidence = await verifyGitHubEvidence(api, q, policy, readSource, options.now);
   const report = createAuditWriter(q, row => appendFileSync(env.RELEASE_REPORT, JSON.stringify(row) + '\n'));
   failureReport = code => report({ phase: 'failed', code });
   if (mode === 'admit') {
-    // Admission is intentionally pre-secret: only GitHub evidence and the dedicated
-    // append-only replay store are read here. No Render/Vercel client is called.
-    await validateInfrastructure(api, q);
+    // GitHub-only admission. No provider or replay-database credentials are read.
+    await validateInfrastructure(api, q, policy);
     await validateCandidateProvenance(api, q);
     const plan = await evidencePlan(api, q, policy);
-    let replayDb;
-    try {
-      if (!authorization.replayStore) {
-        replayDb = await createPostgresReplayStore(env.ATTESTATION_REPLAY_DATABASE_URL);
-        authorization = { ...authorization, replayStore: replayDb.store };
-      }
-      verification = await requireDeploymentAttestation(authorization, q, { reserveReplay: true });
-    } catch (error) {
-      if (error instanceof ReleaseFailure) throw error;
-      throw new ReleaseFailure('REPLAY_STORE_UNAVAILABLE');
-    } finally {
-      if (replayDb) await replayDb.close().catch(() => {});
-    }
-    writeAdmissionEvidence(authorization, verification, q, env);
+    const receipt = createGitHubAdmission(q, policy, evidence, options.now);
+    requireThat(typeof env.AQUA_ADMISSION_RECEIPT_OUTPUT === 'string', 'ADMISSION_OUTPUT_REQUIRED');
+    writeFileSync(env.AQUA_ADMISSION_RECEIPT_OUTPUT, JSON.stringify(receipt) + '\n', { flag: 'wx', mode: 0o600 });
     writeFileSync(`${env.CANDIDATE_DIR}/evidence-plan.json`, JSON.stringify(plan) + '\n');
-    report({ phase: 'admitted', attestationId: verification.attestationId });
+    report({ phase: 'admitted', authorizationId: receipt.authorizationId, evidenceSha256: receipt.evidenceSha256,
+      inventorySha256: evidence.inventorySha256, evidenceArtifactId: evidence.artifact.id });
     appendFileSync(env.GITHUB_OUTPUT, `baseline-artifact-id=${plan.baseline?.artifactId ?? ''}\n` +
       `baseline-run-id=${plan.baseline?.runId ?? ''}\nreceipt-artifact-id=${plan.resumeChain.map(x => x.artifactId).join(',')}\n`);
     return;
@@ -987,16 +1027,16 @@ export async function main(env, options = {}) {
   let admissionReceipt;
   try { admissionReceipt = JSON.parse(readFileSync(env.AQUA_ADMISSION_RECEIPT_FILE, 'utf8')); }
   catch { throw new ReleaseFailure('ADMISSION_RECEIPT_MISMATCH'); }
-  validateAdmissionReceipt(admissionReceipt, verification, q, env);
+  validateGitHubAdmission(admissionReceipt, q, policy, evidence, options.now);
   await validateAdmissionJob(api, q);
   validatePolicy(q, env, policy);
-  await validateInfrastructure(api, q);
+  await validateInfrastructure(api, q, policy);
   await validateCandidateProvenance(api, q);
   const plan = await evidencePlan(api, q, policy);
   let admittedPlan;
   try { admittedPlan = JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/evidence-plan.json`, 'utf8')); }
   catch { throw new ReleaseFailure('FROZEN_EVIDENCE_PLAN_REQUIRED'); }
-  requireThat(JSON.stringify(admittedPlan) === JSON.stringify(plan), 'RELEASE_EVIDENCE_PLAN_CHANGED');
+  requireThat(objectDigest(admittedPlan) === objectDigest(plan), 'RELEASE_EVIDENCE_PLAN_CHANGED');
   const readAudit = file => {
     let text;
     try { text = readFileSync(file, 'utf8');
@@ -1004,7 +1044,8 @@ export async function main(env, options = {}) {
       return text.trim().split('\n').map(line => JSON.parse(line));
     } catch { throw new ReleaseFailure('AUDIT_RECEIPT_UNVERIFIABLE'); }
   };
-  await deploy(api, q, policy, report, { env, evidencePlan: plan, authorization, replayAlreadyReserved: true,
+  await deploy(api, q, policy, report, { env, evidencePlan: plan, admissionReceipt,
+    readSourceDigest: readSource, now: options.now,
     ...options.deploymentOptions,
     baselineRows: plan.baseline ? readAudit(env.BASELINE_RECEIPT_FILE) : undefined,
     receiptRows: plan.resume ? plan.resumeChain.flatMap(d => readAudit(plan.resumeChain.length === 1 ?
@@ -1015,7 +1056,7 @@ export async function main(env, options = {}) {
 export async function run(env, options = {}) {
   try { await main(env, options); return 0; }
   catch (error) {
-    const code = error instanceof ReleaseFailure ? error.message : 'UNEXPECTED_RELEASE_ERROR';
+    const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
     if (failureReport) failureReport(code);
     else if (env.RELEASE_REPORT)
       appendFileSync(env.RELEASE_REPORT, JSON.stringify({ phase: 'blocked', code, identityVerified: false }) + '\n');

@@ -1,0 +1,1307 @@
+{
+  "version": 1,
+  "tests": [
+    {
+      "id": "AQUA-SEC-0001",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "successful full push inventory qualifies the exact current main source"
+    },
+    {
+      "id": "AQUA-SEC-0002",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unqualified CI conclusion=failure cannot qualify a source candidate"
+    },
+    {
+      "id": "AQUA-SEC-0003",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unqualified CI conclusion=cancelled cannot qualify a source candidate"
+    },
+    {
+      "id": "AQUA-SEC-0004",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unqualified CI status=in_progress cannot qualify a source candidate"
+    },
+    {
+      "id": "AQUA-SEC-0005",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unqualified CI event=pull_request cannot qualify a source candidate"
+    },
+    {
+      "id": "AQUA-SEC-0006",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unqualified CI event=workflow_dispatch cannot qualify a source candidate"
+    },
+    {
+      "id": "AQUA-SEC-0007",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unqualified CI head_branch=feature/unqualified cannot qualify a source candidate"
+    },
+    {
+      "id": "AQUA-SEC-0008",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unqualified CI path=.github/workflows/unrelated.yml cannot qualify a source candidate"
+    },
+    {
+      "id": "AQUA-SEC-0009",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unqualified CI head_sha=main cannot qualify a source candidate"
+    },
+    {
+      "id": "AQUA-SEC-0010",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "fork/repository spoofing, stale main and explicitly excluded merge fail closed"
+    },
+    {
+      "id": "AQUA-SEC-0011",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "missing, duplicate, skipped or failed CI jobs cannot be mistaken for qualification"
+    },
+    {
+      "id": "AQUA-SEC-0012",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate source bytes and CI identity are bound, not a mutable branch label"
+    },
+    {
+      "id": "AQUA-SEC-0013",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "API qualification rejects truncated inventory even if the run says success"
+    },
+    {
+      "id": "AQUA-SEC-0014",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "persistent deployment configuration requires real credentials and exact release context"
+    },
+    {
+      "id": "AQUA-SEC-0015",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "standing policy rejects version=1 mismatch/missing evidence"
+    },
+    {
+      "id": "AQUA-SEC-0016",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "standing policy rejects epoch=\"different-policy\" mismatch/missing evidence"
+    },
+    {
+      "id": "AQUA-SEC-0017",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "standing policy rejects epoch=undefined mismatch/missing evidence"
+    },
+    {
+      "id": "AQUA-SEC-0018",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "standing policy rejects profile=\"normal\" mismatch/missing evidence"
+    },
+    {
+      "id": "AQUA-SEC-0019",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "standing policy rejects baseline=\"manual\" mismatch/missing evidence"
+    },
+    {
+      "id": "AQUA-SEC-0020",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "standing policy rejects unexpectedPermission=true mismatch/missing evidence"
+    },
+    {
+      "id": "AQUA-SEC-0021",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "automatic baseline rejects missing Render SHA"
+    },
+    {
+      "id": "AQUA-SEC-0022",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "automatic baseline rejects missing Vercel SHA"
+    },
+    {
+      "id": "AQUA-SEC-0023",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "automatic baseline rejects wrong Vercel project"
+    },
+    {
+      "id": "AQUA-SEC-0024",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "automatic baseline rejects failed Vercel baseline"
+    },
+    {
+      "id": "AQUA-SEC-0025",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "automatic baseline rejects missing production target"
+    },
+    {
+      "id": "AQUA-SEC-0026",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "automatic baseline rejects invalid Render ID"
+    },
+    {
+      "id": "AQUA-SEC-0027",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "automatic baseline rejects non-SHA Vercel source"
+    },
+    {
+      "id": "AQUA-SEC-0028",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "standing policy is source-bound and needs no expiring per-release token"
+    },
+    {
+      "id": "AQUA-SEC-0029",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unattended environment forbids manual gates and admin bypass and requires main-only branch policy"
+    },
+    {
+      "id": "AQUA-SEC-0030",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "restricted App__WeeklyCommissions__Enabled must be explicitly false, not absent or true"
+    },
+    {
+      "id": "AQUA-SEC-0031",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "restricted App__EntryMonthlyObligations__Enabled must be explicitly false, not absent or true"
+    },
+    {
+      "id": "AQUA-SEC-0032",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "restricted App__FinancialOperations__Enabled must be explicitly false, not absent or true"
+    },
+    {
+      "id": "AQUA-SEC-0033",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "restricted App__BackgroundJobs__Enabled must be explicitly false, not absent or true"
+    },
+    {
+      "id": "AQUA-SEC-0034",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "restricted AQGreenV2Demo__Enabled must be explicitly false, not absent or true"
+    },
+    {
+      "id": "AQUA-SEC-0035",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "restricted AQGreenV2Pilot__Enabled must be explicitly false, not absent or true"
+    },
+    {
+      "id": "AQUA-SEC-0036",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "restricted App__AQGreenV2__Commissioning__Enabled must be explicitly false, not absent or true"
+    },
+    {
+      "id": "AQUA-SEC-0037",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "restricted SEED_DEMO_DATA must be explicitly false, not absent or true"
+    },
+    {
+      "id": "AQUA-SEC-0038",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "restricted Bird__Enabled must be explicitly false, not absent or true"
+    },
+    {
+      "id": "AQUA-SEC-0039",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "recovery cannot deploy with configured Yoco__Mode"
+    },
+    {
+      "id": "AQUA-SEC-0040",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "recovery cannot deploy with configured Yoco__SecretKey"
+    },
+    {
+      "id": "AQUA-SEC-0041",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "recovery cannot deploy with configured Yoco__WebhookSecret"
+    },
+    {
+      "id": "AQUA-SEC-0042",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "recovery cannot deploy with configured Bird__ApiKey"
+    },
+    {
+      "id": "AQUA-SEC-0043",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "provider configuration cannot resume a service, run a hook or use a different target"
+    },
+    {
+      "id": "AQUA-SEC-0044",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "Vercel requires correct connected project, production branch and build settings"
+    },
+    {
+      "id": "AQUA-SEC-0045",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "frontend public build target must be verifiable and unambiguous, not redacted or inferred"
+    },
+    {
+      "id": "AQUA-SEC-0046",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "isolated rollout uses exact source, Render readiness before Vercel, and records both revisions"
+    },
+    {
+      "id": "AQUA-SEC-0047",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "qualified main deploys with standing setup and no per-release authority"
+    },
+    {
+      "id": "AQUA-SEC-0048",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unattended environment needs no human approval"
+    },
+    {
+      "id": "AQUA-SEC-0049",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "suspension fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0050",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "runtime profile fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0051",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unconnected Vercel fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0052",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "wrong frontend API target fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0053",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "migration fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0054",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "renamed migration fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0055",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "truncated comparison fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0056",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "foreign Render deploy fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0057",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "foreign Vercel deploy fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0058",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "changed Vercel baseline fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0059",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unknown Render state fails before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0060",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "API health must establish revision, dependencies and effective recovery before writes"
+    },
+    {
+      "id": "AQUA-SEC-0061",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "a non-live unknown provider state cannot hide a concurrent operation"
+    },
+    {
+      "id": "AQUA-SEC-0062",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "history pagination includes hidden concurrency and rejects repeated cursors"
+    },
+    {
+      "id": "AQUA-SEC-0063",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "newer main at the final admission check cannot start a stale deployment"
+    },
+    {
+      "id": "AQUA-SEC-0064",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "Render failure never starts Vercel or automatic rollback"
+    },
+    {
+      "id": "AQUA-SEC-0065",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "API config drift or wrong running revision blocks the later frontend deployment"
+    },
+    {
+      "id": "AQUA-SEC-0066",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "a newer main after API completion stops the stale frontend rollout"
+    },
+    {
+      "id": "AQUA-SEC-0067",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "frozen CI attempt rejects a successful rerun before Render"
+    },
+    {
+      "id": "AQUA-SEC-0068",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "frozen CI attempt rejects a successful rerun after Render"
+    },
+    {
+      "id": "AQUA-SEC-0069",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "governance revocation during API build blocks the later Vercel POST"
+    },
+    {
+      "id": "AQUA-SEC-0070",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "a retry reconciles the completed API and existing Vercel build without duplicate POSTs"
+    },
+    {
+      "id": "AQUA-SEC-0071",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "failed existing candidate and duplicate Vercel candidates require operator reconciliation"
+    },
+    {
+      "id": "AQUA-SEC-0072",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "Vercel READY alone cannot prove source or production alias assignment"
+    },
+    {
+      "id": "AQUA-SEC-0073",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "timeout and unrecognized provider states preserve failure, never success"
+    },
+    {
+      "id": "AQUA-SEC-0074",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "provider client never retries ambiguous POST or exposes tokens and response bodies"
+    },
+    {
+      "id": "AQUA-SEC-0075",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "missing or invalid CI attempt undefined cannot qualify"
+    },
+    {
+      "id": "AQUA-SEC-0076",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "missing or invalid CI attempt null cannot qualify"
+    },
+    {
+      "id": "AQUA-SEC-0077",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "missing or invalid CI attempt 0 cannot qualify"
+    },
+    {
+      "id": "AQUA-SEC-0078",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "missing or invalid CI attempt -1 cannot qualify"
+    },
+    {
+      "id": "AQUA-SEC-0079",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "missing or invalid CI attempt 1.5 cannot qualify"
+    },
+    {
+      "id": "AQUA-SEC-0080",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "missing or invalid CI attempt 1 cannot qualify"
+    },
+    {
+      "id": "AQUA-SEC-0081",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "attempt-specific job evidence cannot borrow earlier successes or another run identity"
+    },
+    {
+      "id": "AQUA-SEC-0082",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "a rerun starting while job evidence is read invalidates the snapshot"
+    },
+    {
+      "id": "AQUA-SEC-0083",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "failed rerun before Render stops all subsequent provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0084",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "changed run before Render stops all subsequent provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0085",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "changed source before Render stops all subsequent provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0086",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "missing attempt before Render stops all subsequent provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0087",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unavailable evidence before Render stops all subsequent provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0088",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "failed rerun after Render stops all subsequent provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0089",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "changed run after Render stops all subsequent provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0090",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "changed source after Render stops all subsequent provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0091",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "missing attempt after Render stops all subsequent provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0092",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "unavailable evidence after Render stops all subsequent provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0093",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate cannot be replayed into a later release or attempt despite standing permission"
+    },
+    {
+      "id": "AQUA-SEC-0094",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "a changed candidate CI attempt cannot reuse an immutable partial receipt"
+    },
+    {
+      "id": "AQUA-SEC-0095",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "same-attempt partial Render completion can resume only the pending Vercel operation"
+    },
+    {
+      "id": "AQUA-SEC-0096",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "Render completion plus a successful CI rerun blocks Vercel retry admission"
+    },
+    {
+      "id": "AQUA-SEC-0097",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "retry receipt with another ciRunAttempt cannot adopt any provider deployment"
+    },
+    {
+      "id": "AQUA-SEC-0098",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "retry receipt with another releaseRunId cannot adopt any provider deployment"
+    },
+    {
+      "id": "AQUA-SEC-0099",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "retry receipt with another releaseRunAttempt cannot adopt any provider deployment"
+    },
+    {
+      "id": "AQUA-SEC-0100",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "retry receipt with another environment cannot adopt any provider deployment"
+    },
+    {
+      "id": "AQUA-SEC-0101",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "retry receipt with another renderServiceId cannot adopt any provider deployment"
+    },
+    {
+      "id": "AQUA-SEC-0102",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "contradictory, legacy, completed or unsolicited receipts cannot authorize another release"
+    },
+    {
+      "id": "AQUA-SEC-0103",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "CI attempt metadata and original release identity must match even with a valid receipt"
+    },
+    {
+      "id": "AQUA-SEC-0104",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "an ambiguous POST without a recorded provider ID cannot be retried by inferring from SHA"
+    },
+    {
+      "id": "AQUA-SEC-0105",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "a foreign concurrent release cannot be adopted even when its SHA and CI run match"
+    },
+    {
+      "id": "AQUA-SEC-0106",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "every partial/failure audit retains the immutable identity and already accepted deployment IDs"
+    },
+    {
+      "id": "AQUA-SEC-0107",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "resume requires a unique, unexpired artifact from the exact earlier attempt of this release run"
+    },
+    {
+      "id": "AQUA-SEC-0108",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "automatic policy selects the first provider baseline, then the immutable verified predecessor"
+    },
+    {
+      "id": "AQUA-SEC-0109",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "own previous-attempt receipt is selected automatically without a resume token"
+    },
+    {
+      "id": "AQUA-SEC-0110",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "evidence discovery rejects deleted receipt without silently replacing missing historical evidence"
+    },
+    {
+      "id": "AQUA-SEC-0111",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "evidence discovery rejects expired receipt without silently replacing missing historical evidence"
+    },
+    {
+      "id": "AQUA-SEC-0112",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "evidence discovery rejects truncated history without silently replacing missing historical evidence"
+    },
+    {
+      "id": "AQUA-SEC-0113",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "evidence discovery rejects deleted run without silently replacing missing historical evidence"
+    },
+    {
+      "id": "AQUA-SEC-0114",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "evidence discovery rejects foreign workflow without silently replacing missing historical evidence"
+    },
+    {
+      "id": "AQUA-SEC-0115",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "evidence discovery rejects fork without silently replacing missing historical evidence"
+    },
+    {
+      "id": "AQUA-SEC-0116",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "evidence discovery rejects duplicate run without silently replacing missing historical evidence"
+    },
+    {
+      "id": "AQUA-SEC-0117",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "evidence discovery rejects changed release attempt without silently replacing missing historical evidence"
+    },
+    {
+      "id": "AQUA-SEC-0118",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "evidence discovery rejects newer completed release without silently replacing missing historical evidence"
+    },
+    {
+      "id": "AQUA-SEC-0119",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "a second qualified commit uses the verified receipt baseline without new owner approval"
+    },
+    {
+      "id": "AQUA-SEC-0120",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "verified predecessor rejects not verified"
+    },
+    {
+      "id": "AQUA-SEC-0121",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "verified predecessor rejects wrong run"
+    },
+    {
+      "id": "AQUA-SEC-0122",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "verified predecessor rejects changed policy"
+    },
+    {
+      "id": "AQUA-SEC-0123",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "verified predecessor rejects contradictory ID"
+    },
+    {
+      "id": "AQUA-SEC-0124",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "verified predecessor rejects missing origin"
+    },
+    {
+      "id": "AQUA-SEC-0125",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "completed release or later successful CI rerun cannot authorize another deployment of that source"
+    },
+    {
+      "id": "AQUA-SEC-0126",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate provenance rejects direct push before any mutation"
+    },
+    {
+      "id": "AQUA-SEC-0127",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate provenance rejects unmerged PR before any mutation"
+    },
+    {
+      "id": "AQUA-SEC-0128",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate provenance rejects open PR before any mutation"
+    },
+    {
+      "id": "AQUA-SEC-0129",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate provenance rejects wrong base before any mutation"
+    },
+    {
+      "id": "AQUA-SEC-0130",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate provenance rejects wrong repository before any mutation"
+    },
+    {
+      "id": "AQUA-SEC-0131",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate provenance rejects invalid head before any mutation"
+    },
+    {
+      "id": "AQUA-SEC-0132",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate provenance rejects missing merge time before any mutation"
+    },
+    {
+      "id": "AQUA-SEC-0133",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate provenance rejects missing author identity before any mutation"
+    },
+    {
+      "id": "AQUA-SEC-0134",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate provenance rejects ambiguous PRs before any mutation"
+    },
+    {
+      "id": "AQUA-SEC-0135",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "candidate provenance rejects truncated PR inventory before any mutation"
+    },
+    {
+      "id": "AQUA-SEC-0136",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "merged PR provenance drift after Render completion blocks Vercel"
+    },
+    {
+      "id": "AQUA-SEC-0137",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "infrastructure rejects missing rules before entering provider rollout"
+    },
+    {
+      "id": "AQUA-SEC-0138",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "infrastructure rejects wrong app before entering provider rollout"
+    },
+    {
+      "id": "AQUA-SEC-0139",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "infrastructure rejects missing job before entering provider rollout"
+    },
+    {
+      "id": "AQUA-SEC-0140",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "infrastructure rejects bypassable checks before entering provider rollout"
+    },
+    {
+      "id": "AQUA-SEC-0141",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "infrastructure rejects manual environment gate before entering provider rollout"
+    },
+    {
+      "id": "AQUA-SEC-0142",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "infrastructure rejects wrong branch type before entering provider rollout"
+    },
+    {
+      "id": "AQUA-SEC-0143",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "workflow entry qualifies, archives, admits and deploys automatically with no per-release secret"
+    },
+    {
+      "id": "AQUA-SEC-0144",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "retry chain retains attempt1 operations across attempt2 preflight failure and attempt3 reconciliation"
+    },
+    {
+      "id": "AQUA-SEC-0145",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "retry chain cannot cross an ambiguous request or omit an earlier attempt"
+    },
+    {
+      "id": "AQUA-SEC-0146",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "failed rerun preserves the earlier successful attempt as a future release baseline"
+    },
+    {
+      "id": "AQUA-SEC-0147",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "foreign Vercel build starting while Render deploys blocks the Vercel POST"
+    },
+    {
+      "id": "AQUA-SEC-0148",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "foreign Render build starting during admission blocks Render POST"
+    },
+    {
+      "id": "AQUA-SEC-0149",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "Render identity drift during Vercel build cannot mint a verified receipt"
+    },
+    {
+      "id": "AQUA-SEC-0150",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "runtime restriction drift during Vercel build cannot mint a verified receipt"
+    },
+    {
+      "id": "AQUA-SEC-0151",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "recovery health drift during Vercel build cannot mint a verified receipt"
+    },
+    {
+      "id": "AQUA-SEC-0152",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "cancellation after request intent and before recorded provider ID cannot be retried blindly"
+    },
+    {
+      "id": "AQUA-SEC-0153",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "a later main can supersede a pre-provider failure but cannot supersede an ambiguous prior release"
+    },
+    {
+      "id": "AQUA-SEC-0154",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "presentation-only changes classify without pretending independent enforcement"
+    },
+    {
+      "id": "AQUA-SEC-0155",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: .github/workflows/ci.yml"
+    },
+    {
+      "id": "AQUA-SEC-0156",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: tools/deployment/safety-boundary.mjs"
+    },
+    {
+      "id": "AQUA-SEC-0157",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: tools/deployment/release-control.test.mjs"
+    },
+    {
+      "id": "AQUA-SEC-0158",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: docker/api/Dockerfile"
+    },
+    {
+      "id": "AQUA-SEC-0159",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: render.yaml"
+    },
+    {
+      "id": "AQUA-SEC-0160",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: AGENTS.md"
+    },
+    {
+      "id": "AQUA-SEC-0161",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: docs/operations/cicd-safety-contract.md"
+    },
+    {
+      "id": "AQUA-SEC-0162",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: AqualLifeStyle/9.4.2/aspnet-core/src/Example.cs"
+    },
+    {
+      "id": "AQUA-SEC-0163",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: AqualLifeStyle/9.4.2/aqua-frontend/package-lock.json"
+    },
+    {
+      "id": "AQUA-SEC-0164",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: AqualLifeStyle/9.4.2/aqua-frontend/src/components/Example.test.tsx"
+    },
+    {
+      "id": "AQUA-SEC-0165",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "control or unknown path requires separate change review: AqualLifeStyle/9.4.2/aqua-frontend/src/app/api/route.tsx"
+    },
+    {
+      "id": "AQUA-SEC-0166",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "deletions and symlink type changes are never presentation-only"
+    },
+    {
+      "id": "AQUA-SEC-0167",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "missing, truncated, empty, unmerged and aliased changes fail closed"
+    },
+    {
+      "id": "AQUA-SEC-0168",
+      "file": "tools/deployment/safety-boundary.test.mjs",
+      "name": "immutable Git comparison catches renamed/deleted controls without executing candidate code"
+    },
+    {
+      "id": "AQUA-SEC-0169",
+      "file": "tools/deployment/workflow.test.mjs",
+      "name": "main releases follow completed CI with protected, serialized deployment"
+    },
+    {
+      "id": "AQUA-SEC-0170",
+      "file": "tools/deployment/workflow.test.mjs",
+      "name": "native Vercel production trigger cannot race the qualified orchestrator"
+    },
+    {
+      "id": "AQUA-SEC-0171",
+      "file": "tools/deployment/workflow.test.mjs",
+      "name": "version-tag publication requires qualification and grants no deployment permission"
+    },
+    {
+      "id": "AQUA-SEC-0172",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "exact mandatory identities pass once with exact CI source and attempt"
+    },
+    {
+      "id": "AQUA-SEC-0173",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "mandatory result rejects skipped even with a successful process"
+    },
+    {
+      "id": "AQUA-SEC-0174",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "mandatory result rejects todo even with a successful process"
+    },
+    {
+      "id": "AQUA-SEC-0175",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "mandatory result rejects neutral even with a successful process"
+    },
+    {
+      "id": "AQUA-SEC-0176",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "mandatory result rejects inconclusive even with a successful process"
+    },
+    {
+      "id": "AQUA-SEC-0177",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "mandatory result rejects cancelled even with a successful process"
+    },
+    {
+      "id": "AQUA-SEC-0178",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "mandatory result rejects failed even with a successful process"
+    },
+    {
+      "id": "AQUA-SEC-0179",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "mandatory result rejects undefined even with a successful process"
+    },
+    {
+      "id": "AQUA-SEC-0180",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "deleted, renamed, duplicated and unexpectedly excluded mandatory cases fail closed"
+    },
+    {
+      "id": "AQUA-SEC-0181",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "the exact synthetic 170-pass one-skip result cannot qualify"
+    },
+    {
+      "id": "AQUA-SEC-0182",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "security evidence cannot substitute a different sha"
+    },
+    {
+      "id": "AQUA-SEC-0183",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "security evidence cannot substitute a different runId"
+    },
+    {
+      "id": "AQUA-SEC-0184",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "security evidence cannot substitute a different runAttempt"
+    },
+    {
+      "id": "AQUA-SEC-0185",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "security evidence cannot substitute a different repository"
+    },
+    {
+      "id": "AQUA-SEC-0186",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "security evidence cannot substitute a different kind"
+    },
+    {
+      "id": "AQUA-SEC-0187",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "summary counters and unsuccessful process cannot override exact per-case execution"
+    },
+    {
+      "id": "AQUA-SEC-0188",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "missing result and modified policy cannot qualify"
+    },
+    {
+      "id": "AQUA-SEC-0189",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "signed result consumer accepts only the separately pinned key and exact report bytes"
+    },
+    {
+      "id": "AQUA-SEC-0190",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "signed false success cannot authorize a skipped security case"
+    },
+    {
+      "id": "AQUA-SEC-0191",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "reporter preserves skip and todo semantics and rejects missing or duplicate final summaries"
+    },
+    {
+      "id": "AQUA-SEC-0192",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "separately retained policy rejects weakened assertions, inventory edits and deployment gate deletion"
+    },
+    {
+      "id": "AQUA-SEC-0193",
+      "file": "tools/deployment/mandatory-security.test.mjs",
+      "name": "release safety CI classifies mandatory cases and retains exact-attempt evidence"
+    },
+    {
+      "id": "AQUA-SEC-0194",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "persistent provider credentials need no activation switch at any release"
+    },
+    {
+      "id": "AQUA-SEC-0195",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "checked-in policy discovers the first live baseline without a manual bootstrap record"
+    },
+    {
+      "id": "AQUA-SEC-0196",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "workflow entry rejects failed CI without provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0197",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "workflow entry rejects neutral CI without provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0198",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "workflow entry rejects unfinished CI without provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0199",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "workflow entry rejects PR CI without provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0200",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "workflow entry rejects fork CI without provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0201",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "workflow entry rejects manual CI without provider mutations"
+    },
+    {
+      "id": "AQUA-SEC-0202",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "legacy release blocked before its provider step needs no manual history reset"
+    },
+    {
+      "id": "AQUA-SEC-0203",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "a partial retry cannot rediscover its advanced baseline after losing original baseline evidence"
+    },
+    {
+      "id": "AQUA-SEC-0204",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "verified predecessor explicitly binds both provider revisions"
+    },
+    {
+      "id": "AQUA-SEC-0205",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "an automatically skipped release after failed CI cannot become a verified baseline"
+    },
+    {
+      "id": "AQUA-SEC-0206",
+      "file": "tools/deployment/workflow.test.mjs",
+      "name": "every main push runs CI and successful trusted completion starts CD without activation"
+    },
+    {
+      "id": "AQUA-SEC-0207",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "documented queued Render deployment is polled to readiness before Vercel"
+    },
+    {
+      "id": "AQUA-SEC-0208",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "foreign queued Render deployment blocks automatic mutation"
+    },
+    {
+      "id": "AQUA-SEC-0209",
+      "file": "tools/deployment/workflow.test.mjs",
+      "name": "required container CI executes isolated runtime restart qualification and retains evidence"
+    },
+    {
+      "id": "AQUA-SEC-0210",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "installed owner-controlled ruleset 25297647 accepts all 17 App-bound checks without human approval"
+    },
+    {
+      "id": "AQUA-SEC-0211",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects hidden bypass actors before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0212",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects bypass actors before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0213",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects inactive ruleset before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0214",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects wrong ruleset identity before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0215",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects wrong ruleset source before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0216",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects wrong target before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0217",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects missing ruleset rules before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0218",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects missing deletion protection before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0219",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects missing force-push protection before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0220",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects non-strict checks before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0221",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects creation exemption before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0222",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects duplicate check before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0223",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects renamed check before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0224",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects unbound app before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0225",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects missing detail check before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0226",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects weakened detail check before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0227",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects missing effective check before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0228",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "merged PR provenance re-read detects a concurrent head change without requesting a review"
+    },
+    {
+      "id": "AQUA-SEC-0229",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "actual main-only environment remains blocked solely by the outstanding administrator bypass setting"
+    },
+    {
+      "id": "AQUA-SEC-0230",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects wrong branch scope before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0231",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects excluded main before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0232",
+      "file": "tools/deployment/release-control.test.mjs",
+      "name": "owner governance rejects missing branch scope before any provider mutation"
+    },
+    {
+      "id": "AQUA-SEC-0233",
+      "file": "tools/deployment/trigger-executor.test.mjs",
+      "name": "successful main CI automatically dispatches only fixed executor and exact SHA/run/attempt hints"
+    },
+    {
+      "id": "AQUA-SEC-0234",
+      "file": "tools/deployment/trigger-executor.test.mjs",
+      "name": "failed CI cannot dispatch the executor"
+    },
+    {
+      "id": "AQUA-SEC-0235",
+      "file": "tools/deployment/trigger-executor.test.mjs",
+      "name": "PR CI cannot dispatch the executor"
+    },
+    {
+      "id": "AQUA-SEC-0236",
+      "file": "tools/deployment/trigger-executor.test.mjs",
+      "name": "fork CI cannot dispatch the executor"
+    },
+    {
+      "id": "AQUA-SEC-0237",
+      "file": "tools/deployment/trigger-executor.test.mjs",
+      "name": "wrong branch cannot dispatch the executor"
+    },
+    {
+      "id": "AQUA-SEC-0238",
+      "file": "tools/deployment/trigger-executor.test.mjs",
+      "name": "missing trigger identity cannot dispatch the executor"
+    },
+    {
+      "id": "AQUA-SEC-0239",
+      "file": "tools/deployment/trigger-executor.test.mjs",
+      "name": "wrong CI attempt cannot dispatch the executor"
+    },
+    {
+      "id": "AQUA-SEC-0240",
+      "file": "tools/deployment/trigger-executor.test.mjs",
+      "name": "an ambiguous automatic dispatch is never blindly retried"
+    }
+  ],
+  "sources": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "f92b781ced7c155174d0c33c5013036e3cd647a0fcf4371dd29760878b3ed9e9"
+    },
+    {
+      "path": ".github/workflows/publish-images.yml",
+      "sha256": "bbadfbb869c98091aa78887d466d79a62f0cfdfab30375ed9faa267d94c71f62"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "sha256": "871c0f55223ae330ead30ea4cb73d2f5d1de9e3aaa1f1779ee6da32b913896c3"
+    },
+    {
+      "path": "tools/deployment/disposable-recovery.sh",
+      "sha256": "cb8b55b68f973c933cb0158d858ffe71212bcc40b4d235779a60e8b6a36ff5b9"
+    },
+    {
+      "path": "tools/deployment/mandatory-security.mjs",
+      "sha256": "71ceb25ef698df249073bce0f35db099a41e05ed1a0aae314758c99545f1c41f"
+    },
+    {
+      "path": "tools/deployment/mandatory-security.test.mjs",
+      "sha256": "c6903158f98aef72b02c6c8b44f190b6b5a6a730c2b90f5ddf6fead6ad88bee2"
+    },
+    {
+      "path": "tools/deployment/release-control.mjs",
+      "sha256": "830a6995cde10d3922ef2c4c3a8a49421b45f54ec64853ab8281a44613c37c96"
+    },
+    {
+      "path": "tools/deployment/release-control.test.mjs",
+      "sha256": "66852c046d7f4de7e8411865559eb7ca6f0943228aea0f8c02bca62a24753e45"
+    },
+    {
+      "path": "tools/deployment/run-security-tests.mjs",
+      "sha256": "49aeeb25fe8a6cae6b42ad93390c7082611f181cb8b7db3ff7fdbe2d465816e8"
+    },
+    {
+      "path": "tools/deployment/safety-boundary.mjs",
+      "sha256": "fa9062d99c144adbb0e32be603f15c41b1f70ade4bf43227ec0533babc7f0265"
+    },
+    {
+      "path": "tools/deployment/safety-boundary.test.mjs",
+      "sha256": "3b0e136e1ce7b73513f73077220ec91810136339c641039252280f83f412bb8f"
+    },
+    {
+      "path": "tools/deployment/security-reporter.mjs",
+      "sha256": "de191b10dd995e3fea2d6065d4ffcacea55fb960817248a851b5a412b1f7bc8a"
+    },
+    {
+      "path": "tools/deployment/targets.json",
+      "sha256": "ae17a4fa5b1e2a1ee425668b2d2d62aa5e91890b2b0c82fcea00fed82357d0f9"
+    },
+    {
+      "path": "tools/deployment/unattended-policy.json",
+      "sha256": "a30d35e81aada8f092587bf71c10e7ae1c0c381c0c2ac2bcf2d82922cee83d8c"
+    },
+    {
+      "path": "tools/deployment/workflow.test.mjs",
+      "sha256": "981ac820039df4dcea2596fb3bb820c8342c71427df13a0386b36286e43cbf22"
+    },
+    {
+      "path": "tools/deployment/mandatory-security-probe.mjs",
+      "sha256": "562626cf810fd9b155b0bfdf896daae3ee4d40877dbd87ed3f0aef9cb17236c0"
+    },
+    {
+      "path": "tools/deployment/runtime-restart-probe.sh",
+      "sha256": "c8628caff8fce379e0f4919d24d89bfd03643d35a22ec66ba51490eab63ba29e"
+    },
+    {
+      "path": "docker/api/Dockerfile",
+      "sha256": "b526238b9175800ca815a744487fe68fc9de7034acd2f024e3075c4cfeb33cd4"
+    },
+    {
+      "path": "docker-compose.yml",
+      "sha256": "913bdeb74afcb1afc9f6024a3cc02660ab2e1df246130e464a9d787ab627d86d"
+    },
+    {
+      "path": "docker-compose.maintenance.yml",
+      "sha256": "5db8cee2716c5066dcd0271408bb0ae4b01ba74a68ca9e6a067e6e353874523f"
+    },
+    {
+      "path": "tools/operations/database-authority-readonly.sql",
+      "sha256": "551c55a2be8b444a4d60bbb57ef98912aa05c64387b8eec5d01abe5a038e2e06"
+    },
+    {
+      "path": "tools/operations/database-authority-probe.mjs",
+      "sha256": "8b38c802c3fdc166ea8f7f86da4b98d1563400fb0ddba4a59c8595119fa18602"
+    },
+    {
+      "path": "tools/deployment/fixtures/installed-main-governance.json",
+      "sha256": "cc47da01e07224bfb91f390d83da55a1c371d19b5f9179fe176bf3dad4f4ea75"
+    },
+    {
+      "path": "tools/deployment/trigger-executor.mjs",
+      "sha256": "5c5ea167995ca88beaebff320ab9a743d5e86879408eac39002cc75ad966ca44"
+    },
+    {
+      "path": "tools/deployment/trigger-executor.test.mjs",
+      "sha256": "129fe2ca67410e1299d52cde30a9b53c3c1f19de26a5b5479d6d3c99a15532fd"
+    }
+  ]
+}

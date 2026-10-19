@@ -1,13 +1,28 @@
 // Provider substitutes reused from PR106's controller tests, not live evidence.
-import {readFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,writeFileSync,utimesSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {execFileSync} from 'node:child_process';
 import {generateKeyPairSync, sign, randomUUID} from 'node:crypto';
-import {deploy,createAuditWriter,freezeCandidate,validateRun,targets,standingPolicy,requiredJobs} from '../release-control.mjs';
+import {deploy,createAuditWriter,freezeCandidate,validateRun,targets,standingPolicy,requiredJobs,admissionJobName} from '../release-control.mjs';
 import {attestationContractVersion,mandatoryInventoryDigest} from '../authorization-attestation.mjs';
+import {approvedInventory,inventoryDigest,sha256,validateArtifact,createGitHubAdmission} from '../github-evidence.mjs';
+export const fixtureNow = Date.UTC(2026,9,19,8);
+export function zipFixture(filename, bytes, extra = {}) {
+  const dir = mkdtempSync(join(tmpdir(),'aqua-zip-fixture-'));
+  try {
+    for (const [name, value] of Object.entries({[filename]:bytes,...extra})) {
+      const path=join(dir,name);writeFileSync(path,value);utimesSync(path,946684800,946684800);
+    }
+    execFileSync('zip',['-X','-q',join(dir,'artifact.zip'),filename,...Object.keys(extra)],{cwd:dir,stdio:['ignore','pipe','pipe']});
+    return readFileSync(join(dir,'artifact.zip'));
+  } finally {rmSync(dir,{recursive:true,force:true});}
+}
 const source = 'c'.repeat(40), previous = 'b'.repeat(40);
 const run = () => ({ id: 123, run_attempt: 1, repository: { full_name: targets.repository },
   head_repository: { full_name: targets.repository }, event: 'push', head_branch: 'main',
   head_sha: source, path: '.github/workflows/ci.yml', name: 'Continuous integration',
-  status: 'completed', conclusion: 'success', html_url: 'https://github.com/example/ci/123' });
+  status: 'completed', conclusion: 'success', updated_at:new Date(fixtureNow-1000).toISOString(),html_url: 'https://github.com/example/ci/123' });
 const jobs = (attempt = 1) => requiredJobs.map((name,index) => ({ id:index+100,check_run_url:`https://api.github.com/repos/${targets.repository}/check-runs/${index+200}`, name, status: 'completed', conclusion: 'success',
   run_id: 123, run_attempt: attempt }));
 const ciQualified = () => validateRun(run(), jobs(), source);
@@ -105,12 +120,32 @@ function fixture() {
       user: { login: 'author', id: 1 }, merged_at: '2026-10-16T10:00:00Z' },
     publicVars: publicVars(), newRender: undefined, newVercel: undefined, renderReads: 0, vercelReads: 0,
     providerCalls: 0 };
+  state.report={version:1,context:{kind:'ci',repository:targets.repository,sha:source,runId:'123',runAttempt:1},
+    inventorySha256:inventoryDigest,exitCode:0,
+    results:approvedInventory.tests.map(t=>({...t,outcome:'passed',executions:1})),
+    summary:{tests:240,passed:240,failed:0,cancelled:0,skipped:0,todo:0,suites:0}};
+  state.sourceDigests=new Map([...approvedInventory.sources.map(s=>[s.path,s.sha256]),
+    ['tools/deployment/mandatory-security-tests.json',inventoryDigest]]);
+  const readSourceDigest=async path=>state.sourceDigests.get(path);
+  const reportZip=()=>zipFixture('report.json',JSON.stringify(state.report));
+  const artifact=()=>({id:7890,name:`mandatory-security-${state.candidate.sha}-123-1`,expired:false,
+    size_in_bytes:reportZip().length,digest:`sha256:${sha256(reportZip())}`,
+    workflow_run:{id:123,repository_id:789,head_repository_id:789,head_sha:state.candidate.sha,head_branch:'main'}});
+  // Freeze known-good admission before hostile mutations. Do not invoke the
+  // verifier here: negatives must reach deploy(), not fail inside a test helper.
+  const baselineEvidence={version:1,mode:'github-evidence-v1',repository:targets.repository,sha:source,
+    ciRunId:'123',ciRunAttempt:1,completedAt:run().updated_at,policySha256:state.candidate.policySha256,
+    inventorySha256:inventoryDigest,artifact:validateArtifact(artifact(),'123',source,artifact().name,789),
+    reportSha256:sha256(JSON.stringify(state.report)),testsVerified:240};
+  const initialAdmission=createGitHubAdmission(state.candidate,state.policy,baselineEvidence,()=>fixtureNow);
   const posts = [], reports = [];
   const api = {
     gh: async route => {
       if (route.startsWith('/check-runs/')) { const job=jobs().find(j=>j.check_run_url.endsWith(route)); return {id:Number(route.split('/').at(-1)),app:{id:15368},head_sha:source,name:job.name,status:'completed',conclusion:'success'}; }
       if (route === '') return { id: 789 };
       if (route === '/actions/runs/123') return run();
+      if (route === '/actions/runs/123/artifacts?per_page=100') return {total_count:1,artifacts:[artifact()]};
+      if (route === '/actions/artifacts/7890') return artifact();
       if (route.includes('/jobs?')) return { total_count: state.jobCount, jobs: jobs() };
       if (route === '/git/ref/heads/main') return { object: { sha: state.main } };
       if (route.startsWith('/compare/')) return { status: 'ahead', files: state.files };
@@ -164,6 +199,10 @@ function fixture() {
     web: async () => {}
   };
   const sourceApi=api.gh;
+  api.artifact=async (owner,id)=>{
+    if(owner==='source'&&id==='7890')return reportZip();
+    throw Error('Unexpected fixture artifact');
+  };
   api.gh=async(route,...args)=>route.startsWith('/actions/workflows/release.yml/runs?') ?
     {total_count:1,workflow_runs:[{id:38912818702,run_number:1,run_attempt:1,
       repository:{full_name:targets.repository},head_repository:{full_name:targets.repository},
@@ -171,6 +210,12 @@ function fixture() {
     route.startsWith('/actions/runs/38912818702/') ? {total_count:2,jobs:[{name:'Qualify immutable source candidate'},
       {name:'Unattended recovery release',conclusion:'skipped'}]} : sourceApi(route,...args);
   api.executor=async route=>{
+    if(route==='')return {id:987};
+    if(route.startsWith('/commits/')&&route.endsWith('/pulls?per_page=100'))return [{number:1,
+      merge_commit_sha:route.split('/')[2],merged_at:'2026-10-19T07:00:00Z',base:{ref:'main',repo:{full_name:targets.executor.repository}}}];
+    if(route==='/pulls/1')return {number:1,merged:true,state:'closed',merge_commit_sha:state.candidate.executorSha,
+      merged_at:'2026-10-19T07:00:00Z',base:{ref:'main',repo:{full_name:targets.executor.repository}},merged_by:{login:'Xolani-M',id:86495928}};
+    if(route.startsWith('/actions/workflows/deploy.yml/runs?'))return {total_count:1,workflow_runs:[await api.executor(`/actions/runs/${state.candidate.releaseRunId}`)]};
     if(route==='/git/ref/heads/main')return {object:{sha:state.candidate.executorSha}};
     if(route===`/actions/runs/${state.candidate.releaseRunId}`)return {id:Number(state.candidate.releaseRunId),
       run_attempt:state.candidate.releaseRunAttempt,run_number:1,head_sha:state.candidate.executorSha,head_branch:'main',
@@ -179,7 +224,7 @@ function fixture() {
     if(route.startsWith(`/actions/runs/${state.candidate.releaseRunId}/attempts/${state.candidate.releaseRunAttempt}/jobs?`))
       return {total_count:3,jobs:[
         {name:'Qualify immutable source candidate',run_id:Number(state.candidate.releaseRunId),run_attempt:state.candidate.releaseRunAttempt,status:'completed',conclusion:'success'},
-        {name:'Verify independent authorization before provider access',run_id:Number(state.candidate.releaseRunId),run_attempt:state.candidate.releaseRunAttempt,status:'completed',conclusion:'success'},
+        {name:admissionJobName,run_id:Number(state.candidate.releaseRunId),run_attempt:state.candidate.releaseRunAttempt,status:'completed',conclusion:'success'},
         {name:'Unattended recovery release',run_id:Number(state.candidate.releaseRunId),run_attempt:state.candidate.releaseRunAttempt,status:'in_progress',conclusion:null}
       ]};
     if(route.startsWith('/environments/'))return sourceApi(route);
@@ -188,13 +233,15 @@ function fixture() {
     throw Error('Unexpected executor route '+route);
   };
   const execute = async (options = {}) => {
+    const admissionReceipt=Object.hasOwn(options,'admissionReceipt')?options.admissionReceipt:
+      structuredClone(initialAdmission);
     return deploy(api, state.candidate, state.policy,
       createAuditWriter(state.candidate, r => reports.push(r)), { ...immediate, env: state.env,
-        authorization: Object.hasOwn(options,'authorization') ? options.authorization : authorizationFor(state.candidate),
-        evidencePlan: state.plan ?? { policySha256: state.candidate.policySha256, baseline: null, resume: null },
+        admissionReceipt,readSourceDigest,now:()=>fixtureNow,
+        evidencePlan: state.plan ?? {policySha256:state.candidate.policySha256,verifiedReleases:[],baseline:null,resume:null,resumeChain:[]},
         receiptRows: state.receiptRows, baselineRows: state.baselineRows });
   };
-  return { state, api, posts, reports, execute, authorizationFor };
+  return { state, api, posts, reports, execute, authorizationFor,readSourceDigest };
 }
 
 
