@@ -48,6 +48,9 @@ policy and zero repository/environment secrets. Original metadata is retained in
 [`governance/executor-configuration-readback.json`](governance/executor-configuration-readback.json)
 and [`governance/ruleset-readbacks.json`](governance/ruleset-readbacks.json).
 No credentials, merge or deployment were authorized or performed by this setup.
+Subsequently, Xolani-M reported creating the evidence PAT; GitHub metadata confirms
+repository secret `AQGREEN_EVIDENCE_READ_TOKEN` exists. Its access remains unverified
+until the trusted credential check below succeeds. No provider secret was added.
 The application 17-check ruleset #25297647 and environment are carried-forward
 observations; application PR #106 remains unchanged.
 
@@ -63,17 +66,19 @@ Each mutation needs separate owner authorization and authoritative readback.
    executor write/settings access restricted to trusted administrators.
    Provider secrets belong only to that environment, never application workflows,
    candidate/admission jobs, repository-wide or shared organization exposure.
-3. Separately authorize an expiring fine-grained GitHub PAT scoped to only these
+3. Preserve the owner-created expiring fine-grained GitHub PAT scoped to only these
    two repositories, with Actions, Checks, Contents, Pull requests and Metadata
    **read** permissions; no other permissions, including Administration or Secrets.
-   Store it only as executor repository secret `AQGREEN_EVIDENCE_READ_TOKEN`.
-   This GitHub evidence credential is available to the fixed main-only controller
-   steps, not the PR test workflow or application code. It is not a provider key.
+   It is stored only as executor repository secret `AQGREEN_EVIDENCE_READ_TOKEN`.
+   This GitHub evidence credential is available to fixed controller steps and the
+   explicitly approved credential-check step, not ordinary PR tests or application
+   code. It is not a provider key.
    The controller never falls back to `github.token`, anonymous retrieval or
    another credential. Verify actual access before qualification; scope/expiration
    and renewal are owner setup, not recurring release approval.
    Hidden bypass metadata uses the executor-owned administrator readbacks described
    below, not runtime ruleset-write access.
+   Before merging, run the one-off trusted credential check described below.
 4. Install the existing application PR106 automatic trigger only through its
    separately authorized merge/setup. Its trigger-only App needs Actions:write and
    Metadata:read on the executor, no Contents:write or provider authority. GitHub's
@@ -96,6 +101,35 @@ Each mutation needs separate owner authorization and authoritative readback.
    historical proof or silently bypass replay checks.
 
 ## Qualification and authorization
+
+### One-off credential check before merge
+
+After reviewing the exact PR #1 head and its passing `Executor safety tests`,
+`Xolani-M` or `aqualifestyleclub` may explicitly authorize its credential-check code
+by applying label `readpat-` followed by that complete 40-character head SHA to
+PR #1. Applying the label is a separate execution action, not performed by merely
+pushing this implementation. The dedicated `credential-check.yml` handles only
+that label event, same-repository PR #1, those administrator IDs and attempt 1.
+A changed head requires new review and a new SHA-specific label. Ordinary PR CI
+remains secret-free. No `pull_request_target`, deployment dispatch or production
+environment is used.
+
+The job checks out exactly the approved head. Before exposing the PAT to its
+verification step, a job-token-only step rechecks the current PR/label/head and
+successful safety check from App 15368. The PAT step repeats that check, verifies
+Xolani-M's authenticated identity and performs GitHub GET-only reads for source,
+provenance, CI jobs/checks, a digest-verified artifact archive, governance,
+environments and run history in both repositories. It emits only static pass/fail
+codes, HTTP statuses and non-sensitive IDs. It stops on a failed required read,
+without retrying with a different identity or broadening token scope.
+
+This proves read capability, not absence of write permissions: configured scope
+still needs the owner's permission metadata. It uses an existing main-CI artifact
+to prove authenticated download, not to approve stale tests or authorize a release.
+Fresh mandatory-security evidence and later qualification remain separate gates.
+The resulting workflow run, attempt, approved head and secret update timestamp
+must be recorded before an executor merge. No credential check is claimed complete
+until that actual trusted job passes.
 
 The original prepared API request bodies are in
 [`governance/qualification-setup-requests.json`](governance/qualification-setup-requests.json).

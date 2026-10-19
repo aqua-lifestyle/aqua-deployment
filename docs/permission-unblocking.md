@@ -120,6 +120,49 @@ qualification does not authorize or prove production deployment.
 
 ## Validation and next action
 
+### Bounded credential-verification correction
+
+At baseline `05cc1f8`, the owner separately authorized a GitHub-only credential
+verification mechanism and commit/push, excluding merge, application changes,
+qualification dispatch and provider operations. GitHub secret metadata confirms
+the evidence secret exists; its value was never retrieved or logged here.
+
+Implemented `credential-check.yml` and `verify-evidence-credential.mjs` with a
+trusted-administrator, exact-head `readpat-SHA` label gate on PR #1. The existing
+ordinary safety CI is unchanged and receives no secret. A pre-secret job-token
+check validates the live PR approval and successful safety CI; the PAT is passed
+only to the subsequent GET-only verification step. It checks both repositories'
+required evidence-reading routes and authenticates the actual archive bytes.
+Approval is checked again at completion. Missing access denies without fallback.
+
+The gate is explicit review of the exact PR code, not a claim that arbitrary PR
+code is trusted. Forks, other PRs, changed heads, ordinary label actors and reruns
+are rejected. The trusted-admin model still assumes executor workflow writes are
+restricted to trusted administrators. No actor permission changes were made.
+
+Local focused command:
+
+```bash
+node --test tools/deployment/verify-evidence-credential.test.mjs
+```
+
+7 passed, 0 failed, 0 skipped. Controlled HTTP substitutes verify context denial,
+pre-secret ordering, GET-only reads, missing/denied authentication, artifact and
+identity substitution, approval revocation and redacted output. Hosted safety CI
+runs the existing complete executor test command at the pushed revision. No
+mandatory application inventory was changed. Real credential execution is pending
+the administrator's SHA-specific label; successful local/CI substitutes do not
+verify the PAT. See `SETUP.md` for exact execution and evidence requirements.
+The new suite plus existing evidence-access and qualification-only suites passed
+21 tests, 0 failed, 0 skipped; `git diff --check` passed.
+
+Next action for this correction: review the new head and passing safety CI, then
+explicitly apply its `readpat-SHA` label. Do not merge or dispatch qualification as
+part of this implementation task. Read success will not prove the token has no
+write permissions or that the old main artifact qualifies for deployment.
+
+### Carried-forward implementation evidence
+
 Local command:
 
 ```bash
