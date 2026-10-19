@@ -81,7 +81,10 @@ test('production job requires the validated false output, never raw qualificatio
   assert.equal(condition, "if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' }}");
   // The exact workflow expression permits only the controller's literal false.
   for (const output of ['true', '', 'unknown', undefined]) assert.notEqual(output, 'false');
-  assert.doesNotMatch(workflow.split('\n  production:\n')[0], /secrets\.|environment:/);
+  const beforeProduction = workflow.split('\n  production:\n')[0];
+  assert.doesNotMatch(beforeProduction, /environment:/);
+  assert.deepEqual([...beforeProduction.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),
+    ['AQGREEN_EVIDENCE_READ_TOKEN', 'AQGREEN_EVIDENCE_READ_TOKEN']);
 });
 
 test('qualification dispatch executes normal candidate/admission, retains a purpose-bound receipt and rejects deploy', async () => {

@@ -1,0 +1,125 @@
+{
+  "status": "PREPARED_NOT_APPLIED",
+  "requires": "Separate owner authorization and current-state comparison before each mutation",
+  "requests": [
+    {
+      "method": "POST",
+      "path": "repos/aqua-lifestyle/aqua-deployment/rulesets",
+      "body": {
+        "name": "Executor main qualification safety",
+        "target": "branch",
+        "enforcement": "active",
+        "bypass_actors": [],
+        "conditions": {
+          "ref_name": {
+            "include": [
+              "refs/heads/main"
+            ],
+            "exclude": []
+          }
+        },
+        "rules": [
+          {
+            "type": "deletion"
+          },
+          {
+            "type": "non_fast_forward"
+          },
+          {
+            "type": "pull_request",
+            "parameters": {
+              "dismiss_stale_reviews_on_push": false,
+              "require_code_owner_review": false,
+              "require_last_push_approval": false,
+              "required_approving_review_count": 0,
+              "required_review_thread_resolution": false
+            }
+          },
+          {
+            "type": "required_status_checks",
+            "parameters": {
+              "strict_required_status_checks_policy": true,
+              "do_not_enforce_on_create": false,
+              "required_status_checks": [
+                {
+                  "context": "Executor safety tests",
+                  "integration_id": 15368
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "repos/aqua-lifestyle/aqua-deployment/environments/production-release",
+      "body": {
+        "can_admins_bypass": false,
+        "wait_timer": 0,
+        "reviewers": [],
+        "deployment_branch_policy": {
+          "protected_branches": false,
+          "custom_branch_policies": true
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "repos/aqua-lifestyle/aqua-deployment/environments/production-release/deployment-branch-policies",
+      "body": {
+        "name": "main",
+        "type": "branch"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "repos/aqua-lifestyle/aqua-deployment/actions/permissions",
+      "body": {
+        "enabled": true,
+        "allowed_actions": "selected",
+        "sha_pinning_required": true
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "repos/aqua-lifestyle/aqua-deployment/actions/permissions/selected-actions",
+      "body": {
+        "github_owned_allowed": false,
+        "verified_allowed": false,
+        "patterns_allowed": [
+          "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+          "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+          "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+          "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131"
+        ]
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "repos/aqua-lifestyle/aqua-deployment/actions/permissions/workflow",
+      "body": {
+        "default_workflow_permissions": "read",
+        "can_approve_pull_request_reviews": false
+      }
+    }
+  ],
+  "evidenceCredential": {
+    "kind": "fine-grained-personal-access-token",
+    "resourceOwner": "aqua-lifestyle",
+    "repositories": [
+      "aqua-lifestyle",
+      "aqua-deployment"
+    ],
+    "repositoryPermissions": {
+      "actions": "read",
+      "checks": "read",
+      "contents": "read",
+      "pull_requests": "read",
+      "metadata": "read"
+    },
+    "otherPermissions": "none",
+    "executorRepositorySecret": "AQGREEN_EVIDENCE_READ_TOKEN",
+    "providerAuthority": false
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "contract": "aqua.administrator-ruleset-readbacks",
+  "version": 1,
+  "rulesets": [
+    {
+      "repository": "aqua-lifestyle/aqua-lifestyle",
+      "observedAt": "2026-10-19T11:40:16.270Z",
+      "ruleset": {
+        "id": 25297647,
+        "name": "Qualified automatic release governance",
+        "target": "branch",
+        "source_type": "Repository",
+        "source": "aqua-lifestyle/aqua-lifestyle",
+        "enforcement": "active",
+        "conditions": {
+          "ref_name": {
+            "exclude": [],
+            "include": [
+              "refs/heads/main"
+            ]
+          }
+        },
+        "rules": [
+          {
+            "type": "deletion"
+          },
+          {
+            "type": "non_fast_forward"
+          },
+          {
+            "type": "required_status_checks",
+            "parameters": {
+              "strict_required_status_checks_policy": true,
+              "do_not_enforce_on_create": false,
+              "required_status_checks": [
+                {
+                  "context": "Backend application coverage partition",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend web coverage partition",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend application tests (application-administration)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend application tests (application-membership)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend application tests (application-authentication)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend application tests (application-remainder)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend application tests (entity-framework-migrations)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend application tests (entity-framework-placement)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend application tests (entity-framework-remainder)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend application tests (remainder)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend web tests (placement)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend web tests (controllers)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Backend web tests (remainder)",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Frontend quality checks",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "PostgreSQL transactional invitation regressions",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Validate container images",
+                  "integration_id": 15368
+                },
+                {
+                  "context": "Release safety tests",
+                  "integration_id": 15368
+                }
+              ]
+            }
+          }
+        ],
+        "bypass_actors": [],
+        "updated_at": "2026-10-17T11:02:17.749+02:00"
+      }
+    }
+  ],
+  "pendingRepositories": [
+    "aqua-lifestyle/aqua-deployment"
+  ]
+}

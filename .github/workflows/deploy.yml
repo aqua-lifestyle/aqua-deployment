@@ -52,7 +52,7 @@ jobs:
       - name: Qualify completed main push and publish source evidence
         id: candidate
         env:
-          GH_TOKEN: ${{ github.token }}
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
           SOURCE_DIR: ${{ runner.temp }}/source-git
           CANDIDATE_DIR: ${{ runner.temp }}/candidate
         run: |
@@ -105,7 +105,7 @@ jobs:
       - name: Authenticate exact GitHub execution evidence and release history
         id: admission
         env:
-          GH_TOKEN: ${{ github.token }}
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
           AQUA_ADMISSION_RECEIPT_OUTPUT: ${{ runner.temp }}/admission/admission-receipt.json
           SOURCE_DIR: ${{ runner.temp }}/source-git
           CANDIDATE_DIR: ${{ runner.temp }}/candidate
@@ -172,7 +172,7 @@ jobs:
           merge-multiple: false
       - name: Revalidate policy, provenance, providers and recovery before automatic deployment
         env:
-          GH_TOKEN: ${{ github.token }}
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           AQUA_ADMISSION_RECEIPT_FILE: ${{ runner.temp }}/admission/admission-receipt.json

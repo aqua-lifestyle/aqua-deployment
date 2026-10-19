@@ -218,14 +218,14 @@ test('same-run retry reconciles every prior audit before admission, including al
 
 test('artifact transport follows only GitHub-authenticated redirects without forwarding credentials', async () => {
   const calls=[];
-  const api=clients({...runnerEnv(),GH_TOKEN:'github-canary'},async(url,options)=>{
+  const api=clients({...runnerEnv(),AQGREEN_EVIDENCE_READ_TOKEN:'github-canary'},async(url,options)=>{
     calls.push({url,options});return calls.length===1?new Response(null,{status:302,headers:{location:'https://storage.example.invalid/artifact?signature=redacted'}}):new Response(Buffer.from('zip substitute'));
   });
   assert.equal((await api.artifact('source','7890')).toString(),'zip substitute');
   assert.equal(calls[0].options.headers.Authorization,'Bearer github-canary');assert.equal(calls[0].options.redirect,'manual');
   assert.equal(calls[1].options.headers,undefined);assert.equal(calls[1].options.redirect,'error');
   for(const response of [new Response(null,{status:403}),new Response(null,{status:302,headers:{location:'http://storage.example.invalid'}})]){
-    const bad=clients({GH_TOKEN:'github-canary'},async()=>response);await assert.rejects(bad.artifact('source','7890'));
+    const bad=clients({AQGREEN_EVIDENCE_READ_TOKEN:'github-canary'},async()=>response);await assert.rejects(bad.artifact('source','7890'));
   }
 });
 

@@ -119,7 +119,7 @@ test('legacy application provider ambiguity is preserved during executor takeove
   await validateLegacyHistory(api);job.steps[0].conclusion='failure';await assert.rejects(validateLegacyHistory(api),/RECONCILIATION/);
 });
 test('provider token destinations are fixed and redirects are rejected',async()=>{
-  const calls=[];const api=clients({...runnerEnv(),GH_TOKEN:'github-canary'},async(url,opts)=>{calls.push({url,opts});return {ok:true,json:async()=>({})};});
+  const calls=[];const api=clients({...runnerEnv(),AQGREEN_EVIDENCE_READ_TOKEN:'github-canary'},async(url,opts)=>{calls.push({url,opts});return {ok:true,json:async()=>({})};});
   await api.render('/services/'+targets.render.id);await api.vercel('/v9/projects/'+targets.vercel.id);await api.executor('/actions/runs/456');
   assert.deepEqual(calls.map(x=>new URL(x.url).origin),['https://api.render.com','https://api.vercel.com','https://api.github.com']);
   assert.ok(calls.every(x=>x.opts.redirect==='error'));
@@ -154,10 +154,10 @@ test('separate pre-secret admission gates the only provider-secret job',()=>{
   const extract = (name,next) => wf.match(new RegExp(`\\n  ${name}:([\\s\\S]*?)(?=\\n  ${next}:|$)`))?.[1] ?? '';
   const candidate=extract('candidate','admission'),admission=extract('admission','production'),production=extract('production','');
   assert.ok(candidate && admission && production);
-  assert.ok(!candidate.includes('secrets.'));
+  assert.deepEqual([...candidate.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]), ['AQGREEN_EVIDENCE_READ_TOKEN']);
   assert.ok(!admission.includes('environment:'));
   assert.doesNotMatch(admission,/secrets\.(RENDER_API_KEY|VERCEL_TOKEN)/);
-  assert.doesNotMatch(admission,/secrets\./);
+  assert.deepEqual([...admission.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]), ['AQGREEN_EVIDENCE_READ_TOKEN']);
   assert.match(production,/needs: \[candidate, admission\]/);
   assert.match(production,/needs\.admission\.result == 'success'/);
   assert.match(production,/environment: production-release/);

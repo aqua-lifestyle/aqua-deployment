@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
+import { approvedBypassReadback, approvedReadbacks, GovernanceReadbackDenied } from './governance-readback.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   gitSourceDigest, verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission,
   readGitHubArtifact, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
@@ -202,24 +203,27 @@ export function validateMainGovernance(rules, ruleset) {
     rows.some(checksRequired)), 'MAIN_CI_GOVERNANCE_REQUIRED');
 }
 
-export async function validateInfrastructure(api, identity, policy = standingPolicy) {
+export async function validateInfrastructure(api, identity, policy = standingPolicy, readbacks = approvedReadbacks) {
+  // Approve the exact executor revision before trusting its administrator readbacks.
+  if (external) {
+    validateReleaseIdentity(identity);
+    await validateExecutorApproval(api, identity, policy);
+  }
   const rules = await api.gh('/rules/branches/main?per_page=100');
   requireThat(Array.isArray(rules) && rules.length > 0 && rules.length < 100,
     'MAIN_GOVERNANCE_UNVERIFIABLE');
   const checkRules = rules.filter(r => r.type === 'required_status_checks' &&
     r.ruleset_source_type === 'Repository' && r.ruleset_source === targets.repository && positiveAttempt(r.ruleset_id));
   requireThat(checkRules.length === 1, 'MAIN_CI_GOVERNANCE_REQUIRED');
-  // GitHub hides bypass_actors without ruleset write access. Missing evidence
-  // fails closed; never grant the release runner administration to evade this.
-  const ruleset = await api.gh(`/rulesets/${checkRules[0].ruleset_id}`);
+  // Missing private metadata requires an approved, revision-bound readback;
+  // it never means empty bypass actors and never requires runtime write access.
+  const ruleset = approvedBypassReadback(await api.gh(`/rulesets/${checkRules[0].ruleset_id}`), targets.repository, readbacks);
   validateMainGovernance(rules, ruleset);
   const environment = await api.gh(`/environments/${targets.environment}`);
   const page = await api.gh(`/environments/${targets.environment}/deployment-branch-policies?per_page=100`);
   requireThat(page.total_count === page.branch_policies?.length, 'ENVIRONMENT_BRANCH_INVENTORY_INCOMPLETE');
   validateEnvironment(environment, page.branch_policies);
   if (external) {
-    validateReleaseIdentity(identity);
-    await validateExecutorApproval(api, identity, policy);
     const head = await api.executor('/git/ref/heads/main');
     requireThat(head.object?.sha === identity.executorSha, 'STALE_EXECUTOR_REVISION');
     const current = await api.executor(`/actions/runs/${identity.releaseRunId}`);
@@ -237,7 +241,7 @@ export async function validateInfrastructure(api, identity, policy = standingPol
     let protectedHistory = false;
     for (const id of ids) {
       requireThat(positiveAttempt(id), 'EXECUTOR_HISTORY_PROTECTION_REQUIRED');
-      const rule = await api.executor(`/rulesets/${id}`);
+      const rule = approvedBypassReadback(await api.executor(`/rulesets/${id}`), execution.repository, readbacks);
       if (rule.enforcement === 'active' && rule.source === execution.repository &&
         rule.source_type === 'Repository' && rule.target === 'branch' &&
         Array.isArray(rule.bypass_actors) && rule.bypass_actors.length === 0 &&
@@ -368,6 +372,11 @@ export function validateHealth(response, sha) {
 // No configurable provider URL, response bodies, request headers or raw errors are logged.
 // POSTs are never automatically retried: a lost response requires provider reconciliation.
 export function clients(env, fetcher = fetch) {
+  const evidenceToken = () => {
+    requireThat(typeof env.AQGREEN_EVIDENCE_READ_TOKEN === 'string' &&
+      env.AQGREEN_EVIDENCE_READ_TOKEN.trim().length > 0, 'GITHUB_EVIDENCE_READ_CREDENTIAL_REQUIRED');
+    return env.AQGREEN_EVIDENCE_READ_TOKEN;
+  };
   async function request(base, token, route, body) {
     requireThat(token, 'PROVIDER_CREDENTIAL_UNAVAILABLE');
     let response;
@@ -380,17 +389,22 @@ export function clients(env, fetcher = fetch) {
     requireThat(response.ok, body ? 'PROVIDER_POST_REJECTED_INSPECT_BEFORE_RETRY' : 'PROVIDER_READ_REJECTED');
     try { return await response.json(); } catch { throw new ReleaseFailure('INVALID_PROVIDER_RESPONSE'); }
   }
+  const githubRead = (repository, route, body) => {
+    requireThat(body === undefined, 'GITHUB_EVIDENCE_WRITE_FORBIDDEN');
+    return request(`https://api.github.com/repos/${repository}`, evidenceToken(), route);
+  };
   return {
-    gh: (route, body) => request(`https://api.github.com/repos/${targets.repository}`, env.GH_TOKEN, route, body),
-    executor: (route, body) => request(`https://api.github.com/repos/${execution.repository}`, env.GH_TOKEN, route, body),
+    gh: (route, body) => githubRead(targets.repository, route, body),
+    executor: (route, body) => githubRead(execution.repository, route, body),
     artifact: async (owner, id) => {
-      requireThat(['source', 'executor'].includes(owner) && positiveId(id) && env.GH_TOKEN,
+      requireThat(['source', 'executor'].includes(owner) && positiveId(id),
         'GITHUB_ARTIFACT_INPUT_INVALID');
+      const token = evidenceToken();
       try {
         const repository = owner === 'source' ? targets.repository : execution.repository;
         const response = await fetcher(`https://api.github.com/repos/${repository}/actions/artifacts/${id}/zip`, {
           redirect: 'manual', signal: AbortSignal.timeout(30_000),
-          headers: { Authorization: `Bearer ${env.GH_TOKEN}`, Accept: 'application/vnd.github+json' }
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
         });
         requireThat(response.status === 302, 'GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
         const url = new URL(response.headers.get('location'));
@@ -1072,7 +1086,8 @@ export async function main(env, options = {}) {
 export async function run(env, options = {}) {
   try { await main(env, options); return 0; }
   catch (error) {
-    const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
+    const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied ||
+      error instanceof GovernanceReadbackDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
     if (failureReport) failureReport(code);
     else if (env.RELEASE_REPORT)
       appendFileSync(env.RELEASE_REPORT, JSON.stringify({ phase: 'blocked', code, identityVerified: false }) + '\n');

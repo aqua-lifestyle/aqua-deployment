@@ -65,11 +65,17 @@ Each mutation needs separate owner authorization and authoritative readback.
    `production-release` main only, no reviewers/wait, `can_admins_bypass=false`.
    Provider secrets belong only to that environment, never application workflows,
    candidate/admission jobs, repository-wide or shared organization exposure.
-3. Verify the read identity can access exact application CI/check/artifact evidence
-   and executor run/governance metadata. Cross-repository artifact download and
-   bypass-actor visibility must be demonstrated; they are not proved by public
-   repository visibility or mocks. If unavailable, authorize a narrowly scoped
-   supported read capability rather than adding broad administration to the runner.
+3. Separately authorize an expiring fine-grained GitHub PAT scoped to only these
+   two repositories, with Actions, Checks, Contents, Pull requests and Metadata
+   **read** permissions; no other permissions, including Administration or Secrets.
+   Store it only as executor repository secret `AQGREEN_EVIDENCE_READ_TOKEN`.
+   This GitHub evidence credential is available to the fixed main-only controller
+   steps, not the PR test workflow or application code. It is not a provider key.
+   The controller never falls back to `github.token`, anonymous retrieval or
+   another credential. Verify actual access before qualification; scope/expiration
+   and renewal are owner setup, not recurring release approval.
+   Hidden bypass metadata uses the executor-owned administrator readbacks described
+   below, not runtime ruleset-write access.
 4. Install the existing application PR106 automatic trigger only through its
    separately authorized merge/setup. Its trigger-only App needs Actions:write and
    Metadata:read on the executor, no Contents:write or provider authority. GitHub's
@@ -92,6 +98,11 @@ Each mutation needs separate owner authorization and authoritative readback.
    historical proof or silently bypass replay checks.
 
 ## Qualification and authorization
+
+Exact prepared API request bodies, not applied settings, are in
+[`governance/qualification-setup-requests.json`](governance/qualification-setup-requests.json).
+The bounded setup/merge/evidence checklist and readback limits are in
+[`docs/permission-unblocking.md`](docs/permission-unblocking.md).
 
 The workflow supports an optional boolean `qualification_only: true` alongside
 the exact source SHA and CI run/attempt. It runs normal candidate qualification

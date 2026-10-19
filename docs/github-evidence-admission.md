@@ -63,7 +63,9 @@ an ordinary application PR cannot silently update the approved copy.
 2. Candidate qualification authenticates the exact current-main push, all 17
    checks, App 15368, source and executor identities, merged PR provenance and
    existing governance. Source is fetched as inert Git objects.
-3. The separate admission job has no environment or secrets. It verifies regular
+3. The separate admission job has no production environment or provider secrets.
+   Its explicit read-only GitHub evidence credential covers both repositories.
+   It verifies regular
    Git blobs against all protected hashes; no checkout/execution of app scripts.
 4. Admission inventories the exact CI run's artifacts. It requires one unexpired
    `mandatory-security-SHA-RUN-ATTEMPT`, correct repository/run/source metadata and
@@ -95,6 +97,25 @@ and deterministic authorization ID. Unknown fields or mismatches deny. Hashes
 bind observed bytes; they are not independent signatures. Authenticity comes from
 the approved executor workflow, GitHub artifact provenance and same-run job checks.
 Production audit rows retain authorization/evidence/inventory and artifact IDs.
+
+The GitHub client uses only `AQGREEN_EVIDENCE_READ_TOKEN` for both repositories
+and artifact downloads. The job token cannot supply cross-repository authority.
+The evidence client permits GET only; missing/denied authentication fails without
+credential fallback. This enforces transport behavior; actual fine-grained token
+permissions and repository scope require authorized owner configuration/readback.
+
+GitHub hides bypass actors from readers without ruleset-write access. The runtime
+first authenticates the exact trusted-administrator executor merge, then may use
+its committed `governance/ruleset-readbacks.json` for that private field. Every
+public ruleset field selected by the contract, including ID, source, conditions,
+rules, enforcement and `updated_at`, must match the original privileged readback.
+Missing approval, missing revision or drift denies. An explicit live bypass value
+always takes precedence and a nonempty/malformed value denies. This is standing
+administrator-approved configuration evidence, not a claim of live visibility of
+hidden actors or cryptographic independence. Executor approval is pending until
+its actual settings exist and an administrator readback is committed and approved.
+See the exact assumptions and next actions in
+[`permission-unblocking.md`](permission-unblocking.md).
 
 ### Qualification-only dispatch
 
