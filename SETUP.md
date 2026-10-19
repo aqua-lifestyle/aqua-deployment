@@ -1,8 +1,16 @@
 # One-time MVP setup and production holds
 
-The implementation remains on executor PR #1, branch
-`feature/automatic-qualified-executor`. Application PR #106 is unchanged.
-`tools/deployment/upstream.json` records reused source provenance.
+The current bounded OIDC readiness correction is documented in
+[normal runtime readiness](docs/oidc-runtime-readiness.md). It selects policy v4,
+preserves mandatory Bird/Yoco startup configuration, and removes Render secret-value
+reads. Earlier recovery-only descriptions below are historical controller context;
+they do not authorize credential provisioning, merges or production execution.
+
+Executor PR #1 and application PR #106 are merged baselines. The OIDC readiness
+correction uses separate application/executor PRs; no further merge or deployment
+is authorized. `tools/deployment/upstream.json` records reused source provenance.
+Historical setup observations below do not invalidate the completed credential
+verification or provider-free qualification run 39313665672, attempt 1 (policy v3).
 
 ## Selected MVP authority
 

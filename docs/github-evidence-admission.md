@@ -15,14 +15,14 @@ changed required evidence and uncertain prior provider operations. No candidate
 code runs with provider credentials. Trusted administrators may change policy;
 this model does not claim to prevent their deliberate authorized changes.
 
-`tools/deployment/unattended-policy.json` explicitly selects policy version 3,
-`github-evidence-v1`, epoch `aqgreen-mvp-github-evidence-v1`. Versions/modes outside
+`tools/deployment/unattended-policy.json` explicitly selects policy version 4,
+`github-evidence-v1`, epoch `aqgreen-mvp-oidc-readiness-v1`. Versions/modes outside
 this contract deny. Missing GitHub evidence never falls back to an attestation,
 manual token, permissive default or candidate-supplied success flag.
 
 The standing policy binds the application/main branch, executor repository,
-production environment, fixed provider identities and existing recovery-only
-runtime profile. It permits automatic admission for each eligible main merge
+production environment, fixed provider identities and the normal-integrated
+runtime profile described in [OIDC readiness](oidc-runtime-readiness.md). It permits automatic admission for each eligible main merge
 without recurring human approval. The exact executor main revision must itself
 be the merge commit of a PR merged by one of the two trusted administrators,
 confirmed through GitHub user ID and login. This is approval of executor policy,
@@ -114,7 +114,8 @@ always takes precedence and a nonempty/malformed value denies. This is standing
 administrator-approved configuration evidence, not a claim of live visibility of
 hidden actors or cryptographic independence. Actual executor settings and the
 original administrator readback are now recorded; their runtime policy authority
-still requires the separately authorized trusted-administrator merge of PR #1.
+was established by PR #1's trusted-administrator merge for policy v3. This policy-v4
+correction requires its own separately authorized trusted-administrator merge.
 See the exact assumptions and next actions in
 [`permission-unblocking.md`](permission-unblocking.md).
 
