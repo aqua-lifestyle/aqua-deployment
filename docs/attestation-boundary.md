@@ -2,25 +2,26 @@
 
 ## Status and scope
 
-This is a credential-free consumer prototype, now required by both the controller's
-`admit` preflight and the beginning of `release-control.mjs`'s `deploy()` provider
-mutation sequence. Admission verifies without consuming replay state; the mutation
-boundary verifies again and atomically reserves the attestation. Missing or invalid
-authorization denies before provider API reads or mutations in these paths.
-The verifier returns `enforcement: PROTOTYPE_ONLY`; it does not issue signatures,
-create a trusted policy, access GitHub, or store replay state durably. The existing
-workflow does not supply the required authorization, so its deployment path fails
-closed at the controller boundary. Production remains BLOCKED.
+This credential-free consumer runs in a distinct `admission` job with no Render or
+Vercel credentials and no production environment. The provider job depends on
+candidate qualification and successful admission, and repeats signature, claim,
+admission-receipt and admission-job checks before any Render/Vercel API operation.
+Admission reserves the signed attestation in PostgreSQL before producing a same-run
+artifact. It does not read either provider. Its verifier retrieval adapter and
+durable-store credential are not configured, so admission currently fails closed
+and production remains BLOCKED. The validator reports `PROTOTYPE_ONLY`; local code
+and tests do not prove independent verifier custody or administrator-resistant
+enforcement.
 
-This is not yet a pre-secret workflow gate. The current workflow places the
-`production-release` environment on its production job before its admission steps,
-so any configured environment secrets become available to that job before the
-controller runs. At the time of this change, a read-only GitHub API check returned
-404 for that environment, `main` had no branch protection, the repository had no
-rulesets, and Actions allowed all actions. No provider credentials were provisioned
-or inspected here. An independent attestation job must run without provider
-credentials and become a required dependency before this environment job can be
-considered safe.
+The authorization bundle is read only from a fixed runner-temporary file populated
+by an authenticated external verifier adapter. No such adapter is installed; a
+missing file denies. The admission job also needs the dedicated
+`ATTESTATION_REPLAY_DATABASE_URL` capability, limited to INSERT on the replay table
+and distinct from any provider credential. The provider job's environment secrets
+are not made available to admission. GitHub readback on 2026-10-19 found no
+repository rulesets, `main` branch protection or `production-release` environment;
+Actions permits all actions and SHA pinning is off. No GitHub settings, secrets or
+provider settings were changed.
 
 The consumer uses Node's built-in `node:crypto` Ed25519 verification. The only
 private signing key used in tests is ephemeral test material; this repository has no
@@ -51,6 +52,10 @@ its artifact, or an executor repository administrators can rewrite. GitHub's
 current required contexts remain available from `release-control.mjs`; the
 independent verifier must pin its own reviewed copy and reconcile changes through a
 separately controlled policy update.
+The independently authenticated trust root also commits to a canonical digest of
+the complete mandatory-check and mandatory-test inventory, including test IDs,
+file/name identities, definition digests and expected execution counts. Changing
+the supplied `expected` inventory without changing that trusted digest is rejected.
 
 ## Signed contract
 
@@ -91,10 +96,34 @@ are authorities, not caller-controlled convenience defaults. The optional `now` 
 probes; production callers must use a trusted clock and the supported Node crypto
 provider. Any exception or unavailable dependency denies authorization.
 
+### Authenticated retrieval contract (not yet installed)
+
+The admission workflow expects a strict JSON bundle at a runner-temporary path; it
+does not create that bundle from the candidate artifact. A trusted adapter must
+authenticate the running workflow to the separately controlled verifier, then
+retrieve the trust root, expected inventory/source claims and signed envelope over
+that authenticated channel. If the adapter uses GitHub OIDC, the verifier must
+validate issuer, audience, repository, workflow path, immutable workflow SHA, ref,
+run ID and attempt, and independently re-query the application CI run/check/test
+evidence. The source request is a lookup key, not proof. The verifier's policy and
+inventory must be loaded from the custodian-controlled revision, and the signer
+must attest only after an isolated worker proves the exact definitions/counts.
+
+The returned `trustRoot.policy.inventorySha256` commits to the canonical inventory;
+its public signing key must itself be authenticated from outside both
+`aqua-lifestyle/aqua-lifestyle` and `aqua-deployment` admin custody (for example,
+an organization-controlled secret/variable or an owner-controlled verifier service
+with an independently pinned root). An artifact from the candidate run, a self-hash,
+or a public key shipped by this executor is not a trust source. No issuer URL,
+repository, trust-root key or retrieval credential is configured here. The current
+workflow intentionally fails at the missing-bundle check.
+
 ## Replay-store contract
 
-The validator intentionally does not ship an in-memory or database replay adapter.
-The caller must inject `replayStore.consumeOnce({ attestationId, replayKey,
+`PostgresReplayStore` is the persistent adapter. It issues one parameterized
+`INSERT ... ON CONFLICT DO NOTHING RETURNING` guarded by unique constraints on
+`attestation_id` and `replay_key`. The caller injects
+`replayStore.consumeOnce({ attestationId, replayKey,
 payloadSha256, expiresAt })`. It must return `true` only when both replay coordinates
 are atomically reserved for the first time; duplicate reservations return `false`.
 Errors, timeouts, unavailable storage and ambiguous commits deny authorization.
@@ -102,26 +131,34 @@ The prototype bounds the store call to five seconds by default; tests may inject
 shorter deadline. A timeout denies that authorization even if the store operation
 later commits, in which case a retry is denied by the durable replay key.
 
-The persistent store must provide a durable transaction/atomic insert with unique
-constraints on both `attestation_id` and `replay_key`, for example:
+The schema is
+[`schemas/deployment-authorization-replay.sql`](../schemas/deployment-authorization-replay.sql).
+Provision it outside the executor with a database owner; admission receives INSERT
+only, with no SELECT, UPDATE, DELETE, schema, migration or provider privileges. The
+single statement is atomic across concurrent runners. Rows are permanent replay
+tombstones. The disposable PostgreSQL integration test races 64 requests and
+requires one winner. This establishes adapter behavior in local PostgreSQL, not
+production database availability, identity, permissions, backup/restore or
+multi-region behavior. Test-only in-memory stores remain for cryptographic unit
+tests.
+
+The schema's uniqueness contract is:
 
 ```sql
-CREATE TABLE consumed_deployment_attestations (
+CREATE TABLE aqua_deployment_authorization_replay (
   attestation_id uuid PRIMARY KEY,
-  replay_key char(64) NOT NULL UNIQUE,
-  payload_sha256 char(64) NOT NULL,
+  replay_key char(64) NOT NULL UNIQUE CHECK (replay_key ~ '^[a-f0-9]{64}$'),
+  payload_sha256 char(64) NOT NULL CHECK (payload_sha256 ~ '^[a-f0-9]{64}$'),
   expires_at timestamptz NOT NULL,
   consumed_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
+GRANT INSERT ON aqua_deployment_authorization_replay TO aqua_admission;
 ```
 
-The adapter inserts both keys in one transaction and accepts only one returned row.
-It must use the database's atomic uniqueness behavior across processes/regions,
-retain records for at least the attestation validity plus the configured replay
-window, and avoid deleting a row while a corresponding deployment can still be
-admitted. Retention, backup, restore and multi-region consistency must be qualified
-before use. A process-local `Set`, cache, or mock store is only a test fixture and
-cannot establish production replay safety.
+An insert timeout or lost response denies authorization even if PostgreSQL committed
+it. A retry then fails closed and requires a newly issued attestation after release
+reconciliation. Do not remove old tombstones or restore a database snapshot that
+forgets successful reservations.
 
 The replay key is derived from audience, repository, source SHA, CI run ID/attempt,
 policy version/digest and attestation ID. Reusing one signed authorization is
@@ -133,25 +170,22 @@ allows the existing safe retry path without accepting the old signature again.
 ## Authorization path and bypass inventory
 
 At the inspected app PR #106 head, the release trigger dispatches only
-`ci_run_id`, `ci_run_attempt` and `sha` to the executor. It carries no verifier run,
-attestation artifact or trust-root identity. The executor's candidate job fetches
-and archives the exact app Git source without executing it. The production job then
-enters `production-release`, downloads the candidate, performs admission, and calls
-`release-control.mjs deploy`. That controller's `deploy()` function is the sole
-Render/Vercel mutation sequence in the existing executor and now requires a signed
-authorization before its first API operation.
+`ci_run_id`, `ci_run_attempt` and `sha`. The executor candidate job fetches and
+archives exact app Git source without executing it. A separate admission job runs
+without provider credentials or the production environment, verifies authorization
+and reserves replay state. The production job depends on candidate and admission,
+downloads same-run artifacts, verifies the receipt and successful admission job,
+then enters the controller's provider sequence.
 
 The remaining paths and limits are concrete:
 
-- Direct or malformed workflow dispatch still reaches the same controller; it
-  cannot reach provider API reads or mutations without a supplied valid
-  authorization. The CLI has no trusted authorization source; its current workflow
-  therefore denies with `INDEPENDENT_ATTESTATION_REQUIRED` before provider
-  configuration admission reads.
-- The production job receives any configured environment secrets before the
-  controller-level check. The separate no-secret verifier job and `needs` edge are
-  not installed because neither an independent verifier artifact nor its
-  authenticated retrieval identity exists.
+- Direct or malformed workflow dispatch still reaches candidate qualification,
+  but cannot pass admission without a signed bundle and durable replay reservation.
+  Admission does not read Render or Vercel.
+- Production is guarded by `needs: [candidate, admission]` and an explicit success
+  condition. The production environment is attached only to that dependent job.
+  The workflow remains modifiable by executor administrators until external owner
+  governance protects it; repository-local code cannot protect its own gate.
 - The application repo remains connected to Vercel in the controller's intended
   configuration. A provider-native Git deployment could bypass this controller
   if enabled; its live status was not checked, as provider contact was prohibited.
@@ -161,20 +195,20 @@ The remaining paths and limits are concrete:
   there is no main protection/ruleset. `Xolani-M` remains an administrator by
   owner instruction. Repository-local validator code therefore cannot establish
   administrator-resistant enforcement.
-- Candidate code cannot supply the `authorization` object to the production CLI,
-  but there is not yet an independent verifier to provide it. Do not add a
-  candidate artifact, app CI manifest or executor-owned public key as a substitute.
+- Candidate code cannot supply the authorization bundle through its candidate
+  artifact. An authenticated verifier retrieval adapter is not installed and the
+  fixed input file is absent, so admission fails closed. Do not use candidate
+  manifests or an executor-owned trust root as a substitute.
 - The controller's current deployment receipt and retry checks remain in force.
-  A new verifier attestation ID is needed for a retry after the prior attempt is
-  reconciled; a consumed signature cannot be replayed. The atomic store mock used
-  by tests is not durable.
+  A fresh verifier attestation ID is required after reconciling a prior attempt;
+  a consumed signature cannot be replayed.
 
-The focused integration tests prove that the controller denies absent, altered,
-expired, stale, wrong-run/attempt and unverifiable attestations before Render or
-Vercel is called; concurrent use of one signed authorization admits at most one
-controller invocation. Existing Render-failure tests continue to prove Vercel is
-not called after a failed backend deployment. These are local controller tests,
-not a GitHub job-boundary or production credential-isolation proof.
+Focused tests prove absent, altered, expired, stale, wrong-run/attempt and
+unverifiable attestations, missing receipts, or absent/skipped admission jobs deny
+before provider reads. Workflow-source tests check job ordering and secret placement.
+Disposable PostgreSQL tests prove exactly one winner among 64 concurrent
+reservations. These tests do not prove GitHub's effective job isolation, independent
+issuer custody, production database configuration, provider behavior or deployment.
 
 ## Enforcement boundary and remaining setup
 
@@ -194,20 +228,24 @@ To become independently enforceable:
 4. A separate issuer signs the canonical report only after authenticating the worker
    result. The check/attestation must bind the exact source, main CI run and current
    attempt, policy digest, verifier workflow revision, evidence digest and expiry.
-5. A durable atomic replay store and trusted clock are provisioned and qualified.
+5. The code now includes a durable PostgreSQL adapter. Provision its schema and
+   separate INSERT-only identity using
+   [`schemas/deployment-authorization-replay.sql`](../schemas/deployment-authorization-replay.sql),
+   then qualify production durability and backup behavior and configure the
+   admission-only `ATTESTATION_REPLAY_DATABASE_URL` secret.
 6. Provider credentials remain in an owner-controlled deployment boundary that
    cannot be modified by application authors or administrators of the current
    `aqua-deployment` repository. `Xolani-M` remains its administrator; therefore it
    must not hold production provider secrets under the current access model.
-7. The deployment workflow must verify the attestation in a separate job with no
-   provider credentials, require that job before entering the production
-   environment, and revalidate source/run/attempt immediately before provider
-   mutation. No candidate source or candidate-provided script may execute with
-   provider keys. The current workflow does not yet have this pre-secret verifier
-   job or a trusted evidence source.
+7. Install the authenticated verifier retrieval adapter that writes the strict
+   `{ envelope, expected, trustRoot }` bundle to the fixed runner-temporary path,
+   authenticating source, issuer, policy, workflow revision and run/attempt through
+   the separately controlled verifier. The pre-secret job dependency is implemented,
+   but retrieval is absent and admission intentionally fails until it exists. No
+   candidate source or candidate-provided script may execute with provider keys.
 
-Current observations show `aqua-deployment` `main` is unprotected, has no environment
-or secrets, and the organization is on GitHub Free. Owner-level organization
+Current observations show `aqua-deployment` `main` is unprotected, has no
+`production-release` environment, and the organization is on GitHub Free. Owner-level organization
 rulesets/required workflows, a separate verifier/issuer and credential custody are
 not installed. The contract is not a substitute for those controls or for provider,
 runtime, PostgreSQL, recovery, deployment and production evidence.
@@ -231,7 +269,8 @@ pass it as `expected.tests`; the prototype only checks exact agreement with that
 trusted input. For these two fixtures, `definitionSha256` is the pinned digest of
 the complete test source file, not a source-derived per-function digest.
 
-The test replay store is deliberately in-memory and test-only. These tests prove
-local signature/claim classification and failure behavior, not external verifier
-custody, GitHub enforcement, durable replay resistance, provider credentials or a
-production deployment.
+The cryptographic unit suite uses a test-only in-memory replay store; the separate
+PostgreSQL integration test exercises the durable SQL adapter. These tests prove
+local signature/claim classification and isolated database atomicity, not external
+verifier custody, GitHub enforcement, production database durability, provider
+credentials or a production deployment.

@@ -68,9 +68,71 @@ jobs:
         run: |
           printf 'Qualified source: `%s`\n\nImmutable artifact digest: `%s`\n\nStanding deployment policy and runtime safety govern automatic admission.\n' "$SOURCE_SHA" "$ARTIFACT_DIGEST" >> "$GITHUB_STEP_SUMMARY"
 
+  admission:
+    name: Verify independent authorization before provider access
+    needs: candidate
+    if: needs.candidate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      baseline-artifact-id: ${{ steps.admission.outputs.baseline-artifact-id }}
+      baseline-run-id: ${{ steps.admission.outputs.baseline-run-id }}
+      receipt-artifact-id: ${{ steps.admission.outputs.receipt-artifact-id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.artifact-id }}
+          path: ${{ runner.temp }}/candidate
+          merge-multiple: true
+      - name: Fetch exact source as inert Git objects
+        env:
+          SOURCE_DIR: ${{ runner.temp }}/source-git
+        run: node tools/deployment/fetch-source.mjs
+      - name: Require authenticated independent-verifier retrieval
+        env:
+          AQUA_AUTHORIZATION_BUNDLE_FILE: ${{ runner.temp }}/trusted-authorization.json
+        run: |
+          if [ ! -s "$AQUA_AUTHORIZATION_BUNDLE_FILE" ]; then
+            echo "::error::Trusted verifier retrieval is not configured; admission denies deployment."
+            exit 1
+          fi
+      - name: Verify signed authorization and reserve it atomically
+        id: admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTESTATION_REPLAY_DATABASE_URL: ${{ secrets.ATTESTATION_REPLAY_DATABASE_URL }}
+          AQUA_AUTHORIZATION_BUNDLE_FILE: ${{ runner.temp }}/trusted-authorization.json
+          AQUA_ADMISSION_BUNDLE_OUTPUT: ${{ runner.temp }}/admission/authorization-bundle.json
+          AQUA_ADMISSION_RECEIPT_OUTPUT: ${{ runner.temp }}/admission/admission-receipt.json
+          SOURCE_DIR: ${{ runner.temp }}/source-git
+          CANDIDATE_DIR: ${{ runner.temp }}/candidate
+          RELEASE_REPORT: ${{ runner.temp }}/admission-report.jsonl
+        run: |
+          mkdir -p "${{ runner.temp }}/admission"
+          node tools/deployment/release-control.mjs admit
+          cp "${{ runner.temp }}/candidate/evidence-plan.json" "${{ runner.temp }}/admission/evidence-plan.json"
+      - name: Retain immutable admission evidence
+        id: upload
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: verified-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/admission
+          if-no-files-found: error
+          retention-days: 90
+
   production:
     name: Unattended recovery release
-    needs: candidate
+    needs: [candidate, admission]
+    if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production-release
@@ -87,34 +149,31 @@ jobs:
           artifact-ids: ${{ needs.candidate.outputs.artifact-id }}
           path: ${{ runner.temp }}/candidate
           merge-multiple: true
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.admission.outputs.artifact-id }}
+          path: ${{ runner.temp }}/admission
+          merge-multiple: true
+      - name: Restore the frozen GitHub evidence plan
+        run: cp "${{ runner.temp }}/admission/evidence-plan.json" "${{ runner.temp }}/candidate/evidence-plan.json"
       - name: Fetch exact source as inert Git objects
         env:
           SOURCE_DIR: ${{ runner.temp }}/source-git
         run: node tools/deployment/fetch-source.mjs
-      - name: Validate persistent configuration and select immutable retry receipts
-        id: admission
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          SOURCE_DIR: ${{ runner.temp }}/source-git
-          CANDIDATE_DIR: ${{ runner.temp }}/candidate
-          RELEASE_REPORT: ${{ runner.temp }}/release-report.jsonl
-        run: node tools/deployment/release-control.mjs admit
       - name: Read verified predecessor audit from its exact producing release run
-        if: steps.admission.outputs.baseline-artifact-id != ''
+        if: needs.admission.outputs.baseline-artifact-id != ''
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          artifact-ids: ${{ steps.admission.outputs.baseline-artifact-id }}
+          artifact-ids: ${{ needs.admission.outputs.baseline-artifact-id }}
           github-token: ${{ github.token }}
-          run-id: ${{ steps.admission.outputs.baseline-run-id }}
+          run-id: ${{ needs.admission.outputs.baseline-run-id }}
           path: ${{ runner.temp }}/baseline-release
           merge-multiple: true
       - name: Read immutable audit chain from every earlier attempt of this release run
-        if: steps.admission.outputs.receipt-artifact-id != ''
+        if: needs.admission.outputs.receipt-artifact-id != ''
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          artifact-ids: ${{ steps.admission.outputs.receipt-artifact-id }}
+          artifact-ids: ${{ needs.admission.outputs.receipt-artifact-id }}
           path: ${{ runner.temp }}/prior-release
           merge-multiple: false
       - name: Revalidate policy, provenance, providers and recovery before automatic deployment
@@ -122,6 +181,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          AQUA_AUTHORIZATION_BUNDLE_FILE: ${{ runner.temp }}/admission/authorization-bundle.json
+          AQUA_ADMISSION_RECEIPT_FILE: ${{ runner.temp }}/admission/admission-receipt.json
           SOURCE_DIR: ${{ runner.temp }}/source-git
           CANDIDATE_DIR: ${{ runner.temp }}/candidate
           RELEASE_REPORT: ${{ runner.temp }}/release-report.jsonl

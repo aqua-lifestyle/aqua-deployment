@@ -21,15 +21,34 @@ credential isolation or live provider behavior.
 
 ## Current observed executor state
 
-Read-only GitHub inspection on 2026-10-18 found `main` at
-`eb4dbcb188eb4d1ee1d0fdde73f072de3aa65fc5`, unprotected, with no rulesets,
-environments or provider secrets. Actions are enabled with all actions allowed
-and SHA pinning off. The default workflow token is read-only and cannot approve PR
-reviews. `aqualifestyleclub` is the sole listed organization owner and effective
-repository admin; `Xolani-M` retains a direct repository-admin grant by owner
-instruction. Installed GitHub Apps and some inherited organization permissions
-remain unobservable to this session. Executor PR #1 is still open at
-`68bd6ecbbf56229c0207df26bc37c1f173d95286`; that branch is not installed on `main`.
+Read-only GitHub inspection on 2026-10-19 found `main` at
+`eb4dbcb188eb4d1ee1d0fdde73f072de3aa65fc5`; `main` is unprotected, the ruleset
+inventory is empty, and `production-release` returns 404. The repository secret-name
+inventory is empty. Actions are enabled with all actions allowed and full-SHA
+pinning off; the default workflow token is read-only and cannot approve PR reviews.
+`aqualifestyleclub` is the sole listed organization owner and effective repository
+admin in carried-forward readback; `Xolani-M` retains its direct repository-admin
+grant by owner instruction. Installed GitHub Apps and some inherited organization
+permissions remain unobservable. PR #1 is open at `81db5e0af0aa516d36374b32ada631aac088f5f0`.
+No governance settings or secrets were changed in this task.
+
+## Pre-secret gate and replay state
+
+The executor workflow now has a candidate job, a separate admission job without
+provider credentials or `production-release`, and a production job that explicitly
+depends on both. Admission verifies the signed bundle and reserves it in PostgreSQL;
+production verifies the same-run admission receipt and queries GitHub for a
+successful admission job before provider reads. The workflow currently has no
+authenticated verifier retrieval adapter or replay-store credential. It therefore
+fails closed before production secrets/provider access and is not operational.
+See [`docs/attestation-boundary.md`](docs/attestation-boundary.md) for the trust
+contract, replay schema, exact owner responsibilities, and limits.
+
+The PG replay table is provisioned out-of-band by a database owner. The admission
+identity needs INSERT only and retains permanent unique replay tombstones. This
+repository contains no production database endpoint or credential. Local disposable
+PostgreSQL tests do not qualify its eventual production durability, permissions,
+backup/restore, or availability.
 
 The exact target-state contract is recorded in
 [`governance/expected-github-state.json`](governance/expected-github-state.json).
@@ -97,19 +116,21 @@ branch. Do not describe production automatic deployment as operational until the
 external custody, governance readbacks, provider prerequisites and a live authorized
 rollout have passed.
 
-Credential-free executor tests previously passed on PR #1 at
+Carried-forward credential-free tests previously passed on PR #1 at
 `68bd6ecbbf56229c0207df26bc37c1f173d95286` (27 passed, 0 failed, 0 skipped), and
 PR #106's CI previously passed at `b57c2810bc15d1f7893126697a0bfbb3f5b3ade2`.
-Those are carried-forward results for their exact earlier commits. The current PR
-commit also runs the complete credential-free executor and attestation suites. The
-attestation-specific command is
+Those results apply only to their exact earlier commits. The current change adds a
+PostgreSQL integration test to the executor safety workflow. The attestation-specific
+command is
 `node --test tools/deployment/authorization-attestation.test.mjs`.
 
-The credential-free v2 attestation consumer and its limits are documented in
-[`docs/attestation-boundary.md`](docs/attestation-boundary.md). `release-control.mjs`
-now requires a valid attestation at the start of its provider deployment sequence.
-The current workflow cannot supply one, has no separate pre-secret verifier job,
-and therefore fails closed before deployment mutations. Independent verifier
-custody, the trusted full test inventory, authenticated evidence retrieval, and a
-durable replay store remain unconfigured; this controller gate is not proof of
+The credential-free v2 attestation consumer, pre-secret admission job and PostgreSQL
+replay adapter are documented in
+[`docs/attestation-boundary.md`](docs/attestation-boundary.md). The controller now
+requires a valid attestation plus the same-run admission receipt/job before provider
+reads. The current workflow has no authenticated verifier retrieval step, so
+admission intentionally fails before the production job starts. The local durable
+adapter is tested against disposable PostgreSQL, but its production database,
+issuer, trust-root custody, complete trusted inventory, GitHub governance and
+provider credential isolation remain unconfigured. These changes are not proof of
 administrator-resistant enforcement or production readiness.

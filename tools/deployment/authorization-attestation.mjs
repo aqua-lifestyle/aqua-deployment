@@ -33,6 +33,8 @@ const canonicalJson = value => {
   deny('ATTESTATION_MALFORMED');
 };
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+export const mandatoryInventoryDigest = (mandatoryChecks, tests) =>
+  sha256(Buffer.from(canonicalJson({ mandatoryChecks, tests })));
 const base64url = value => typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value);
 const decodeBase64url = value => {
   if (!base64url(value)) deny('ATTESTATION_MALFORMED');
@@ -55,6 +57,8 @@ function validateExpected(expected, trustRoot) {
       trustRoot.policy?.status !== 'active' || !DIGEST.test(expected.policyDigest ?? '') ||
       typeof expected.policyVersion !== 'string' || !expected.policyVersion)
     deny('POLICY_UNTRUSTED_OR_REVOKED');
+  if (!own(trustRoot.policy, ['version', 'sha256', 'status', 'inventorySha256']) ||
+      !DIGEST.test(trustRoot.policy.inventorySha256 ?? '')) deny('TRUST_ROOT_INVALID');
   if (!expected.source || expected.source.repository !== 'aqua-lifestyle/aqua-lifestyle' ||
       !SHA.test(expected.source.commitSha ?? '') || !positiveId(expected.source.ciRunId) ||
       !positiveInteger(expected.source.ciRunAttempt)) deny('EXPECTED_SOURCE_INVALID');
@@ -72,6 +76,8 @@ function validateExpected(expected, trustRoot) {
       expected.tests.some(x => !x || !ID.test(x.id ?? '') || typeof x.file !== 'string' || !x.file ||
         typeof x.name !== 'string' || !x.name || !DIGEST.test(x.definitionSha256 ?? '') ||
         !positiveInteger(x.expectedExecutions))) deny('TRUSTED_TEST_INVENTORY_INVALID');
+  if (mandatoryInventoryDigest(expected.mandatoryChecks, expected.tests) !== trustRoot.policy.inventorySha256)
+    deny('TRUSTED_TEST_INVENTORY_INVALID');
   if (!Number.isSafeInteger(trustRoot.maxLifetimeSeconds) || trustRoot.maxLifetimeSeconds < 1 ||
       trustRoot.maxLifetimeSeconds > 3600 || !Number.isSafeInteger(trustRoot.clockSkewSeconds) ||
       trustRoot.clockSkewSeconds < 0 || trustRoot.clockSkewSeconds > 60 ||

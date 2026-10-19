@@ -11,6 +11,22 @@ jobs:
     name: Executor safety tests
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_USER: aqua_test
+          POSTGRES_PASSWORD: aqua_test_only
+          POSTGRES_DB: aqua_replay_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aqua_test -d aqua_replay_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AQUA_TEST_DATABASE_URL: postgresql://aqua_test:aqua_test_only@127.0.0.1:5432/aqua_replay_test
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -18,4 +34,5 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
+      - run: npm ci --ignore-scripts
       - run: node --test tools/deployment/*.test.mjs

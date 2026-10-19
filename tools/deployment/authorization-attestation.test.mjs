@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { test } from 'node:test';
 import { requiredJobs } from './release-control.mjs';
-import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
+import { AttestationDenied, mandatoryInventoryDigest, verifyPrototypeAttestation } from './authorization-attestation.mjs';
 
 const NOW = Date.parse('2026-10-18T12:00:00.000Z');
 const POLICY_VERSION = 'mandatory-security-v1';
@@ -30,7 +30,8 @@ const expected = Object.freeze({ audience: 'aqua-lifestyle/aqua-deployment:produ
   source: { repository: 'aqua-lifestyle/aqua-lifestyle', commitSha: SOURCE_SHA, ciRunId: '39100000000', ciRunAttempt: 2 },
   verifier, mandatoryChecks: checks, tests });
 const trustRoot = () => ({ version: 1, audience: expected.audience,
-  policy: { version: POLICY_VERSION, sha256: POLICY_SHA, status: 'active' },
+  policy: { version: POLICY_VERSION, sha256: POLICY_SHA, status: 'active',
+    inventorySha256: mandatoryInventoryDigest(checks, tests) },
   maxLifetimeSeconds: 300, clockSkewSeconds: 30, revokedPolicies: [], revokedKeyIds: [], revokedAttestationIds: [],
   issuers: [{ identity: 'owner-controlled-verifier', keyId: 'test-ed25519-v1', status: 'active', publicKeyPem,
     verifier }] });
@@ -157,6 +158,15 @@ test('missing, renamed, duplicate or weakened mandatory test definitions are den
   await denied(verify({ envelope: skipped }), 'MANDATORY_TEST_NOT_VERIFIED');
   const count = signedEnvelope(c => { c.tests[0].executions = 0; return c; });
   await denied(verify({ envelope: count }), 'MANDATORY_TEST_NOT_VERIFIED');
+});
+
+test('expected inventory cannot be replaced independently of the authenticated trust root', async () => {
+  const forgedTests = { ...expected, tests: expected.tests.slice(1) };
+  await denied(verify({ expected: forgedTests }), 'TRUSTED_TEST_INVENTORY_INVALID');
+  const forgedChecks = { ...expected, mandatoryChecks: expected.mandatoryChecks.slice(1) };
+  await denied(verify({ expected: forgedChecks }), 'TRUSTED_CHECK_INVENTORY_INVALID');
+  const alteredRoot = trustRoot(); alteredRoot.policy.inventorySha256 = 'f'.repeat(64);
+  await denied(verify({ trustRoot: alteredRoot }), 'TRUSTED_TEST_INVENTORY_INVALID');
 });
 
 test('exact replay is denied, a newly issued authorization for a qualified retry is distinct, and store failure denies', async () => {

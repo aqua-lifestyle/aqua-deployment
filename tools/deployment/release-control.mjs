@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
+import { createPostgresReplayStore } from './postgres-replay-store.mjs';
 
 export const targets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 // Only the executor's reviewed targets.json selects this mode. Candidate input
@@ -465,13 +466,15 @@ function validateReleaseRun(run) {
 async function releaseProductionJob(api, run, attempt) {
   const page = await releaseApi(api)(`/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100`);
   const jobs = page.jobs;
-  requireThat(page.total_count === jobs?.length && jobs.length === 2 &&
-    new Set(jobs.map(j => j.name)).size === 2 &&
+  requireThat(page.total_count === jobs?.length && jobs.length === 3 &&
+    new Set(jobs.map(j => j.name)).size === 3 &&
     jobs.every(j => j.run_id === run.id && j.run_attempt === attempt && j.status === 'completed'),
   'PRIOR_RELEASE_EXECUTION_UNVERIFIABLE');
   const candidate = jobs.find(j => j.name === 'Qualify immutable source candidate');
+  const admission = jobs.find(j => j.name === 'Verify independent authorization before provider access');
   const production = jobs.find(j => ['Unattended recovery release', 'Authorized recovery release'].includes(j.name));
-  requireThat(candidate && production && (production.conclusion !== 'success' || candidate.conclusion === 'success'),
+  requireThat(candidate && admission && production &&
+    (production.conclusion !== 'success' || (candidate.conclusion === 'success' && admission.conclusion === 'success')),
     'PRIOR_RELEASE_EXECUTION_UNVERIFIABLE');
   return production;
 }
@@ -604,7 +607,8 @@ export async function deploymentHistory(api, provider) {
 
 export async function deploy(api, qualified, policy, report, options = {}) {
   validateReleaseIdentity(qualified);
-  await requireDeploymentAttestation(options.authorization, qualified);
+  await requireDeploymentAttestation(options.authorization, qualified,
+    { reserveReplay: options.replayAlreadyReserved !== true });
   const guard = async () => {
     validatePolicy(qualified, options.env ?? process.env, policy);
     await requalify(api, qualified);
@@ -803,9 +807,9 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     renderDeployId: render.id, vercelDeployId: vercel.id });
 }
 
-// This is the last controller boundary before any provider read or mutation. The
-// trust root and complete test inventory must be supplied by an independent caller;
-// the executor workflow currently has no such source and therefore fails closed.
+// This is the controller boundary before provider reads or mutations. The trust
+// root and complete inventory must come from an independent caller; without that
+// source the pre-secret admission job fails closed.
 export async function requireDeploymentAttestation(authorization, qualified, { reserveReplay = true } = {}) {
   requireThat(authorization && typeof authorization === 'object', 'INDEPENDENT_ATTESTATION_REQUIRED');
   const { expected, trustRoot } = authorization;
@@ -821,6 +825,70 @@ export async function requireDeploymentAttestation(authorization, qualified, { r
     if (error instanceof AttestationDenied) throw new ReleaseFailure(error.code);
     throw new ReleaseFailure('ATTESTATION_UNVERIFIABLE');
   }
+}
+
+function readAuthorizationBundle(path) {
+  requireThat(typeof path === 'string' && path.length > 0, 'TRUSTED_AUTHORIZATION_SOURCE_UNAVAILABLE');
+  try {
+    const text = readFileSync(path, 'utf8');
+    requireThat(text.length <= 2 * 1024 * 1024, 'TRUSTED_AUTHORIZATION_SOURCE_UNAVAILABLE');
+    const bundle = JSON.parse(text);
+    requireThat(bundle && typeof bundle === 'object' && !Array.isArray(bundle) &&
+      Object.keys(bundle).sort().join(',') === 'envelope,expected,trustRoot',
+    'TRUSTED_AUTHORIZATION_SOURCE_UNAVAILABLE');
+    return bundle;
+  } catch (error) {
+    if (error instanceof ReleaseFailure) throw error;
+    throw new ReleaseFailure('TRUSTED_AUTHORIZATION_SOURCE_UNAVAILABLE');
+  }
+}
+
+function writeAdmissionEvidence(authorization, verification, qualified, env) {
+  requireThat(typeof env.AQUA_ADMISSION_BUNDLE_OUTPUT === 'string' &&
+    typeof env.AQUA_ADMISSION_RECEIPT_OUTPUT === 'string', 'ADMISSION_EVIDENCE_OUTPUT_UNAVAILABLE');
+  const payload = Buffer.from(authorization.envelope.payload, 'base64url');
+  const receipt = { version: 1, executorRepository: execution.repository, executorSha: qualified.executorSha,
+    workflow: execution.workflow, releaseRunId: qualified.releaseRunId,
+    releaseRunAttempt: qualified.releaseRunAttempt, repository: qualified.repository,
+    sourceSha: qualified.sha, ciRunId: qualified.ciRunId, ciRunAttempt: qualified.ciRunAttempt,
+    policySha256: qualified.policySha256, attestationId: verification.attestationId,
+    payloadSha256: createHash('sha256').update(payload).digest('hex') };
+  const bundle = { envelope: authorization.envelope, expected: authorization.expected, trustRoot: authorization.trustRoot };
+  writeFileSync(env.AQUA_ADMISSION_BUNDLE_OUTPUT, JSON.stringify(bundle) + '\n', { flag: 'wx', mode: 0o600 });
+  writeFileSync(env.AQUA_ADMISSION_RECEIPT_OUTPUT, JSON.stringify(receipt) + '\n', { flag: 'wx', mode: 0o600 });
+}
+
+function validateAdmissionReceipt(receipt, verification, qualified, env) {
+  requireThat(receipt && typeof receipt === 'object' && !Array.isArray(receipt) &&
+    Object.keys(receipt).sort().join(',') === [
+      'version', 'executorRepository', 'executorSha', 'workflow', 'releaseRunId', 'releaseRunAttempt',
+      'repository', 'sourceSha', 'ciRunId', 'ciRunAttempt', 'policySha256', 'attestationId', 'payloadSha256'
+    ].sort().join(',') && receipt.version === 1 &&
+    receipt.executorRepository === execution.repository && receipt.executorSha === qualified.executorSha &&
+    receipt.workflow === execution.workflow && receipt.releaseRunId === qualified.releaseRunId &&
+    receipt.releaseRunAttempt === qualified.releaseRunAttempt && receipt.repository === qualified.repository &&
+    receipt.sourceSha === qualified.sha && receipt.ciRunId === qualified.ciRunId &&
+    receipt.ciRunAttempt === qualified.ciRunAttempt && receipt.policySha256 === qualified.policySha256 &&
+    receipt.attestationId === verification.attestationId && /^[a-f0-9]{64}$/.test(receipt.payloadSha256),
+  'ADMISSION_RECEIPT_MISMATCH');
+  const bundle = readAuthorizationBundle(env.AQUA_AUTHORIZATION_BUNDLE_FILE);
+  const payload = Buffer.from(bundle.envelope.payload, 'base64url');
+  requireThat(createHash('sha256').update(payload).digest('hex') === receipt.payloadSha256,
+    'ADMISSION_RECEIPT_MISMATCH');
+}
+
+export async function validateAdmissionJob(api, qualified) {
+  const page = await api.executor(`/actions/runs/${qualified.releaseRunId}/attempts/${qualified.releaseRunAttempt}/jobs?per_page=100`);
+  requireThat(page.total_count === page.jobs?.length && page.jobs.length === 3 &&
+    new Set(page.jobs.map(job => job.name)).size === 3 &&
+    page.jobs.every(job => job.run_id === Number(qualified.releaseRunId) &&
+      job.run_attempt === qualified.releaseRunAttempt), 'ADMISSION_JOB_EVIDENCE_UNVERIFIABLE');
+  const candidate = page.jobs.find(job => job.name === 'Qualify immutable source candidate');
+  const admission = page.jobs.find(job => job.name === 'Verify independent authorization before provider access');
+  const production = page.jobs.find(job => job.name === 'Unattended recovery release');
+  requireThat(candidate?.status === 'completed' && candidate.conclusion === 'success' &&
+    admission?.status === 'completed' && admission.conclusion === 'success' &&
+    production?.status === 'in_progress', 'ADMISSION_JOB_NOT_SUCCESSFUL');
 }
 
 let failureReport;
@@ -885,21 +953,46 @@ export async function main(env, options = {}) {
   verifyCandidate(JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/candidate.json`)), q,
     readFileSync(`${env.CANDIDATE_DIR}/source.tar`),
     sourceArchive(q.sha));
-  await requireDeploymentAttestation(options.authorization ?? options.deploymentOptions?.authorization, q,
-    { reserveReplay: false });
+  let authorization = options.authorization ?? options.deploymentOptions?.authorization ??
+    readAuthorizationBundle(env.AQUA_AUTHORIZATION_BUNDLE_FILE);
+  let verification = await requireDeploymentAttestation(authorization, q, { reserveReplay: false });
   const report = createAuditWriter(q, row => appendFileSync(env.RELEASE_REPORT, JSON.stringify(row) + '\n'));
   failureReport = code => report({ phase: 'failed', code });
-  validatePolicy(q, env, policy);
-  await validateInfrastructure(api, q);
-  await validateCandidateProvenance(api, q);
-  const plan = await evidencePlan(api, q, policy);
   if (mode === 'admit') {
-    report({ phase: 'evidence-selected' });
+    // Admission is intentionally pre-secret: only GitHub evidence and the dedicated
+    // append-only replay store are read here. No Render/Vercel client is called.
+    await validateInfrastructure(api, q);
+    await validateCandidateProvenance(api, q);
+    const plan = await evidencePlan(api, q, policy);
+    let replayDb;
+    try {
+      if (!authorization.replayStore) {
+        replayDb = await createPostgresReplayStore(env.ATTESTATION_REPLAY_DATABASE_URL);
+        authorization = { ...authorization, replayStore: replayDb.store };
+      }
+      verification = await requireDeploymentAttestation(authorization, q, { reserveReplay: true });
+    } catch (error) {
+      if (error instanceof ReleaseFailure) throw error;
+      throw new ReleaseFailure('REPLAY_STORE_UNAVAILABLE');
+    } finally {
+      if (replayDb) await replayDb.close().catch(() => {});
+    }
+    writeAdmissionEvidence(authorization, verification, q, env);
     writeFileSync(`${env.CANDIDATE_DIR}/evidence-plan.json`, JSON.stringify(plan) + '\n');
+    report({ phase: 'admitted', attestationId: verification.attestationId });
     appendFileSync(env.GITHUB_OUTPUT, `baseline-artifact-id=${plan.baseline?.artifactId ?? ''}\n` +
       `baseline-run-id=${plan.baseline?.runId ?? ''}\nreceipt-artifact-id=${plan.resumeChain.map(x => x.artifactId).join(',')}\n`);
     return;
   }
+  let admissionReceipt;
+  try { admissionReceipt = JSON.parse(readFileSync(env.AQUA_ADMISSION_RECEIPT_FILE, 'utf8')); }
+  catch { throw new ReleaseFailure('ADMISSION_RECEIPT_MISMATCH'); }
+  validateAdmissionReceipt(admissionReceipt, verification, q, env);
+  await validateAdmissionJob(api, q);
+  validatePolicy(q, env, policy);
+  await validateInfrastructure(api, q);
+  await validateCandidateProvenance(api, q);
+  const plan = await evidencePlan(api, q, policy);
   let admittedPlan;
   try { admittedPlan = JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/evidence-plan.json`, 'utf8')); }
   catch { throw new ReleaseFailure('FROZEN_EVIDENCE_PLAN_REQUIRED'); }
@@ -911,7 +1004,7 @@ export async function main(env, options = {}) {
       return text.trim().split('\n').map(line => JSON.parse(line));
     } catch { throw new ReleaseFailure('AUDIT_RECEIPT_UNVERIFIABLE'); }
   };
-  await deploy(api, q, policy, report, { env, evidencePlan: plan,
+  await deploy(api, q, policy, report, { env, evidencePlan: plan, authorization, replayAlreadyReserved: true,
     ...options.deploymentOptions,
     baselineRows: plan.baseline ? readAudit(env.BASELINE_RECEIPT_FILE) : undefined,
     receiptRows: plan.resume ? plan.resumeChain.flatMap(d => readAudit(plan.resumeChain.length === 1 ?

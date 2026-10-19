@@ -2,7 +2,7 @@
 import {readFileSync} from 'node:fs';
 import {generateKeyPairSync, sign, randomUUID} from 'node:crypto';
 import {deploy,createAuditWriter,freezeCandidate,validateRun,targets,standingPolicy,requiredJobs} from '../release-control.mjs';
-import {attestationContractVersion} from '../authorization-attestation.mjs';
+import {attestationContractVersion,mandatoryInventoryDigest} from '../authorization-attestation.mjs';
 const source = 'c'.repeat(40), previous = 'b'.repeat(40);
 const run = () => ({ id: 123, run_attempt: 1, repository: { full_name: targets.repository },
   head_repository: { full_name: targets.repository }, event: 'push', head_branch: 'main',
@@ -67,11 +67,13 @@ function authorizationFor(qualified, edit = x => x) {
   const policyVersion = 'fixture-policy-v1';
   const audience = `${targets.executor.repository}:${targets.environment}`;
   const publicKeyPem = signer.publicKey.export({type:'spki',format:'pem'});
+  const mandatoryChecks=requiredJobs.map(context=>({context,integrationId:15368}));
   const expected = { audience, policyVersion, policyDigest: qualified.policySha256,
     source:{repository:qualified.repository,commitSha:qualified.sha,ciRunId:qualified.ciRunId,ciRunAttempt:qualified.ciRunAttempt},
-    verifier, mandatoryChecks:requiredJobs.map(context=>({context,integrationId:15368})),
+    verifier, mandatoryChecks,
     tests:testInventory };
-  const trustRoot = {version:1,audience,policy:{version:policyVersion,sha256:qualified.policySha256,status:'active'},
+  const trustRoot = {version:1,audience,policy:{version:policyVersion,sha256:qualified.policySha256,status:'active',
+    inventorySha256:mandatoryInventoryDigest(mandatoryChecks,testInventory)},
     maxLifetimeSeconds:300,clockSkewSeconds:30,revokedPolicies:[],revokedKeyIds:[],revokedAttestationIds:[],
     issuers:[{identity:'fixture-issuer',keyId:'fixture-key',status:'active',publicKeyPem,verifier}]};
   const now = Date.now();
@@ -174,6 +176,12 @@ function fixture() {
       run_attempt:state.candidate.releaseRunAttempt,run_number:1,head_sha:state.candidate.executorSha,head_branch:'main',
       event:'workflow_dispatch',path:'.github/workflows/deploy.yml',name:'Qualified production executor',status:'in_progress',
       repository:{full_name:targets.executor.repository},head_repository:{full_name:targets.executor.repository}};
+    if(route.startsWith(`/actions/runs/${state.candidate.releaseRunId}/attempts/${state.candidate.releaseRunAttempt}/jobs?`))
+      return {total_count:3,jobs:[
+        {name:'Qualify immutable source candidate',run_id:Number(state.candidate.releaseRunId),run_attempt:state.candidate.releaseRunAttempt,status:'completed',conclusion:'success'},
+        {name:'Verify independent authorization before provider access',run_id:Number(state.candidate.releaseRunId),run_attempt:state.candidate.releaseRunAttempt,status:'completed',conclusion:'success'},
+        {name:'Unattended recovery release',run_id:Number(state.candidate.releaseRunId),run_attempt:state.candidate.releaseRunAttempt,status:'in_progress',conclusion:null}
+      ]};
     if(route.startsWith('/environments/'))return sourceApi(route);
     if(route.startsWith('/rules/branches/main'))return ['deletion','non_fast_forward'].map(type=>({type,ruleset_id:99}));
     if(route==='/rulesets/99')return {enforcement:'active',source:targets.executor.repository,source_type:'Repository',target:'branch',bypass_actors:[],rules:[{type:'deletion'},{type:'non_fast_forward'}]};

@@ -7,7 +7,8 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fixture,qualified,runnerEnv,source,previous,run,jobs} from './fixtures/provider.mjs';
 import {clients,freezeCandidate,validatePolicy,verifyCandidate,targets,standingPolicy,qualify,
-  evidencePlan,releaseKey,validateLegacyHistory,main,validateResumeReceipt,validateBaselineReceipt} from './release-control.mjs';
+  evidencePlan,releaseKey,validateLegacyHistory,main,validateResumeReceipt,validateBaselineReceipt,
+  validateAdmissionJob} from './release-control.mjs';
 import {fetchSource} from './fetch-source.mjs';
 
 test('external rollout preserves exact Render-first sequence and independently bound revisions',async()=>{
@@ -148,15 +149,47 @@ test('source fetch is inert, fixed-origin, SHA-only and strips inherited credent
     assert.ok(calls.every(x=>!x.args.includes('checkout')&&!x.args.includes('submodule')));
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
-test('workflow executes only executor checkout; provider secrets occur only in dependent production job',()=>{
+test('separate pre-secret admission gates the only provider-secret job',()=>{
   const wf=readFileSync(new URL('../../.github/workflows/deploy.yml',import.meta.url),'utf8');
-  const [candidate,production]=wf.split('\n  production:');
-  assert.ok(!candidate.includes('secrets.'));assert.match(production,/needs: candidate/);
-  assert.match(production,/ref: \$\{\{ github.sha \}\}/);assert.doesNotMatch(wf,/npm |npx |needs.candidate.outputs.sha.*\n.*persist/);
+  const extract = (name,next) => wf.match(new RegExp(`\\n  ${name}:([\\s\\S]*?)(?=\\n  ${next}:|$)`))?.[1] ?? '';
+  const candidate=extract('candidate','admission'),admission=extract('admission','production'),production=extract('production','');
+  assert.ok(candidate && admission && production);
+  assert.ok(!candidate.includes('secrets.'));
+  assert.ok(!admission.includes('environment:'));
+  assert.doesNotMatch(admission,/secrets\.(RENDER_API_KEY|VERCEL_TOKEN)/);
+  assert.match(admission,/secrets\.ATTESTATION_REPLAY_DATABASE_URL/);
+  assert.match(production,/needs: \[candidate, admission\]/);
+  assert.match(production,/needs\.admission\.result == 'success'/);
+  assert.match(production,/environment: production-release/);
+  assert.match(production,/secrets\.RENDER_API_KEY/);
+  assert.match(production,/secrets\.VERCEL_TOKEN/);
+  assert.match(production,/ref: \$\{\{ github.sha \}\}/);
+  assert.doesNotMatch(candidate,/npm|npx/);assert.match(admission,/npm ci --ignore-scripts/);
+  assert.doesNotMatch(production,/npm|npx/);
   assert.match(wf,/group: production-release\s+cancel-in-progress: false/);
   assert.match(wf,/github.ref == 'refs\/heads\/main'/);
   assert.doesNotMatch(wf,/\$\{\{ inputs\./);
+  assert.doesNotMatch(admission,/api\.render\.com|api\.vercel\.com/);
+  assert.match(admission,/AQUA_AUTHORIZATION_BUNDLE_FILE/);
+  assert.match(admission,/ATTESTATION_REPLAY_DATABASE_URL/);
   for(const line of wf.split('\n').filter(l=>l.includes('uses:')))assert.match(line,/@[a-f0-9]{40}/);
+});
+
+test('missing, skipped or wrong-attempt admission execution cannot qualify the provider job',async()=>{
+  const f=fixture(),q=f.state.candidate,read=f.api.executor;
+  const route=`/actions/runs/${q.releaseRunId}/attempts/${q.releaseRunAttempt}/jobs?per_page=100`;
+  const complete=[
+    {name:'Qualify immutable source candidate',status:'completed',conclusion:'success'},
+    {name:'Verify independent authorization before provider access',status:'completed',conclusion:'success'},
+    {name:'Unattended recovery release',status:'in_progress',conclusion:null}
+  ].map(job=>({...job,run_id:Number(q.releaseRunId),run_attempt:q.releaseRunAttempt}));
+  for(const jobs of [complete.filter(x=>x.name!=='Verify independent authorization before provider access'),
+    complete.map(x=>x.name==='Verify independent authorization before provider access'?{...x,conclusion:'skipped'}:x),
+    complete.map(x=>x.name==='Verify independent authorization before provider access'?{...x,run_attempt:2}:x)]){
+    f.api.executor=async path=>path===route?{total_count:jobs.length,jobs}:read(path);
+    await assert.rejects(validateAdmissionJob(f.api,q));
+    assert.equal(f.state.providerCalls,0);
+  }
 });
 
 test('real Git source passes candidate, admission and deployment entries without executing candidate code',async()=>{
@@ -190,11 +223,18 @@ test('real Git source passes candidate, admission and deployment entries without
     const authorization=f.authorizationFor(manifest);
     assert.equal(manifest.sha,sha);assert.equal(manifest.executorSha,executorSha);
     assert.ok(readFileSync(join(candidate,'source.tar')).length>0);
-    await assert.rejects(main(env,{mode:'admit',api:f.api}),/INDEPENDENT_ATTESTATION_REQUIRED/);
+    await assert.rejects(main(env,{mode:'admit',api:f.api}),/TRUSTED_AUTHORIZATION_SOURCE_UNAVAILABLE/);
     assert.equal(f.state.providerCalls,0);
+    const admissionDir=join(dir,'admission');mkdirSync(admissionDir);
+    env.AQUA_ADMISSION_BUNDLE_OUTPUT=join(admissionDir,'authorization-bundle.json');
+    env.AQUA_ADMISSION_RECEIPT_OUTPUT=join(admissionDir,'admission-receipt.json');
+    env.AQUA_AUTHORIZATION_BUNDLE_FILE=env.AQUA_ADMISSION_BUNDLE_OUTPUT;
+    env.AQUA_ADMISSION_RECEIPT_FILE=env.AQUA_ADMISSION_RECEIPT_OUTPUT;
     await main(env,{mode:'admit',api:f.api,authorization});assert.equal(f.posts.length,0);
-    await assert.rejects(main(env,{mode:'deploy',api:f.api,deploymentOptions:{attempts:3,pause:async()=>{}}}),
-      /INDEPENDENT_ATTESTATION_REQUIRED/);
+    assert.equal(f.state.providerCalls,0,'pre-secret admission must not read Render or Vercel');
+    await assert.rejects(main({...env,AQUA_ADMISSION_RECEIPT_FILE:join(dir,'missing-receipt.json')},
+      {mode:'deploy',api:f.api,deploymentOptions:{attempts:3,pause:async()=>{},authorization}}),
+      /ADMISSION_RECEIPT_MISMATCH/);
     assert.equal(f.posts.length,0);
     await main(env,{mode:'deploy',api:f.api,deploymentOptions:{attempts:3,pause:async()=>{},
       authorization}});
