@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
 import { approvedBypassReadback, approvedReadbacks, GovernanceReadbackDenied } from './governance-readback.mjs';
+import { runtimeSettings, protectedReadiness, validateReadiness } from './runtime-readiness.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   gitSourceDigest, verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission,
   readGitHubArtifact, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
@@ -67,7 +68,7 @@ export function policyDigest(policy) {
     Object.keys(object).sort().join(',') === keys.sort().join(',');
   const a = policy?.authorization;
   const expectedScope = { repository: targets.repository, branch: 'main', executorRepository: execution.repository, ...targetIdentity };
-  requireThat(policy?.version === 3 && /^[a-z0-9-]{1,80}$/.test(policy.epoch) &&
+  requireThat(policy?.version === 4 && /^[a-z0-9-]{1,80}$/.test(policy.epoch) &&
     policy.profile === targets.profile && policy.baseline === 'automatic' &&
     owns(policy, ['version', 'epoch', 'profile', 'baseline', 'authorization', 'scope']) &&
     owns(a, ['kind', 'approval', 'administrators', 'inventorySourceCommit', 'inventorySha256', 'maxCiAgeSeconds', 'maxAdmissionAgeSeconds']) &&
@@ -331,14 +332,10 @@ export function validateRender(service, rows) {
     d.envSpecificDetails?.preDeployCommand === '' && d.envSpecificDetails?.dockerCommand === '',
   'RENDER_TARGET_OR_RECOVERY_CONFIGURATION_DRIFT');
   const vars = Object.fromEntries(rows.map(x => [x.envVar.key, x.envVar.value]));
-  requireThat(vars.ASPNETCORE_ENVIRONMENT === 'Production' && vars.App__Recovery__Enabled === 'true',
-    'ACTIVE_RECOVERY_BASELINE_REQUIRED');
-  for (const key of ['App__WeeklyCommissions__Enabled', 'App__EntryMonthlyObligations__Enabled',
-    'App__FinancialOperations__Enabled', 'App__BackgroundJobs__Enabled', 'AQGreenV2Demo__Enabled',
-    'AQGreenV2Pilot__Enabled', 'App__AQGreenV2__Commissioning__Enabled', 'SEED_DEMO_DATA', 'Bird__Enabled'])
-    requireThat(vars[key] === 'false', 'RESTRICTED_OPERATION_NOT_HELD');
-  for (const key of ['Yoco__Mode', 'Yoco__SecretKey', 'Yoco__WebhookSecret', 'Bird__ApiKey'])
-    requireThat(!vars[key]?.trim(), 'RECOVERY_PROVIDER_ISOLATION_REQUIRED');
+  requireThat(rows.length === Object.keys(runtimeSettings).length &&
+    new Set(rows.map(x => x.envVar.key)).size === rows.length &&
+    Object.entries(runtimeSettings).every(([key, allowed]) => allowed.includes(vars[key])),
+  'NORMAL_RUNTIME_CONFIGURATION_UNVERIFIED');
 }
 
 export function validateVercel(project, repoId) {
@@ -365,7 +362,7 @@ export function validateHealth(response, sha) {
   const j = response.body.result ?? response.body;
   requireThat(response.status === 200 && j.status === 'Healthy' && j.buildId === sha &&
     j.environment === 'Production' && j.databaseStatus === 'Healthy' && j.redisStatus === 'Healthy' &&
-    j.dataProtectionKeyStoreStatus === 'Healthy' && response.recovery === 'true',
+    j.dataProtectionKeyStoreStatus === 'Healthy' && response.recovery === null,
   'API_REVISION_OR_RECOVERY_READINESS_FAILED');
 }
 
@@ -426,15 +423,30 @@ export function clients(env, fetcher = fetch) {
         throw new ReleaseFailure('GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
       }
     },
-    render: (route, body) => request('https://api.render.com/v1', env.RENDER_API_KEY, route, body),
-    vercel: (route, body) => request('https://api.vercel.com', env.VERCEL_TOKEN,
-      route + (route.includes('?') ? '&' : '?') + `teamId=${targets.vercel.teamId}`, body),
+    render: (route, body) => {
+      if (route.includes('/env-vars') || route.includes('/secret-files')) {
+        const prefix = `/services/${targets.render.id}/env-vars/`;
+        requireThat(body === undefined && route.startsWith(prefix) &&
+          Object.hasOwn(runtimeSettings, route.slice(prefix.length)), 'SECRET_BEARING_RENDER_READ_FORBIDDEN');
+      }
+      return request('https://api.render.com/v1', env.RENDER_API_KEY, route, body);
+    },
+    vercel: (route, body) => {
+      if (route.includes('/env?')) requireThat(body === undefined &&
+        route === `/v10/projects/${targets.vercel.id}/env?decrypt=false`, 'FRONTEND_SECRET_ENUMERATION_FORBIDDEN');
+      return request('https://api.vercel.com', env.VERCEL_TOKEN,
+        route + (route.includes('?') ? '&' : '?') + `teamId=${targets.vercel.teamId}`, body);
+    },
     health: async () => {
       let r;
       try { r = await fetcher(targets.render.healthUrl, { redirect: 'error',
         signal: AbortSignal.timeout(30_000), headers: { 'Cache-Control': 'no-cache' } });
         return { status: r.status, recovery: r.headers.get('x-aqua-recovery-suspended'), body: await r.json() };
       } catch { throw new ReleaseFailure('API_HEALTH_UNAVAILABLE'); }
+    },
+    readiness: async sha => {
+      try { return await protectedReadiness(env, sha, fetcher); }
+      catch { throw new ReleaseFailure('PROTECTED_RUNTIME_READINESS_FAILED'); }
     },
     web: async () => {
       try { const r = await fetcher(targets.vercel.productionUrl, { redirect: 'error',
@@ -762,16 +774,37 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   const repository = await api.gh('');
   const readRender = async () => {
     const service = await api.render(servicePath);
-    const rows = await api.render(`${servicePath}/env-vars?limit=100`);
-    // More than one page cannot safely be interpreted as a complete configuration.
-    requireThat(rows.length < 100, 'RENDER_ENVIRONMENT_INVENTORY_INCOMPLETE');
+    const rows = [];
+    for (const key of Object.keys(runtimeSettings)) {
+      const envVar = await api.render(`${servicePath}/env-vars/${key}`);
+      requireThat(envVar?.key === key, 'NORMAL_RUNTIME_CONFIGURATION_UNVERIFIED');
+      rows.push({ envVar });
+    }
     validateRender(service, rows);
   };
   await readRender();
   let project = await api.vercel(projectPath);
   validateVercel(project, repository.id);
-  const readVercelVariables = async () => validateVercelVariables(
-    (await api.vercel(`/v10/projects/${targets.vercel.id}/env?decrypt=true`)).envs);
+  const readVercelVariables = async () => {
+    const rows = (await api.vercel(`/v10/projects/${targets.vercel.id}/env?decrypt=false`)).envs;
+    requireThat(Array.isArray(rows) && !rows.some(row =>
+      /(?:BIRDAPIKEY|YOCOSECRETKEY|YOCOWEBHOOKSECRET)$/.test(String(row.key).replace(/[^A-Za-z0-9]/g, '').toUpperCase())),
+    'RUNTIME_CREDENTIAL_IN_FRONTEND_CONFIGURATION');
+    const values = [];
+    for (const key of ['NEXT_PUBLIC_ABP_API_URL', 'NEXT_PUBLIC_DEFAULT_TENANT_NAME']) {
+      const selected = rows.filter(row => row.key === key && row.target?.includes('production'));
+      requireThat(selected.length === 1 && /^[A-Za-z0-9_-]{1,128}$/.test(selected[0].id ?? '') &&
+        !selected[0].gitBranch, 'VERCEL_PUBLIC_BUILD_CONFIGURATION_UNVERIFIED');
+      const value = await api.vercel(`/v1/projects/${targets.vercel.id}/env/${selected[0].id}`);
+      requireThat(value.key === key && value.id === selected[0].id, 'VERCEL_PUBLIC_BUILD_CONFIGURATION_UNVERIFIED');
+      values.push(value);
+    }
+    validateVercelVariables(values);
+  };
+  const readProtectedReadiness = async sha => {
+    try { validateReadiness(await api.readiness(sha), sha); }
+    catch { throw new ReleaseFailure('PROTECTED_RUNTIME_READINESS_FAILED'); }
+  };
   await readVercelVariables();
   // A verified predecessor remains authoritative after the first rollout. On the
   // first rollout, select the current exact provider pair automatically. On a
@@ -831,6 +864,11 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   requireThat(live.length === 1 && (live[0].id === baselineProof.renderDeployId ||
     (live[0].id === prior.renderDeployId && live[0].commit?.id === qualified.sha)), 'RENDER_BASELINE_DRIFT');
   validateHealth(await api.health(), live[0].commit.id);
+  // First release: the legacy baseline has no readiness route. Its exact healthy
+  // revision, normal configuration and verified rollback pair are still required.
+  // Never interpret a failed/404 readiness response as bootstrap authorization.
+  // Once a verified production predecessor exists, require readiness pre-mutation.
+  if (plan.baseline) await readProtectedReadiness(live[0].commit.id);
   requireThat(renderDeploys.every(x => !activeRender.has(x.status) || x.id === prior.renderDeployId),
     'CONCURRENT_RENDER_DEPLOYMENT');
   let render = prior.renderDeployId ? renderDeploys.find(x => x.id === prior.renderDeployId) : undefined;
@@ -885,6 +923,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   requireThat(render.commit?.id === qualified.sha, 'RENDER_SOURCE_PROVENANCE_MISMATCH');
   await readRender();
   validateHealth(await api.health(), qualified.sha);
+  await readProtectedReadiness(qualified.sha);
   report({ phase: 'render-ready', renderDeployId: render.id, sha: render.commit.id });
 
   await guard();
@@ -925,6 +964,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   await guard();
   await readRender();
   validateHealth(await api.health(), qualified.sha);
+  await readProtectedReadiness(qualified.sha);
   const finalRender = await deploymentHistory(api, 'render');
   requireThat(finalRender.filter(x => x.status === 'live').length === 1 &&
     finalRender.some(x => x.id === render.id && x.status === 'live' && x.commit?.id === qualified.sha) &&

@@ -1,7 +1,7 @@
 {
-  "version": 3,
-  "epoch": "aqgreen-mvp-github-evidence-v1",
-  "profile": "recovery-only",
+  "version": 4,
+  "epoch": "aqgreen-mvp-oidc-readiness-v1",
+  "profile": "normal-integrated",
   "baseline": "automatic",
   "authorization": {
     "kind": "github-evidence-v1",
@@ -20,7 +20,7 @@
     "branch": "main",
     "executorRepository": "aqua-lifestyle/aqua-deployment",
     "environment": "production-release",
-    "profile": "recovery-only",
+    "profile": "normal-integrated",
     "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
     "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
     "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY"

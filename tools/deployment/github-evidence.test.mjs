@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fixture, source, previous, fixtureNow, zipFixture, runnerEnv } from './fixtures/provider.mjs';
-import { standingPolicy, policyDigest, evidencePlan, clients, admissionJobName } from './release-control.mjs';
+import { standingPolicy, policyDigest, evidencePlan, clients, admissionJobName, releaseKey } from './release-control.mjs';
 import { approvedInventory, approvedInventoryBytes, inventoryDigest, verifyApprovedDefinitions,
   verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission, gitSourceDigest, sha256 } from './github-evidence.mjs';
 const now = () => fixtureNow;
@@ -164,6 +164,18 @@ test('complete authenticated history rejects a deployed SHA even under another C
   for(const candidate of [f.state.candidate,{...f.state.candidate,ciRunId:'999',ciRunAttempt:2}])
     await assert.rejects(evidencePlan(f.api,candidate,f.state.policy),/SOURCE_ALREADY_VERIFIED/);
   assert.equal(f.state.providerCalls,0);
+});
+
+test('verified production predecessor cannot fall back to legacy health when protected readiness is unavailable',async()=>{
+  const f=historyFixture(),prior=f.rows[0],render=f.api.render,vercel=f.api.vercel;
+  f.state.plan=await evidencePlan(f.api,f.state.candidate,f.state.policy);f.state.baselineRows=f.rows;
+  f.state.renderRows[0].id='dep-prior';f.state.project.targets.production.id='dpl_Prior';
+  f.api.render=async(route,body)=>route.endsWith('/deploys/dep-prior')?f.state.renderRows[0]:render(route,body);
+  f.api.vercel=async(route,body)=>route.endsWith('/dpl_Prior')?{id:'dpl_Prior',projectId:f.state.project.id,
+    target:'production',readyState:'READY',gitSource:{sha:previous,repoId:'789'},
+    meta:{aquaReleaseIdentity:releaseKey(prior),aquaCiRunId:prior.ciRunId,aquaCiRunAttempt:String(prior.ciRunAttempt)}}:vercel(route,body);
+  let calls=0;f.api.readiness=async sha=>{assert.equal(sha,previous);calls++;throw Error('unavailable');};
+  await assert.rejects(f.execute(),/PROTECTED_RUNTIME_READINESS_FAILED/);assert.equal(calls,1);assert.equal(f.posts.length,0);
 });
 
 test('concurrent active runs cannot both admit; serialized duplicate observes prior completion', async () => {

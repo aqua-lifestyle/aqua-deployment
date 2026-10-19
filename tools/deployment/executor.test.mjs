@@ -53,7 +53,7 @@ for(const [label,mutate] of [
   ['wrong main',f=>{f.state.main=previous;}],
   ['missing CI check',f=>{f.state.jobCount=16;}],
   ['missing environment',f=>{f.state.environment={};}],
-  ['restricted operation enabled',f=>{f.state.vars.find(x=>x.envVar.key==='Bird__Enabled').envVar.value='true';}],
+  ['restricted operation enabled',f=>{f.state.vars.find(x=>x.envVar.key==='App__FinancialOperations__Enabled').envVar.value='true';}],
   ['redirected provider target',f=>{f.state.service.id='srv-untrusted';}],
   ['unlinked frontend',f=>{f.state.project.link=null;}],
   ['migration',f=>{f.state.files=[{filename:'EF/Migrations/Unauthorized.cs'}];}],

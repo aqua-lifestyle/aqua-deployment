@@ -7,6 +7,7 @@ import {generateKeyPairSync, sign, randomUUID} from 'node:crypto';
 import {deploy,createAuditWriter,freezeCandidate,validateRun,targets,standingPolicy,requiredJobs,admissionJobName} from '../release-control.mjs';
 import {attestationContractVersion,mandatoryInventoryDigest} from '../authorization-attestation.mjs';
 import {approvedInventory,inventoryDigest,sha256,validateArtifact,createGitHubAdmission} from '../github-evidence.mjs';
+import {runtimeSettings} from '../runtime-readiness.mjs';
 export const fixtureNow = Date.UTC(2026,9,19,8);
 export function zipFixture(filename, bytes, extra = {}) {
   const dir = mkdtempSync(join(tmpdir(),'aqua-zip-fixture-'));
@@ -46,18 +47,17 @@ const service = () => ({ id: targets.render.id, name: targets.render.name,
 const heldKeys = ['App__WeeklyCommissions__Enabled', 'App__EntryMonthlyObligations__Enabled',
   'App__FinancialOperations__Enabled', 'App__BackgroundJobs__Enabled', 'AQGreenV2Demo__Enabled',
   'AQGreenV2Pilot__Enabled', 'App__AQGreenV2__Commissioning__Enabled', 'SEED_DEMO_DATA', 'Bird__Enabled'];
-const variables = () => Object.entries({ ASPNETCORE_ENVIRONMENT: 'Production',
-  App__Recovery__Enabled: 'true', ...Object.fromEntries(heldKeys.map(k => [k, 'false'])) })
+const variables = () => Object.entries(Object.fromEntries(Object.entries(runtimeSettings).map(([key,allowed])=>[key,allowed[0]])))
   .map(([key, value]) => ({ envVar: { key, value } }));
 const project = () => ({ id: targets.vercel.id, name: targets.vercel.name, accountId: targets.vercel.teamId,
   rootDirectory: targets.vercel.rootDirectory, nodeVersion: '24.x', autoAssignCustomDomains: true,
   link: { type: 'github', repoId: '789', repo: 'aqua-lifestyle', org: 'aqua-lifestyle', productionBranch: 'main' },
   targets: { production: { id: 'dpl_Baseline' } } });
 const publicVars = () => [
-  { key: 'NEXT_PUBLIC_ABP_API_URL', value: targets.vercel.publicApiUrl, target: ['production'] },
-  { key: 'NEXT_PUBLIC_DEFAULT_TENANT_NAME', value: 'Default', target: ['production'] }
+  { id: 'public-api', key: 'NEXT_PUBLIC_ABP_API_URL', value: targets.vercel.publicApiUrl, target: ['production'] },
+  { id: 'public-tenant', key: 'NEXT_PUBLIC_DEFAULT_TENANT_NAME', value: 'Default', target: ['production'] }
 ];
-const health = sha => ({ status: 200, recovery: 'true', body: { result: { status: 'Healthy',
+const health = sha => ({ status: 200, recovery: null, body: { result: { status: 'Healthy',
   buildId: sha, environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy',
   dataProtectionKeyStoreStatus: 'Healthy' } } });
 const immediate = { attempts: 3, pause: async () => {} };
@@ -164,7 +164,7 @@ function fixture() {
         state.newRender = { id: 'dep-new', status: 'build_in_progress', commit: { id: source } };
         state.renderRows.unshift(state.newRender);
         return structuredClone(state.newRender); }
-      if (route.endsWith('/env-vars?limit=100')) return state.vars;
+      if (route.includes('/env-vars/')) return state.vars.find(x=>x.envVar.key===route.split('/env-vars/')[1])?.envVar;
       if (route.endsWith('/deploys?limit=100')) return state.renderRows.map(deploy => ({ deploy }));
       if (route.endsWith('/deploys/dep-baseline')) return state.renderRows.find(x => x.id === 'dep-baseline');
       if (route.endsWith('/deploys/dep-new')) {
@@ -184,6 +184,7 @@ function fixture() {
         return structuredClone(state.newVercel); }
       if (route.startsWith('/v9/')) return state.project;
       if (route.startsWith('/v10/')) return { envs: state.publicVars };
+      if (route.startsWith('/v1/projects/')) return state.publicVars.find(row=>route.endsWith('/'+row.id));
       if (route.startsWith('/v6/')) return { deployments: state.vercelRows };
       if (route.endsWith('/dpl_Baseline')) return { id: 'dpl_Baseline', projectId: targets.vercel.id,
         target: 'production', readyState: 'READY', gitSource: { sha: previous, repoId: '789' } };
@@ -196,6 +197,9 @@ function fixture() {
       throw new Error('Unexpected Vercel fixture route');
     },
     health: async () => health(state.newRender?.status === 'live' ? source : previous),
+    readiness: async sha => ({status:200,body:{contract:'aqua.production-readiness',version:1,status:'Ready',
+      buildId:sha,birdConfiguration:'StartupValidated',yocoConfiguration:'StartupValidated',
+      profile:'normal-integrated',restrictedOperations:'ConfigurationHeld'}}),
     web: async () => {}
   };
   const sourceApi=api.gh;

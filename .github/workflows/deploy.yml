@@ -125,6 +125,12 @@ jobs:
 
   production:
     name: Unattended recovery release
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+      id-token: write
     needs: [candidate, admission]
     if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' }}
     runs-on: ubuntu-latest
