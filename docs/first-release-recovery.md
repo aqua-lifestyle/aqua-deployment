@@ -85,6 +85,10 @@ or incomplete readbacks before provider credentials become available. Production
 revalidates the same readback and complete authenticated release history before any
 provider read. Live provider metadata must match the pinned Render deployment/SHA,
 Vercel project/team/root, READY production artifact and its exact domain alias.
+Domain-to-deployment binding comes from authenticated
+`GET /v2/deployments/{exactDeploymentId}/aliases`, not the deployment's embedded
+`alias` field, which can omit custom domains. Missing, duplicate, redirected,
+conflicting or unavailable authoritative mappings deny without fallback.
 The fixed project-domain GET must also show the intended domain verified for
 that exact project, without a redirect. No domain verification mutation is performed.
 IDs and eligibility are rechecked before Render, after Render before frontend uploads,
@@ -99,7 +103,8 @@ still blocks a new dispatch. Existing same-run attempt reconciliation retains th
 exact baseline IDs, provenance classification and readback digest; contradictory or
 uncertain operations deny. No automatic rollback or retry has been added.
 After a receipted Vercel operation, an alias may have moved to that exact replacement
-ID; only the validated same-run receipt permits this normal reconciliation state.
+ID; only the validated same-run receipt plus the authoritative alias mapping for
+that exact replacement permits this normal reconciliation state.
 The retained baseline and verified project-domain identity still cannot change.
 
 ## Controlled recovery, separately authorized
@@ -126,7 +131,7 @@ loss. This code does not invent that limit or commission another restore.
 Validation uses the existing provider substitutes and receipt/history harness:
 
 ```bash
-node --test tools/deployment/first-release-recovery.test.mjs tools/deployment/executor.test.mjs tools/deployment/runtime-readiness.test.mjs tools/deployment/github-evidence.test.mjs tools/deployment/qualification-only.test.mjs
+node --test tools/deployment/recovery-alias.test.mjs tools/deployment/first-release-recovery.test.mjs tools/deployment/executor.test.mjs tools/deployment/runtime-readiness.test.mjs tools/deployment/github-evidence.test.mjs tools/deployment/qualification-only.test.mjs
 ```
 
 Local/CI results do not demonstrate live artifact availability, operator evidence,

@@ -136,6 +136,7 @@ function authorizationFor(qualified, edit = x => x) {
 function fixture() {
   const state = { service: service(), vars: variables(), project: project(),
     domain: {name:legacyRecoveryPair.productionDomain,projectId:targets.vercel.id,verified:true},
+    recoveryAliases: {aliases:[{alias:legacyRecoveryPair.productionDomain}]},
     main: source, jobCount: requiredJobs.length, files: [], renderRows: [
       { id: 'dep-db8av3dg1s2s739m6sgg', status: 'live', commit: { id: previous } }], vercelRows: [],
     candidate: qualified(), policy: policy(), env: runnerEnv(), receiptRows: undefined, baselineRows: undefined,
@@ -217,6 +218,7 @@ function fixture() {
           projectId: targets.vercel.id, meta: body.meta, build:body.build, env:body.env, projectSettings:body.projectSettings };
         return structuredClone(state.newVercel); }
       if (route === `/v9/projects/${targets.vercel.id}/domains/${legacyRecoveryPair.productionDomain}`) return state.domain;
+      if (route === `/v2/deployments/${legacyRecoveryPair.vercelDeployId}/aliases`) return state.recoveryAliases;
       if (route.startsWith('/v9/')) return state.project;
       if (route.startsWith('/v10/')) return { envs: state.publicVars };
       if (route.startsWith('/v1/projects/')) return state.publicVars.find(row=>route.endsWith('/'+row.id));

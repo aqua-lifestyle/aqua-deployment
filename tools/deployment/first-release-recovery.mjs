@@ -60,19 +60,30 @@ export function validateFirstReleaseRecovery(readback, candidate, policy, now = 
     frontendSourceProvenance: 'UNVERIFIED_LEGACY', ...legacyRecoveryPair };
 }
 
-export function validateLegacyProviderPair(proof, render, web, project, domain, acknowledgedReplacementId) {
+export function validateLegacyProviderPair(proof, render, web, project, domain, acknowledgedReplacementId, aliasEvidence) {
   // After an acknowledged Vercel operation, the alias may legitimately have
   // moved. Only the exact ID from the validated same-run receipt permits this;
   // never select a different baseline or accept an unreceipted replacement.
   const moved = /^dpl_[A-Za-z0-9]+$/.test(acknowledgedReplacementId ?? '') &&
     acknowledgedReplacementId !== proof.vercelDeployId &&
     project.targets?.production?.id === acknowledgedReplacementId;
+  const aliasDeploymentId = moved ? acknowledgedReplacementId : proof.vercelDeployId;
+  // Deployment.alias is not authoritative for custom domains. This response
+  // must come from GET /v2/deployments/<exact ID>/aliases on the fixed team.
+  // Never fall back to embedded aliases, custom metadata or a project target.
+  const aliases = aliasEvidence?.aliases;
+  const matches = Array.isArray(aliases) ? aliases.filter(a => a?.alias === proof.productionDomain) : [];
+  const mapped = aliasEvidence?.deploymentId === aliasDeploymentId && Array.isArray(aliases) &&
+    aliases.every(a => a && typeof a.alias === 'string') && matches.length === 1 &&
+    !matches[0].redirect &&
+    (matches[0].deploymentId === undefined || matches[0].deploymentId === aliasDeploymentId) &&
+    (matches[0].projectId === undefined || matches[0].projectId === proof.vercelProjectId);
   check(render.id === proof.renderDeployId && render.commit?.id === proof.renderSha &&
     ['live', 'deactivated'].includes(render.status) && project.id === proof.vercelProjectId &&
     project.accountId === proof.vercelTeamId && project.rootDirectory === proof.rootDirectory &&
     web.id === proof.vercelDeployId && web.projectId === proof.vercelProjectId &&
     web.target === 'production' && web.readyState === 'READY' && !web.aliasError &&
-    Array.isArray(web.alias) && (web.alias.includes(proof.productionDomain) || moved) &&
+    mapped &&
     domain?.name === proof.productionDomain && domain.projectId === proof.vercelProjectId &&
     domain.verified === true && !domain.redirect,
     'FIRST_RELEASE_RECOVERY_PROVIDER_IDENTITY_MISMATCH');
