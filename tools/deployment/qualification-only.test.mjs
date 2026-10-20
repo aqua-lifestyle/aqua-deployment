@@ -46,22 +46,22 @@ test('inert source fetch accepts validated qualification-only requests and rejec
 
 test('candidate artifacts and admission receipts bind qualification purpose in both directions', async () => {
   const f = fixture(), production = f.state.candidate;
-  const qualification = freezeCandidate(production, runnerEnv(), standingPolicy, true);
+  const qualification = freezeCandidate(production, runnerEnv(), f.state.policy, true);
   const bytes = Buffer.from('inert source archive');
   const artifact = { ...qualification, sourceSha256: sha256(bytes) };
   verifyCandidate(artifact, qualification, bytes, bytes);
   assert.throws(() => verifyCandidate(artifact, production, bytes, bytes), /CANDIDATE_PURPOSE_MISMATCH/);
   assert.throws(() => verifyCandidate({ ...artifact, qualificationOnly: false }, qualification, bytes, bytes), /CANDIDATE_PURPOSE_MISMATCH/);
-  const evidence = await verifyGitHubEvidence(f.api, production, standingPolicy, f.readSourceDigest, now);
-  const receipt = createGitHubAdmission(qualification, standingPolicy, evidence, now);
+  const evidence = await verifyGitHubEvidence(f.api, production, f.state.policy, f.readSourceDigest, now);
+  const receipt = createGitHubAdmission(qualification, f.state.policy, evidence, now);
   assert.equal(receipt.version, 2); assert.equal(receipt.qualificationOnly, true);
-  validateGitHubAdmission(receipt, qualification, standingPolicy, evidence, now);
-  assert.throws(() => validateGitHubAdmission(receipt, production, standingPolicy, evidence, now), /ADMISSION_RECEIPT_MISMATCH/);
-  const productionReceipt = createGitHubAdmission(production, standingPolicy, evidence, now);
+  validateGitHubAdmission(receipt, qualification, f.state.policy, evidence, now);
+  assert.throws(() => validateGitHubAdmission(receipt, production, f.state.policy, evidence, now), /ADMISSION_RECEIPT_MISMATCH/);
+  const productionReceipt = createGitHubAdmission(production, f.state.policy, evidence, now);
   assert.notEqual(receipt.authorizationId, productionReceipt.authorizationId);
-  assert.throws(() => validateGitHubAdmission(productionReceipt, qualification, standingPolicy, evidence, now), /ADMISSION_RECEIPT_MISMATCH/);
-  assert.throws(() => validateGitHubAdmission({ ...receipt, qualificationOnly: false }, production, standingPolicy, evidence, now), /ADMISSION_RECEIPT_MISMATCH/);
-  assert.throws(() => validateGitHubAdmission({ ...receipt, version: 1 }, qualification, standingPolicy, evidence, now), /ADMISSION_RECEIPT_MISMATCH/);
+  assert.throws(() => validateGitHubAdmission(productionReceipt, qualification, f.state.policy, evidence, now), /ADMISSION_RECEIPT_MISMATCH/);
+  assert.throws(() => validateGitHubAdmission({ ...receipt, qualificationOnly: false }, production, f.state.policy, evidence, now), /ADMISSION_RECEIPT_MISMATCH/);
+  assert.throws(() => validateGitHubAdmission({ ...receipt, version: 1 }, qualification, f.state.policy, evidence, now), /ADMISSION_RECEIPT_MISMATCH/);
 });
 
 test('qualification-only candidates cannot enter either deployment guard or make any API call', async () => {
@@ -150,7 +150,7 @@ test('a successful qualification with production skipped never becomes a deploye
     ].map(job => ({ ...job, status: 'completed', run_id: 455, run_attempt: 1 })) };
     return read(route);
   };
-  const plan = await evidencePlan(f.api, q, standingPolicy);
+  const plan = await evidencePlan(f.api, q, f.state.policy);
   assert.equal(plan.baseline, null); assert.deepEqual(plan.verifiedReleases, []);
   assert.equal(f.state.providerCalls, 0);
 });

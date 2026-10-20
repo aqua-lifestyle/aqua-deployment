@@ -1,8 +1,8 @@
 # Normal production integrations and OIDC readiness
 
 Owner authorization permits Bird/Yoco credentials only in the production API
-runtime, with startup validation preserved. Policy v5, epoch
-aqgreen-mvp-vercel-files-v1, selects normal-integrated explicitly. Old receipts
+runtime, with startup validation preserved. Policy v6, epoch
+aqgreen-mvp-first-release-recovery-v1, selects normal-integrated explicitly. Old receipts
 and qualification-only receipts cannot authorize this policy or a production run.
 
 Only the environment-bound production job has id-token: write. It requests a fresh
@@ -32,7 +32,8 @@ evidence on the deployment itself denies; live provider readback remains unquali
 The legacy API has no readiness endpoint. With no verified production predecessor
 (established from complete authenticated history), keep the exact healthy live
 revision and non-secret restricted configuration checks, verified compatible
-rollback source pair, migration rejection and frozen CI/run evidence. This is not
+rollback pair (or the [pinned retained-artifact first-release exception](first-release-recovery.md)
+with approved operator evidence), migration rejection and frozen CI/run evidence. This is not
 a successful detailed-readiness claim for the old API. After Render deploys the
 exact source, authenticated readiness is mandatory before any Vercel POST and again
 before recording success. A 404, wrong SHA, unavailable auth or missing status
@@ -42,7 +43,7 @@ with production skipped never create a predecessor.
 
 The [Vercel file-source correction](vercel-file-source.md) supports the existing
 unlinked project, while preserving fail-closed predecessor validation. The old
-metadata-only frontend source still cannot authenticate a rollback baseline.
+metadata-only frontend source is never authenticated by the first-release exception.
 This task does not fabricate a predecessor, reconnect Git or deploy a bootstrap release. Database
 privileges, production backup/rollback qualification and provider credentials remain
 separate prerequisites. Configuration does not prove independent IAM isolation.

@@ -6,7 +6,9 @@ import {execFileSync} from 'node:child_process';
 import {generateKeyPairSync, sign, randomUUID} from 'node:crypto';
 import {deploy,createAuditWriter,freezeCandidate,validateRun,targets,standingPolicy,requiredJobs,admissionJobName} from '../release-control.mjs';
 import {attestationContractVersion,mandatoryInventoryDigest} from '../authorization-attestation.mjs';
-import {approvedInventory,inventoryDigest,sha256,validateArtifact,createGitHubAdmission} from '../github-evidence.mjs';
+import {approvedInventory,inventoryDigest,sha256,objectDigest,validateArtifact,createGitHubAdmission} from '../github-evidence.mjs';
+import {legacyRecoveryPair} from '../first-release-recovery.mjs';
+const recoveryRef='https://github.com/aqua-lifestyle/aqua-deployment/blob/'+'f'.repeat(40)+'/governance/synthetic-readback.json';
 import {runtimeSettings} from '../runtime-readiness.mjs';
 export const fixtureNow = Date.UTC(2026,9,19,8);
 export function zipFixture(filename, bytes, extra = {}) {
@@ -42,7 +44,7 @@ export function frontendFixtureArchive(files = frontendFixtureFiles) {
   } finally {rmSync(dir,{recursive:true,force:true});}
 }
 const frontendSource=frontendFixtureArchive();
-const source=frontendSource.sha, previous = 'b'.repeat(40);
+const source=frontendSource.sha, previous = '1251fb82979e18be53d1d0e7f5c6fab2d0c50a58';
 const run = () => ({ id: 123, run_attempt: 1, repository: { full_name: targets.repository },
   head_repository: { full_name: targets.repository }, event: 'push', head_branch: 'main',
   head_sha: source, path: '.github/workflows/ci.yml', name: 'Continuous integration',
@@ -59,7 +61,7 @@ const runnerEnv = (attempt = 1) => ({ GITHUB_REPOSITORY: targets.executor.reposi
   GITHUB_RUN_ID: '456', GITHUB_RUN_ATTEMPT: String(attempt), GITHUB_REF: 'refs/heads/main',
   GITHUB_WORKFLOW_REF: `${targets.executor.repository}/.github/workflows/deploy.yml@refs/heads/main`,
   RENDER_API_KEY: 'synthetic-render-key', VERCEL_TOKEN: 'synthetic-vercel-token' });
-const policy = () => ({ ...standingPolicy });
+const policy = () => structuredClone(standingPolicy);
 const installedGovernance = JSON.parse(readFileSync(new URL('./installed-main-governance.json', import.meta.url)));
 const governance = () => structuredClone(installedGovernance.rules);
 const service = () => ({ id: targets.render.id, name: targets.render.name,
@@ -75,7 +77,7 @@ const variables = () => Object.entries(Object.fromEntries(Object.entries(runtime
 const project = () => ({ id: targets.vercel.id, name: targets.vercel.name, accountId: targets.vercel.teamId,
   rootDirectory: targets.vercel.rootDirectory, nodeVersion: '24.x', autoAssignCustomDomains: true,
   link: null,
-  targets: { production: { id: 'dpl_Baseline' } } });
+  targets: { production: { id: 'dpl_EwGB3apX3P5JnU5KfG3rLzn21Kgf' } } });
 const publicVars = () => [
   { id: 'public-api', key: 'NEXT_PUBLIC_ABP_API_URL', value: targets.vercel.publicApiUrl, target: ['production'] },
   { id: 'public-tenant', key: 'NEXT_PUBLIC_DEFAULT_TENANT_NAME', value: 'Default', target: ['production'] }
@@ -133,8 +135,9 @@ function authorizationFor(qualified, edit = x => x) {
 
 function fixture() {
   const state = { service: service(), vars: variables(), project: project(),
+    domain: {name:legacyRecoveryPair.productionDomain,projectId:targets.vercel.id,verified:true},
     main: source, jobCount: requiredJobs.length, files: [], renderRows: [
-      { id: 'dep-baseline', status: 'live', commit: { id: previous } }], vercelRows: [],
+      { id: 'dep-db8av3dg1s2s739m6sgg', status: 'live', commit: { id: previous } }], vercelRows: [],
     candidate: qualified(), policy: policy(), env: runnerEnv(), receiptRows: undefined, baselineRows: undefined,
     rules: governance(), ruleset: structuredClone(installedGovernance.ruleset),
     environment: environment(), branches: branches(),
@@ -143,6 +146,14 @@ function fixture() {
       user: { login: 'author', id: 1 }, merged_at: '2026-10-16T10:00:00Z' },
     publicVars: publicVars(), newRender: undefined, newVercel: undefined, renderReads: 0, vercelReads: 0,
     providerCalls: 0, uploads: [], frontendArchive: frontendSource.archive };
+  state.recoveryReadback = {contract:'aqua.first-release-recovery-readback',version:1,status:'VERIFIED',observation:{
+    observedAt:new Date(fixtureNow-1000).toISOString(),expiresAt:new Date(fixtureNow+3600_000).toISOString(),
+    observer:{login:'Xolani-M',id:86495928},candidateSha:source,baseline:structuredClone(legacyRecoveryPair),
+    renderArtifact:{retrievable:true,rollbackEligible:true,evidenceReference:recoveryRef},
+    vercelArtifact:{retrievable:true,rollbackEligible:true,evidenceReference:recoveryRef},
+    compatibility:{schemaAndData:true,configuration:true,evidenceReference:recoveryRef}}};
+  state.policy.firstReleaseRecovery.evidenceSha256=objectDigest(state.recoveryReadback);
+  state.candidate=freezeCandidate(ciQualified(),runnerEnv(),state.policy);
   state.report={version:1,context:{kind:'ci',repository:targets.repository,sha:source,runId:'123',runAttempt:1},
     inventorySha256:inventoryDigest,exitCode:0,
     results:approvedInventory.tests.map(t=>({...t,outcome:'passed',executions:1})),
@@ -189,7 +200,7 @@ function fixture() {
         return structuredClone(state.newRender); }
       if (route.includes('/env-vars/')) return state.vars.find(x=>x.envVar.key===route.split('/env-vars/')[1])?.envVar;
       if (route.endsWith('/deploys?limit=100')) return state.renderRows.map(deploy => ({ deploy }));
-      if (route.endsWith('/deploys/dep-baseline')) return state.renderRows.find(x => x.id === 'dep-baseline');
+      if (route.endsWith('/deploys/dep-db8av3dg1s2s739m6sgg')) return state.renderRows.find(x => x.id === 'dep-db8av3dg1s2s739m6sgg');
       if (route.endsWith('/deploys/dep-new')) {
         if (++state.renderReads > 1) {
           state.newRender.status = 'live';
@@ -205,12 +216,13 @@ function fixture() {
         state.newVercel = { id: 'dpl_New', readyState: 'BUILDING', target: 'production',
           projectId: targets.vercel.id, meta: body.meta, build:body.build, env:body.env, projectSettings:body.projectSettings };
         return structuredClone(state.newVercel); }
+      if (route === `/v9/projects/${targets.vercel.id}/domains/${legacyRecoveryPair.productionDomain}`) return state.domain;
       if (route.startsWith('/v9/')) return state.project;
       if (route.startsWith('/v10/')) return { envs: state.publicVars };
       if (route.startsWith('/v1/projects/')) return state.publicVars.find(row=>route.endsWith('/'+row.id));
       if (route.startsWith('/v6/')) return { deployments: state.vercelRows };
-      if (route.endsWith('/dpl_Baseline')) return { id: 'dpl_Baseline', projectId: targets.vercel.id,
-        target: 'production', readyState: 'READY', gitSource: { sha: previous, repoId: '789' } };
+      if (route.endsWith('/dpl_EwGB3apX3P5JnU5KfG3rLzn21Kgf')) return { id: 'dpl_EwGB3apX3P5JnU5KfG3rLzn21Kgf', projectId: targets.vercel.id,
+        target: 'production', readyState: 'READY', alias:['www.aqualifestyleclub.co.za'], gitSource: { sha: previous, repoId: '789' } };
       if (route.endsWith('/dpl_New')) {
         if (++state.vercelReads > 1) {
           state.newVercel.readyState = 'READY'; state.project.targets.production.id = 'dpl_New';
@@ -266,7 +278,8 @@ function fixture() {
     return deploy(api, state.candidate, state.policy,
       createAuditWriter(state.candidate, r => reports.push(r)), { ...immediate, env: state.env,
         admissionReceipt,readSourceDigest,now:()=>fixtureNow,frontendArchive:state.frontendArchive,
-        evidencePlan: state.plan ?? {policySha256:state.candidate.policySha256,verifiedReleases:[],baseline:null,resume:null,resumeChain:[]},
+        evidencePlan: state.plan ?? {policySha256:state.candidate.policySha256,verifiedReleases:[],baseline:null,resume:null,resumeChain:[],firstReleaseRecoveryEvidenceSha256:state.policy.firstReleaseRecovery.evidenceSha256},
+        recoveryReadback:state.recoveryReadback,
         receiptRows: state.receiptRows, baselineRows: state.baselineRows });
   };
   return { state, api, posts, reports, execute, authorizationFor,readSourceDigest };

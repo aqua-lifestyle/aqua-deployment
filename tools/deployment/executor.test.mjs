@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {objectDigest} from './github-evidence.mjs';
 import {fixture,qualified,runnerEnv,source,previous,run,jobs,fixtureNow,frontendFixtureFiles} from './fixtures/provider.mjs';
 import {clients,freezeCandidate,validatePolicy,verifyCandidate,targets,standingPolicy,qualify,
   evidencePlan,releaseKey,validateLegacyHistory,main,validateResumeReceipt,validateBaselineReceipt,
@@ -214,6 +215,8 @@ test('real Git source passes candidate, admission and deployment entries without
     const env={...runnerEnv(),GITHUB_SHA:executorSha,GITHUB_WORKFLOW_SHA:executorSha,GITHUB_EVENT_NAME:'workflow_dispatch',
       GITHUB_EVENT_PATH:event,SOURCE_DIR:repo,CANDIDATE_DIR:candidate,GITHUB_OUTPUT:join(dir,'outputs'),RELEASE_REPORT:join(dir,'report.jsonl')};
     const f=fixture();f.state.candidate={...f.state.candidate,sha,executorSha};f.state.report.context.sha=sha;
+    f.state.recoveryReadback.observation.candidateSha=sha;
+    f.state.policy.firstReleaseRecovery.evidenceSha256=objectDigest(f.state.recoveryReadback);
     const transform=value=>value===source?sha:Array.isArray(value)?value.map(transform):
       value&&typeof value==='object'?Object.fromEntries(Object.entries(value).map(([k,v])=>[k,transform(v)])):value;
     for(const key of ['gh','render','vercel','health']){const original=f.api[key];f.api[key]=async(...args)=>transform(await original(...args));}
@@ -224,12 +227,13 @@ test('real Git source passes candidate, admission and deployment entries without
     f.api.executor=async route=>route==='/git/ref/heads/main'?{object:{sha:executorSha}}:route==='/actions/runs/456'?current:route.startsWith('/actions/workflows/deploy.yml/runs?')?
       {total_count:1,workflow_runs:[current]}:executorApi(route);
     const publicEnv={...env};delete publicEnv.RENDER_API_KEY;delete publicEnv.VERCEL_TOKEN;
-    const dependencies={api:f.api,now:()=>fixtureNow,readSourceDigest:f.readSourceDigest};
+    const dependencies={api:f.api,now:()=>fixtureNow,readSourceDigest:f.readSourceDigest,
+      policy:f.state.policy,recoveryReadback:f.state.recoveryReadback};
     await main(publicEnv,{mode:'candidate',...dependencies});assert.equal(f.posts.length,0);
     const manifest=JSON.parse(readFileSync(join(candidate,'candidate.json')));
     assert.equal(manifest.sha,sha);assert.equal(manifest.executorSha,executorSha);
     assert.ok(readFileSync(join(candidate,'source.tar')).length>0);
-    await assert.rejects(main(publicEnv,{mode:'admit',api:f.api,now:()=>fixtureNow}),/MANDATORY_SOURCE/);
+    await assert.rejects(main(publicEnv,{mode:'admit',api:f.api,policy:f.state.policy,now:()=>fixtureNow}),/MANDATORY_SOURCE/);
     assert.equal(f.state.providerCalls,0);
     const admissionDir=join(dir,'admission');mkdirSync(admissionDir);
     env.AQUA_ADMISSION_RECEIPT_OUTPUT=join(admissionDir,'admission-receipt.json');
@@ -239,6 +243,9 @@ test('real Git source passes candidate, admission and deployment entries without
     await assert.rejects(main(publicEnv,{mode:'admit',...dependencies}),/MANDATORY_EXECUTION_NOT_QUALIFIED/);
     assert.equal(existsSync(env.AQUA_ADMISSION_RECEIPT_OUTPUT),false);assert.equal(f.state.providerCalls,0);
     f.state.report.results[0].outcome='passed';
+    await assert.rejects(main(publicEnv,{mode:'admit',...dependencies,recoveryReadback:undefined}),
+      /FIRST_RELEASE_RECOVERY_EVIDENCE_CHANGED/);
+    assert.equal(existsSync(env.AQUA_ADMISSION_RECEIPT_OUTPUT),false);assert.equal(f.state.providerCalls,0);
     await main(publicEnv,{mode:'admit',...dependencies});assert.equal(f.posts.length,0);
     assert.equal(f.state.providerCalls,0,'pre-secret admission must not read Render or Vercel');
     await assert.rejects(main({...env,AQUA_ADMISSION_RECEIPT_FILE:join(dir,'missing-receipt.json')},

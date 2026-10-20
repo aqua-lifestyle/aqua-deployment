@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { approvedRecoveryReadback, legacyRecoveryPair, validateFirstReleaseRecovery,
+  validateLegacyProviderPair, FirstReleaseRecoveryDenied } from './first-release-recovery.mjs';
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
 import { approvedBypassReadback, approvedReadbacks, GovernanceReadbackDenied } from './governance-readback.mjs';
 import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody, validateFileDeployment } from './vercel-source.mjs';
@@ -70,9 +72,13 @@ export function policyDigest(policy) {
   const a = policy?.authorization;
   const expectedScope = { repository: targets.repository, branch: 'main', executorRepository: execution.repository, ...targetIdentity,
     frontend: { mode: 'vercel-files-v1', rootDirectory: targets.vercel.rootDirectory, publicBuildInputs: approvedPublicInputs(targets.vercel) } };
-  requireThat(policy?.version === 5 && /^[a-z0-9-]{1,80}$/.test(policy.epoch) &&
+  requireThat(policy?.version === 6 && /^[a-z0-9-]{1,80}$/.test(policy.epoch) &&
     policy.profile === targets.profile && policy.baseline === 'automatic' &&
-    owns(policy, ['version', 'epoch', 'profile', 'baseline', 'authorization', 'scope']) &&
+    owns(policy, ['version', 'epoch', 'profile', 'baseline', 'authorization', 'scope', 'firstReleaseRecovery']) &&
+    owns(policy.firstReleaseRecovery, ['kind', 'baseline', 'evidenceSha256']) &&
+    policy.firstReleaseRecovery.kind === 'pinned-legacy-retained-artifact-v1' &&
+    objectDigest(policy.firstReleaseRecovery.baseline) === objectDigest(legacyRecoveryPair) &&
+    /^[a-f0-9]{64}$/.test(policy.firstReleaseRecovery.evidenceSha256) &&
     owns(a, ['kind', 'approval', 'administrators', 'inventorySourceCommit', 'inventorySha256', 'maxCiAgeSeconds', 'maxAdmissionAgeSeconds']) &&
     a.kind === 'github-evidence-v1' && a.approval === 'trusted-administrator-executor-merge' &&
     a.inventorySha256 === inventoryDigest && shaPattern.test(a.inventorySourceCommit) &&
@@ -508,6 +514,7 @@ export function createAuditWriter(identity, emit) {
   return row => {
     for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt',
       'baselineRenderDeployId', 'baselineVercelDeployId', 'baselineRenderSha', 'baselineVercelSha',
+      'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256',
       'authorizationId', 'evidenceSha256', 'inventorySha256', 'evidenceArtifactId', 'vercelSourceProof'])
       if (row[key] !== undefined) known[key] = row[key];
     emit({ ...row, ...Object.fromEntries(releaseIdentityFields.map(key => [key, identity[key]])), ...known });
@@ -546,7 +553,9 @@ export function validateResumeReceipt(rows, frozen) {
       if (row.phase === `${provider}-requesting`) pending.add(provider);
       if (row.phase === `${provider}-requested` && row[`${provider}DeployId`]) pending.delete(provider);
     }
-    for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt']) {
+    for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt',
+      'baselineRenderDeployId', 'baselineRenderSha', 'baselineVercelDeployId', 'baselineVercelSha',
+      'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256']) {
       if (row[key] === undefined) continue;
       requireThat(known[key] === undefined || known[key] === row[key], 'CONTRADICTORY_RESUME_RECEIPT');
       known[key] = row[key];
@@ -684,6 +693,7 @@ export async function evidencePlan(api, candidate, policy) {
     validateResumeReceipt(rows, candidate);
   }
   return { policySha256: candidate.policySha256, verifiedReleases,
+    firstReleaseRecoveryEvidenceSha256: latest ? null : policy.firstReleaseRecovery.evidenceSha256,
     baseline: latest ? await auditArtifact(api, latest, latest.run_attempt) : null,
     resume: resumeChain.at(-1) ?? null, resumeChain };
 }
@@ -776,7 +786,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   const evidence = await verifyGitHubEvidence(api, qualified, policy, readSource, options.now);
   validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now);
   await validateAdmissionJob(api, qualified);
-  const guard = async () => {
+  let guard = async () => {
     validatePolicy(qualified, options.env ?? process.env, policy);
     await requalify(api, qualified);
     validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now);
@@ -793,6 +803,17 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     plan.resume?.runId === qualified.releaseRunId && plan.resume.runAttempt === qualified.releaseRunAttempt - 1 &&
     plan.resume.sha === (external ? qualified.executorSha : qualified.sha) && options.receiptRows, 'RESUME_RECEIPT_REQUIRED');
   const prior = options.receiptRows ? validateResumeReceipt(options.receiptRows, qualified) : {};
+  const firstRecovery = !plan.baseline ? validateFirstReleaseRecovery(
+    options.recoveryReadback ?? approvedRecoveryReadback, qualified, policy, options.now) : null;
+  requireThat(plan.firstReleaseRecoveryEvidenceSha256 === (firstRecovery?.evidenceSha256 ?? null),
+    'FIRST_RELEASE_RECOVERY_PLAN_MISMATCH');
+  requireThat(!firstRecovery || plan.verifiedReleases.length === 0, 'FIRST_RELEASE_RECOVERY_ALREADY_CONSUMED');
+  const githubGuard = guard;
+  guard = async () => {
+    await githubGuard();
+    if (firstRecovery) validateFirstReleaseRecovery(
+      options.recoveryReadback ?? approvedRecoveryReadback, qualified, policy, options.now);
+  };
   report({ phase: 'evidence-selected', authorizationId: options.admissionReceipt.authorizationId,
     evidenceSha256: options.admissionReceipt.evidenceSha256, inventorySha256: evidence.inventorySha256,
     evidenceArtifactId: evidence.artifact.id });
@@ -800,6 +821,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   requireThat(!prior.vercelSourceProof || objectDigest(prior.vercelSourceProof) === objectDigest(frontend.proof), 'CONTRADICTORY_RESUME_RECEIPT');
   const servicePath = `/services/${targets.render.id}`;
   const projectPath = `/v9/projects/${targets.vercel.id}`;
+  const legacyDomainPath = `${projectPath}/domains/${legacyRecoveryPair.productionDomain}`;
   const repository = await api.gh('');
   const readRender = async () => {
     const service = await api.render(servicePath);
@@ -843,7 +865,10 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     requireThat(!prior.renderDeployId || baselineRow, 'RESUME_BASELINE_RECEIPT_REQUIRED');
     if (baselineRow) {
       baselineProof = { renderDeployId: baselineRow.baselineRenderDeployId, renderSha: baselineRow.baselineRenderSha,
-        vercelDeployId: baselineRow.baselineVercelDeployId, vercelSha: baselineRow.baselineVercelSha };
+        vercelDeployId: baselineRow.baselineVercelDeployId, vercelSha: baselineRow.baselineVercelSha,
+        vercelSourceProvenance: baselineRow.baselineVercelSourceProvenance };
+      requireThat(baselineRow.firstReleaseRecoveryEvidenceSha256 === firstRecovery.evidenceSha256,
+        'FIRST_RELEASE_RECOVERY_RESUME_MISMATCH');
     } else {
       const live = (await deploymentHistory(api, 'render')).filter(row => row.status === 'live');
       requireThat(live.length === 1, 'AUTOMATIC_RENDER_BASELINE_UNVERIFIABLE');
@@ -851,16 +876,23 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       requireThat(/^dpl_[A-Za-z0-9]+$/.test(webId), 'AUTOMATIC_VERCEL_BASELINE_UNVERIFIABLE');
       const web = await api.vercel(`/v13/deployments/${webId}`);
       baselineProof = { renderDeployId: live[0].id, renderSha: live[0].commit?.id,
-        vercelDeployId: webId, vercelSha: web.gitSource?.sha };
+        vercelDeployId: webId, vercelSha: web.gitSource?.sha,
+        vercelSourceProvenance: web.gitSource?.sha ? 'GIT_SOURCE' : 'UNVERIFIED_LEGACY' };
     }
+    requireThat(baselineProof.renderDeployId === firstRecovery.renderDeployId &&
+      baselineProof.renderSha === firstRecovery.renderSha && baselineProof.vercelDeployId === firstRecovery.vercelDeployId,
+      'FIRST_RELEASE_RECOVERY_IDENTITY_MISMATCH');
     requireThat(/^dep-[a-z0-9]+$/.test(baselineProof.renderDeployId) &&
       /^dpl_[A-Za-z0-9]+$/.test(baselineProof.vercelDeployId) &&
-      shaPattern.test(baselineProof.renderSha ?? '') && shaPattern.test(baselineProof.vercelSha ?? ''),
+      shaPattern.test(baselineProof.renderSha ?? '') && (shaPattern.test(baselineProof.vercelSha ?? '') ||
+        (baselineProof.vercelSha === undefined && baselineProof.vercelSourceProvenance === 'UNVERIFIED_LEGACY')),
     'AUTOMATIC_BASELINE_PROVENANCE_UNVERIFIABLE');
   }
   const baselineFields = { baselineRenderDeployId: baselineProof.renderDeployId,
     baselineVercelDeployId: baselineProof.vercelDeployId, baselineRenderSha: baselineProof.renderSha,
-    baselineVercelSha: baselineProof.vercelSha };
+    ...(baselineProof.vercelSha !== undefined ? { baselineVercelSha: baselineProof.vercelSha } : {}),
+    ...(firstRecovery ? { baselineVercelSourceProvenance: baselineProof.vercelSourceProvenance,
+      firstReleaseRecoveryEvidenceSha256: firstRecovery.evidenceSha256 } : {}) };
   report({ phase: 'baseline-selected', ...baselineFields });
   requireThat(baselineProof.renderSha !== qualified.sha && baselineProof.vercelSha !== qualified.sha,
     'SOURCE_ALREADY_DEPLOYED_RETAIN_ORIGINAL_CI_PROVENANCE');
@@ -871,9 +903,11 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   requireThat(baseline.id === baselineProof.renderDeployId && baseline.commit?.id === baselineProof.renderSha &&
     ['live', 'deactivated'].includes(baseline.status), 'ROLLBACK_BASELINE_REVISION_UNAVAILABLE');
   const oldWeb = await api.vercel(`/v13/deployments/${baselineProof.vercelDeployId}`);
+  if (firstRecovery) validateLegacyProviderPair(firstRecovery, baseline, oldWeb, project, await api.vercel(legacyDomainPath), prior.vercelDeployId);
   requireThat(oldWeb.id === baselineProof.vercelDeployId && oldWeb.projectId === targets.vercel.id &&
     oldWeb.target === 'production' && oldWeb.readyState === 'READY' && !oldWeb.aliasError &&
-    (baselineProof.origin?.vercelSourceProof ? true :
+    (firstRecovery && baselineProof.vercelSourceProvenance === 'UNVERIFIED_LEGACY' ?
+      oldWeb.gitSource === undefined || oldWeb.gitSource === null : baselineProof.origin?.vercelSourceProof ? true :
       oldWeb.gitSource?.sha === baselineProof.vercelSha && String(oldWeb.gitSource?.repoId) === String(repository.id)),
     'ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED');
   if (baselineProof.origin) {
@@ -946,6 +980,9 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       latestRender.some(x => x.id === baselineProof.renderDeployId && x.status === 'live' &&
         x.commit?.id === baselineProof.renderSha) && latestRender.every(x => !activeRender.has(x.status)) &&
       latestRender.every(x => x.commit?.id !== qualified.sha), 'RENDER_CHANGED_BEFORE_REQUEST');
+    if (firstRecovery) validateLegacyProviderPair(firstRecovery,
+      await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`),
+      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project, await api.vercel(legacyDomainPath), prior.vercelDeployId);
     report({ phase: 'render-requesting' });
     render = await api.render(`${servicePath}/deploys`, { commitId: qualified.sha, clearCache: 'do_not_clear' });
   }
@@ -971,6 +1008,9 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   requireThat(project.targets?.production?.id === baselineProof.vercelDeployId ||
     (existingVercel && project.targets?.production?.id === existingVercel.id), 'VERCEL_BASELINE_DRIFT');
   if (!existingVercel) {
+    if (firstRecovery) validateLegacyProviderPair(firstRecovery,
+      await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`),
+      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project, await api.vercel(legacyDomainPath), prior.vercelDeployId);
     await guard();
     await readRender();
     const latestVercel = await deploymentHistory(api, 'vercel');
@@ -1005,6 +1045,9 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     project = await api.vercel(projectPath);
     validateVercel(project, repository.id);
     requireThat(project.targets?.production?.id === baselineProof.vercelDeployId, 'VERCEL_BASELINE_DRIFT');
+    if (firstRecovery) validateLegacyProviderPair(firstRecovery,
+      await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`),
+      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project, await api.vercel(legacyDomainPath), prior.vercelDeployId);
     await readVercelVariables();
     await readProtectedReadiness(qualified.sha);
     await guard();
@@ -1147,6 +1190,11 @@ export async function main(env, options = {}) {
     await validateInfrastructure(api, q, policy);
     await validateCandidateProvenance(api, q);
     const plan = await evidencePlan(api, q, policy);
+    // Provider credentials remain unavailable here. The named operator's original
+    // eligibility/compatibility readback must be approved with this executor SHA.
+    // Qualification-only execution never constitutes production authorization.
+    if (!q.qualificationOnly && !plan.baseline)
+      validateFirstReleaseRecovery(options.recoveryReadback ?? approvedRecoveryReadback, q, policy, options.now);
     const receipt = createGitHubAdmission(q, policy, evidence, options.now);
     requireThat(typeof env.AQUA_ADMISSION_RECEIPT_OUTPUT === 'string', 'ADMISSION_OUTPUT_REQUIRED');
     writeFileSync(env.AQUA_ADMISSION_RECEIPT_OUTPUT, JSON.stringify(receipt) + '\n', { flag: 'wx', mode: 0o600 });
@@ -1179,6 +1227,7 @@ export async function main(env, options = {}) {
   };
   await deploy(api, q, policy, report, { env, evidencePlan: plan, admissionReceipt,
     readSourceDigest: readSource, now: options.now,
+    recoveryReadback: options.recoveryReadback,
     ...options.deploymentOptions, frontendArchive: trustedSourceArchive,
     baselineRows: plan.baseline ? readAudit(env.BASELINE_RECEIPT_FILE) : undefined,
     receiptRows: plan.resume ? plan.resumeChain.flatMap(d => readAudit(plan.resumeChain.length === 1 ?
@@ -1190,7 +1239,8 @@ export async function run(env, options = {}) {
   try { await main(env, options); return 0; }
   catch (error) {
     const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied ||
-      error instanceof GovernanceReadbackDenied || error instanceof VercelSourceDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
+      error instanceof GovernanceReadbackDenied || error instanceof VercelSourceDenied ||
+      error instanceof FirstReleaseRecoveryDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
     if (failureReport) failureReport(code);
     else if (env.RELEASE_REPORT)
       appendFileSync(env.RELEASE_REPORT, JSON.stringify({ phase: 'blocked', code, identityVerified: false }) + '\n');
