@@ -11,7 +11,7 @@ const response=sha=>({status:200,body:{contract:'aqua.production-readiness',vers
 test('normal runtime permits required Bird/Yoco configuration without fetching their values',async()=>{
   const f=fixture(),reads=[],read=f.api.render;f.api.render=async(route,body)=>{if(!body)reads.push(route);return read(route,body);};
   await f.execute();assert.deepEqual(f.posts.map(x=>x.provider),['render','vercel']);
-  assert.equal(standingPolicy.profile,'normal-integrated');assert.equal(standingPolicy.version,5);
+  assert.equal(standingPolicy.profile,'normal-integrated');assert.equal(standingPolicy.version,6);
   for(const route of reads.filter(x=>x.includes('/env-vars'))){const key=route.split('/env-vars/')[1];assert.ok(Object.hasOwn(runtimeSettings,key));}
   assert.ok(!reads.some(x=>/ApiKey|SecretKey|WebhookSecret|secret-files|env-vars\?/.test(x)));
 });
@@ -38,7 +38,7 @@ test('missing, unauthorized, contradictory, wrong-revision or secret-bearing rea
 test('missing/changed normal flags and unsupported rollback provenance still stop before mutation',async()=>{
   for(const key of Object.keys(runtimeSettings)){const f=fixture();f.state.vars=f.state.vars.filter(x=>x.envVar.key!==key);
     await assert.rejects(f.execute());assert.equal(f.posts.length,0);}
-  const f=fixture(),read=f.api.vercel;f.api.vercel=async(route,body)=>{const r=await read(route,body);if(route.endsWith('/dpl_Baseline')){delete r.gitSource;r.meta={aqgreenSourceCommit:previous};}return r;};
+  const f=fixture(),read=f.api.vercel;f.api.vercel=async(route,body)=>{const r=await read(route,body);if(route.endsWith('/dpl_EwGB3apX3P5JnU5KfG3rLzn21Kgf')){delete r.gitSource;r.id='dpl_Unidentified';r.meta={aqgreenSourceCommit:previous};}return r;};
   await assert.rejects(f.execute());assert.equal(f.posts.length,0);
 });
 

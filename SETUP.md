@@ -1,4 +1,8 @@
-The current Vercel file-source correction selects policy v5; see
+The first-release recovery correction selects policy v6; see
+[the pinned retained-artifact exception and required operator evidence](docs/first-release-recovery.md).
+The checked-in readback remains UNVERIFIED and blocks production admission. No
+provider inspection or production operation was performed by this correction.
+The Vercel file-source behavior remains unchanged; see
 [the exact source/build-input and recovery contract](docs/vercel-file-source.md).
 Historical Git-link and recovery-only setup descriptions below are not current setup requirements.
 

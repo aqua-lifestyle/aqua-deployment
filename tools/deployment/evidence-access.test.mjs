@@ -97,7 +97,7 @@ test('administrator merge approval precedes use of any governance readback', asy
     if (route === '/pulls/1') row.merged_by = { id: 1, login: 'contributor' };
     return row;
   };
-  await assert.rejects(validateInfrastructure(f.api, f.state.candidate), /ADMINISTRATOR_APPROVAL_REQUIRED/);
+  await assert.rejects(validateInfrastructure(f.api, f.state.candidate, f.state.policy), /ADMINISTRATOR_APPROVAL_REQUIRED/);
   assert.equal(governanceReads, 0); assert.equal(f.state.providerCalls, 0);
 });
 

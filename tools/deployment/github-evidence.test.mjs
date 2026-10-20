@@ -178,6 +178,17 @@ test('verified production predecessor cannot fall back to legacy health when pro
   await assert.rejects(f.execute(),/PROTECTED_RUNTIME_READINESS_FAILED/);assert.equal(calls,1);assert.equal(f.posts.length,0);
 });
 
+test('a subsequent release cannot reuse the first-release exception for a predecessor without verified source',async()=>{
+  const f=historyFixture(), render=f.api.render, vercel=f.api.vercel;
+  f.state.plan=await evidencePlan(f.api,f.state.candidate,f.state.policy);f.state.baselineRows=f.rows;
+  f.state.renderRows[0].id='dep-prior';f.state.project.targets.production.id='dpl_Prior';
+  f.api.render=async(route,body)=>route.endsWith('/deploys/dep-prior')?f.state.renderRows[0]:render(route,body);
+  f.api.vercel=async(route,body)=>route.endsWith('/dpl_Prior')?{id:'dpl_Prior',projectId:f.state.project.id,
+    target:'production',readyState:'READY',alias:['www.aqualifestyleclub.co.za']}:vercel(route,body);
+  await assert.rejects(f.execute(),/ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED/);
+  assert.equal(f.posts.length,0);
+});
+
 test('concurrent active runs cannot both admit; serialized duplicate observes prior completion', async () => {
   const f=historyFixture({deployedSha:source,status:'in_progress'});
   const contenders=[{...f.state.candidate,executorSha:f.past.head_sha,releaseRunId:'455'},f.state.candidate];

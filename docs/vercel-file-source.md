@@ -70,11 +70,12 @@ readiness checks remain. Echoed custom metadata alone never permits adoption: th
 original upload/create acknowledgements and same-run receipt chain are required.
 Subsequent verified file deployments retain that proof in the predecessor audit.
 
-The first release still requires an authenticated compatible predecessor. An old
-CLI deployment with only custom source metadata is rejected; no new baseline,
-rollback exception or historical proof is fabricated. Database-custodian catalog
-evidence, real backup restoration, compatible rollback, provider credentials and
-live OIDC remain outstanding. No production operation is authorized by this PR.
+Policy v6 adds only the [explicit pinned first-release retained-artifact exception](first-release-recovery.md).
+Other CLI deployments with only custom source metadata remain rejected. Original
+operator eligibility/compatibility evidence is still missing; no historical source
+proof is fabricated. The database-identity exception and historical August restores
+are carried forward. Current recovery-point suitability, provider credentials and
+live OIDC remain separate prerequisites. No production operation is authorized.
 
 ## Validation and references
 

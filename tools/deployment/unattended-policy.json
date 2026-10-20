@@ -1,6 +1,6 @@
 {
-  "version": 5,
-  "epoch": "aqgreen-mvp-vercel-files-v1",
+  "version": 6,
+  "epoch": "aqgreen-mvp-first-release-recovery-v1",
   "profile": "normal-integrated",
   "baseline": "automatic",
   "authorization": {
@@ -32,5 +32,19 @@
         "NEXT_PUBLIC_DEFAULT_TENANT_NAME": "Default"
       }
     }
+  },
+  "firstReleaseRecovery": {
+    "kind": "pinned-legacy-retained-artifact-v1",
+    "baseline": {
+      "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+      "renderDeployId": "dep-db8av3dg1s2s739m6sgg",
+      "renderSha": "1251fb82979e18be53d1d0e7f5c6fab2d0c50a58",
+      "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+      "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+      "vercelDeployId": "dpl_EwGB3apX3P5JnU5KfG3rLzn21Kgf",
+      "productionDomain": "www.aqualifestyleclub.co.za",
+      "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend"
+    },
+    "evidenceSha256": "bc45116416d8ced214799e23d94c8ece01b42d61af2f663ef57db7690002b913"
   }
 }
