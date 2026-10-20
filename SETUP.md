@@ -1,3 +1,7 @@
+The current Vercel file-source correction selects policy v5; see
+[the exact source/build-input and recovery contract](docs/vercel-file-source.md).
+Historical Git-link and recovery-only setup descriptions below are not current setup requirements.
+
 # One-time MVP setup and production holds
 
 The current bounded OIDC readiness correction is documented in

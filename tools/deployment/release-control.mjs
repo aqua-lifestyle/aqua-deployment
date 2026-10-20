@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
 import { approvedBypassReadback, approvedReadbacks, GovernanceReadbackDenied } from './governance-readback.mjs';
+import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody, validateFileDeployment } from './vercel-source.mjs';
 import { runtimeSettings, protectedReadiness, validateReadiness } from './runtime-readiness.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   gitSourceDigest, verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission,
@@ -67,8 +68,9 @@ export function policyDigest(policy) {
   const owns = (object, keys) => object && typeof object === 'object' && !Array.isArray(object) &&
     Object.keys(object).sort().join(',') === keys.sort().join(',');
   const a = policy?.authorization;
-  const expectedScope = { repository: targets.repository, branch: 'main', executorRepository: execution.repository, ...targetIdentity };
-  requireThat(policy?.version === 4 && /^[a-z0-9-]{1,80}$/.test(policy.epoch) &&
+  const expectedScope = { repository: targets.repository, branch: 'main', executorRepository: execution.repository, ...targetIdentity,
+    frontend: { mode: 'vercel-files-v1', rootDirectory: targets.vercel.rootDirectory, publicBuildInputs: approvedPublicInputs(targets.vercel) } };
+  requireThat(policy?.version === 5 && /^[a-z0-9-]{1,80}$/.test(policy.epoch) &&
     policy.profile === targets.profile && policy.baseline === 'automatic' &&
     owns(policy, ['version', 'epoch', 'profile', 'baseline', 'authorization', 'scope']) &&
     owns(a, ['kind', 'approval', 'administrators', 'inventorySourceCommit', 'inventorySha256', 'maxCiAgeSeconds', 'maxAdmissionAgeSeconds']) &&
@@ -342,9 +344,7 @@ export function validateVercel(project, repoId) {
   requireThat(project.id === targets.vercel.id && project.accountId === targets.vercel.teamId &&
     project.name === targets.vercel.name && project.rootDirectory === targets.vercel.rootDirectory &&
     project.nodeVersion === '24.x' && !project.commandForIgnoringBuildStep &&
-    project.link?.type === 'github' && String(project.link.repoId) === String(repoId) &&
-    project.link.productionBranch === 'main' && project.link.org === 'aqua-lifestyle' &&
-    project.link.repo === 'aqua-lifestyle' && project.autoAssignCustomDomains === true &&
+    !project.link && project.autoAssignCustomDomains === true &&
     !project.buildCommand && !project.installCommand && !project.outputDirectory,
   'VERCEL_TARGET_OR_GIT_CONFIGURATION_DRIFT');
 }
@@ -437,6 +437,20 @@ export function clients(env, fetcher = fetch) {
       return request('https://api.vercel.com', env.VERCEL_TOKEN,
         route + (route.includes('?') ? '&' : '?') + `teamId=${targets.vercel.teamId}`, body);
     },
+    uploadVercel: async (data, digest) => {
+      requireThat(Buffer.isBuffer(data) && /^[a-f0-9]{40}$/.test(digest) &&
+        createHash('sha1').update(data).digest('hex') === digest, 'VERCEL_UPLOAD_HASH_MISMATCH');
+      requireThat(env.VERCEL_TOKEN, 'PROVIDER_CREDENTIAL_UNAVAILABLE');
+      let response;
+      try { response = await fetcher('https://api.vercel.com/v2/files?teamId=' + targets.vercel.teamId, {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(30_000), body: data,
+        headers: { Authorization: 'Bearer ' + env.VERCEL_TOKEN, 'Content-Type': 'application/octet-stream',
+          'Content-Length': String(data.length), 'x-vercel-digest': digest } }); }
+      catch { throw new ReleaseFailure('AMBIGUOUS_PROVIDER_POST_INSPECT_BEFORE_RETRY'); }
+      requireThat(response.ok, 'PROVIDER_POST_REJECTED_INSPECT_BEFORE_RETRY');
+      // This authenticated acknowledgement binds bytes through the provider's
+      // SHA1 integrity header. SHA256 remains the stronger local manifest identity.
+    },
     health: async () => {
       let r;
       try { r = await fetcher(targets.render.healthUrl, { redirect: 'error',
@@ -494,7 +508,7 @@ export function createAuditWriter(identity, emit) {
   return row => {
     for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt',
       'baselineRenderDeployId', 'baselineVercelDeployId', 'baselineRenderSha', 'baselineVercelSha',
-      'authorizationId', 'evidenceSha256', 'inventorySha256', 'evidenceArtifactId'])
+      'authorizationId', 'evidenceSha256', 'inventorySha256', 'evidenceArtifactId', 'vercelSourceProof'])
       if (row[key] !== undefined) known[key] = row[key];
     emit({ ...row, ...Object.fromEntries(releaseIdentityFields.map(key => [key, identity[key]])), ...known });
   };
@@ -514,13 +528,20 @@ export function validateResumeReceipt(rows, frozen) {
     'RESUME_RECEIPT_IDENTITY_MISMATCH');
     attempt = row.releaseRunAttempt;
     requireThat(['evidence-selected', 'baseline-selected', 'admitted', 'render-requesting', 'render-requested',
-      'render-ready', 'vercel-requesting', 'vercel-requested', 'verified', 'failed'].includes(row.phase),
+      'render-ready', 'vercel-files-requesting', 'vercel-files-uploaded', 'vercel-requesting', 'vercel-requested', 'verified', 'failed'].includes(row.phase),
       'RESUME_RECEIPT_UNVERIFIABLE');
     requireThat(row.phase !== 'verified', 'RELEASE_ALREADY_VERIFIED');
     requireThat(!['AMBIGUOUS_PROVIDER_POST_INSPECT_BEFORE_RETRY', 'INVALID_PROVIDER_RESPONSE',
       'RENDER_DEPLOYMENT_ID_UNAVAILABLE', 'VERCEL_DEPLOYMENT_ID_UNAVAILABLE',
       'PROVIDER_POST_REJECTED_INSPECT_BEFORE_RETRY', 'UNEXPECTED_RELEASE_ERROR'].includes(row.code),
     'AMBIGUOUS_PRIOR_REQUEST_REQUIRES_RECONCILIATION');
+    if (row.phase === 'vercel-files-requesting') pending.add('vercel-files');
+    if (row.phase === 'vercel-files-uploaded') pending.delete('vercel-files');
+    if (row.vercelSourceProof !== undefined) {
+      validateFrontendProof(row.vercelSourceProof, frozen.sha, targets.vercel);
+      requireThat(known.vercelSourceProof === undefined || objectDigest(known.vercelSourceProof) === objectDigest(row.vercelSourceProof), 'CONTRADICTORY_RESUME_RECEIPT');
+      known.vercelSourceProof = row.vercelSourceProof;
+    }
     for (const provider of ['render', 'vercel']) {
       if (row.phase === `${provider}-requesting`) pending.add(provider);
       if (row.phase === `${provider}-requested` && row[`${provider}DeployId`]) pending.delete(provider);
@@ -698,6 +719,12 @@ export function validateBaselineReceipt(rows, descriptor, candidate) {
       positiveAttempt(last[key]) && last[key] <= last.releaseRunAttempt), 'VERIFIED_BASELINE_RECEIPT_REQUIRED');
   for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt'])
     requireThat(rows.every(row => row[key] === undefined || row[key] === last[key]), 'CONTRADICTORY_BASELINE_RECEIPT');
+  if (last.vercelSourceProof) {
+    validateFrontendProof(last.vercelSourceProof, last.sha, targets.vercel);
+    requireThat(rows.every(row => !row.vercelSourceProof || objectDigest(row.vercelSourceProof) === objectDigest(last.vercelSourceProof)) &&
+      rows.some(row => row.phase === 'vercel-files-uploaded' && row.vercelSourceProof) &&
+      rows.some(row => row.phase === 'vercel-requested' && row.vercelSourceProof), 'VERIFIED_BASELINE_RECEIPT_REQUIRED');
+  }
   return Object.freeze({ renderDeployId: last.renderDeployId, renderSha: last.sha,
     vercelDeployId: last.vercelDeployId, vercelSha: last.sha, origin: last });
 }
@@ -769,6 +796,8 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   report({ phase: 'evidence-selected', authorizationId: options.admissionReceipt.authorizationId,
     evidenceSha256: options.admissionReceipt.evidenceSha256, inventorySha256: evidence.inventorySha256,
     evidenceArtifactId: evidence.artifact.id });
+  const frontend = prepareFrontend(options.frontendArchive, qualified.sha, targets.vercel, policy.scope.frontend.publicBuildInputs);
+  requireThat(!prior.vercelSourceProof || objectDigest(prior.vercelSourceProof) === objectDigest(frontend.proof), 'CONTRADICTORY_RESUME_RECEIPT');
   const servicePath = `/services/${targets.render.id}`;
   const projectPath = `/v9/projects/${targets.vercel.id}`;
   const repository = await api.gh('');
@@ -790,16 +819,14 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     requireThat(Array.isArray(rows) && !rows.some(row =>
       /(?:BIRDAPIKEY|YOCOSECRETKEY|YOCOWEBHOOKSECRET)$/.test(String(row.key).replace(/[^A-Za-z0-9]/g, '').toUpperCase())),
     'RUNTIME_CREDENTIAL_IN_FRONTEND_CONFIGURATION');
-    const values = [];
-    for (const key of ['NEXT_PUBLIC_ABP_API_URL', 'NEXT_PUBLIC_DEFAULT_TENANT_NAME']) {
+    for (const [key, expected] of Object.entries(frontend.proof.publicBuildInputs)) {
       const selected = rows.filter(row => row.key === key && row.target?.includes('production'));
-      requireThat(selected.length === 1 && /^[A-Za-z0-9_-]{1,128}$/.test(selected[0].id ?? '') &&
-        !selected[0].gitBranch, 'VERCEL_PUBLIC_BUILD_CONFIGURATION_UNVERIFIED');
-      const value = await api.vercel(`/v1/projects/${targets.vercel.id}/env/${selected[0].id}`);
-      requireThat(value.key === key && value.id === selected[0].id, 'VERCEL_PUBLIC_BUILD_CONFIGURATION_UNVERIFIED');
-      values.push(value);
+      requireThat(selected.length === 1 && !selected[0].gitBranch, 'VERCEL_PUBLIC_BUILD_CONFIGURATION_UNVERIFIED');
+      // Sensitive/encrypted project values intentionally remain unreadable. The
+      // explicit request build.env takes precedence and its effective echo is checked.
+      if (['plain', 'system'].includes(selected[0].type) && selected[0].value !== undefined)
+        requireThat(selected[0].value === expected, 'VERCEL_PUBLIC_BUILD_CONFIGURATION_UNVERIFIED');
     }
-    validateVercelVariables(values);
   };
   const readProtectedReadiness = async sha => {
     try { validateReadiness(await api.readiness(sha), sha); }
@@ -846,10 +873,14 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   const oldWeb = await api.vercel(`/v13/deployments/${baselineProof.vercelDeployId}`);
   requireThat(oldWeb.id === baselineProof.vercelDeployId && oldWeb.projectId === targets.vercel.id &&
     oldWeb.target === 'production' && oldWeb.readyState === 'READY' && !oldWeb.aliasError &&
-    oldWeb.gitSource?.sha === baselineProof.vercelSha &&
-    String(oldWeb.gitSource?.repoId) === String(repository.id), 'ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED');
+    (baselineProof.origin?.vercelSourceProof ? true :
+      oldWeb.gitSource?.sha === baselineProof.vercelSha && String(oldWeb.gitSource?.repoId) === String(repository.id)),
+    'ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED');
   if (baselineProof.origin) {
     const origin = { ...baselineProof.origin, releaseRunAttempt: baselineProof.origin.vercelReleaseRunAttempt };
+    if (origin.vercelSourceProof) validateFileDeployment(oldWeb, origin.vercelSourceProof, targets.vercel, {
+      aquaCiRunId: origin.ciRunId, aquaCiRunAttempt: String(origin.ciRunAttempt),
+      aquaSourceSha: origin.sha, aquaReleaseIdentity: releaseKey(origin) }, project.rootDirectory);
     requireThat(oldWeb.meta?.aquaReleaseIdentity === releaseKey(origin) &&
       oldWeb.meta?.aquaCiRunId === origin.ciRunId && oldWeb.meta?.aquaCiRunAttempt === String(origin.ciRunAttempt),
     'ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED');
@@ -883,10 +914,13 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     (x.meta?.aquaCiRunId !== qualified.ciRunId && x.meta?.aquaSourceSha !== qualified.sha) ||
     x.uid === prior.vercelDeployId), 'VERCEL_PROVENANCE_RECEIPT_REQUIRED');
   const origin = { ...qualified, releaseRunAttempt: prior.vercelReleaseRunAttempt ?? qualified.releaseRunAttempt };
-  const isOurs = x => x.gitSource?.sha === qualified.sha &&
-    String(x.gitSource?.repoId) === String(repository.id) && x.projectId === targets.vercel.id &&
+  const isOurs = x => {
+    validateFileDeployment(x, frontend.proof, targets.vercel, { aquaCiRunId: qualified.ciRunId,
+      aquaCiRunAttempt: String(qualified.ciRunAttempt), aquaSourceSha: qualified.sha, aquaReleaseIdentity: releaseKey(origin) }, project.rootDirectory);
+    return x.projectId === targets.vercel.id &&
     x.meta?.aquaCiRunId === qualified.ciRunId && x.meta?.aquaCiRunAttempt === String(qualified.ciRunAttempt) &&
     x.meta?.aquaReleaseIdentity === releaseKey(origin) && x.target === 'production';
+  };
   let existingVercel;
   for (const d of vercelDeploys.filter(x => x.uid === prior.vercelDeployId)) {
     requireThat(/^dpl_[A-Za-z0-9]+$/.test(d.uid), 'VERCEL_DEPLOYMENT_ID_UNAVAILABLE');
@@ -943,13 +977,41 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     requireThat(latestVercel.every(x => !activeVercel.has(x.state ?? x.readyState) &&
       x.meta?.aquaCiRunId !== qualified.ciRunId && x.meta?.aquaSourceSha !== qualified.sha),
     'VERCEL_CHANGED_BEFORE_REQUEST');
+    report({ phase: 'vercel-files-requesting', vercelSourceProof: frontend.proof });
+    const uploaded = new Set();
+    for (const file of frontend.files) {
+      if (uploaded.has(file.sha)) continue;
+      // Uploads store inert, content-addressed files, not a live deployment.
+      // Bound full GitHub rechecks to avoid exhausting the evidence token's API
+      // quota for hundreds of files; every file still checks receipt expiry.
+      if (uploaded.size % 32 === 0) await guard();
+      validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now);
+      requireThat(createHash('sha256').update(file.data).digest('hex') === file.sha256,
+        'VERCEL_UPLOAD_HASH_MISMATCH');
+      await api.uploadVercel(file.data, file.sha);
+      uploaded.add(file.sha);
+    }
+    report({ phase: 'vercel-files-uploaded' });
+    // Uploads are provider operations: recheck admission and live identities again.
+    await guard();
+    const afterUploads = await deploymentHistory(api, 'vercel');
+    requireThat(afterUploads.every(x => !activeVercel.has(x.state ?? x.readyState) &&
+      x.meta?.aquaCiRunId !== qualified.ciRunId && x.meta?.aquaSourceSha !== qualified.sha),
+      'VERCEL_CHANGED_BEFORE_REQUEST');
+    const afterUploadRender = await deploymentHistory(api, 'render');
+    requireThat(afterUploadRender.filter(x => x.status === 'live').length === 1 &&
+      afterUploadRender.some(x => x.id === render.id && x.status === 'live' && x.commit?.id === qualified.sha) &&
+      afterUploadRender.every(x => !activeRender.has(x.status)), 'RENDER_CHANGED_AFTER_READINESS');
+    project = await api.vercel(projectPath);
+    validateVercel(project, repository.id);
+    requireThat(project.targets?.production?.id === baselineProof.vercelDeployId, 'VERCEL_BASELINE_DRIFT');
+    await readVercelVariables();
+    await readProtectedReadiness(qualified.sha);
+    await guard();
     report({ phase: 'vercel-requesting' });
-    existingVercel = await api.vercel('/v13/deployments', {
-      name: targets.vercel.name, project: targets.vercel.id, target: 'production',
-      gitSource: { type: 'github', repoId: String(repository.id), ref: qualified.sha, sha: qualified.sha },
-      meta: { aquaCiRunId: qualified.ciRunId, aquaCiRunAttempt: String(qualified.ciRunAttempt),
-        aquaSourceSha: qualified.sha, aquaReleaseIdentity: releaseKey(qualified) }
-    });
+    existingVercel = await api.vercel('/v13/deployments', fileDeploymentBody(frontend, targets.vercel, {
+      aquaCiRunId: qualified.ciRunId, aquaCiRunAttempt: String(qualified.ciRunAttempt),
+      aquaSourceSha: qualified.sha, aquaReleaseIdentity: releaseKey(qualified) }));
   }
   requireThat(/^dpl_[A-Za-z0-9]+$/.test(existingVercel.id), 'VERCEL_DEPLOYMENT_ID_UNAVAILABLE');
   report({ phase: 'vercel-requested', vercelDeployId: existingVercel.id,
@@ -977,7 +1039,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   const finalVercel = await deploymentHistory(api, 'vercel');
   requireThat(finalVercel.every(x => !activeVercel.has(x.state ?? x.readyState) || x.uid === vercel.id),
     'CONCURRENT_VERCEL_BEFORE_VERIFICATION');
-  report({ phase: 'verified', sha: qualified.sha, renderSha: render.commit.id, vercelSha: vercel.gitSource.sha,
+  report({ phase: 'verified', sha: qualified.sha, renderSha: render.commit.id, vercelSha: qualified.sha,
     renderDeployId: render.id, vercelDeployId: vercel.id });
 }
 
@@ -1071,9 +1133,10 @@ export async function main(env, options = {}) {
   }
   requireThat(mode === 'deploy' || mode === 'admit', 'RELEASE_MODE_INVALID');
   requireThat(mode !== 'deploy' || q.qualificationOnly === false, 'QUALIFICATION_ONLY_CANNOT_DEPLOY');
+  const trustedSourceArchive = sourceArchive(q.sha);
   verifyCandidate(JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/candidate.json`)), q,
     readFileSync(`${env.CANDIDATE_DIR}/source.tar`),
-    sourceArchive(q.sha));
+    trustedSourceArchive);
   policyDigest(policy);
   const readSource = options.readSourceDigest ?? (path => gitSourceDigest(env.SOURCE_DIR, q.sha, path));
   const evidence = await verifyGitHubEvidence(api, q, policy, readSource, options.now);
@@ -1116,7 +1179,7 @@ export async function main(env, options = {}) {
   };
   await deploy(api, q, policy, report, { env, evidencePlan: plan, admissionReceipt,
     readSourceDigest: readSource, now: options.now,
-    ...options.deploymentOptions,
+    ...options.deploymentOptions, frontendArchive: trustedSourceArchive,
     baselineRows: plan.baseline ? readAudit(env.BASELINE_RECEIPT_FILE) : undefined,
     receiptRows: plan.resume ? plan.resumeChain.flatMap(d => readAudit(plan.resumeChain.length === 1 ?
       `${env.RESUME_RECEIPT_DIR}/release-report.jsonl` :
@@ -1127,7 +1190,7 @@ export async function run(env, options = {}) {
   try { await main(env, options); return 0; }
   catch (error) {
     const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied ||
-      error instanceof GovernanceReadbackDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
+      error instanceof GovernanceReadbackDenied || error instanceof VercelSourceDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
     if (failureReport) failureReport(code);
     else if (env.RELEASE_REPORT)
       appendFileSync(env.RELEASE_REPORT, JSON.stringify({ phase: 'blocked', code, identityVerified: false }) + '\n');

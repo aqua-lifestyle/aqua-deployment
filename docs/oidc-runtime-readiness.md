@@ -1,8 +1,8 @@
 # Normal production integrations and OIDC readiness
 
 Owner authorization permits Bird/Yoco credentials only in the production API
-runtime, with startup validation preserved. Policy v4, epoch
-aqgreen-mvp-oidc-readiness-v1, selects normal-integrated explicitly. Old receipts
+runtime, with startup validation preserved. Policy v5, epoch
+aqgreen-mvp-vercel-files-v1, selects normal-integrated explicitly. Old receipts
 and qualification-only receipts cannot authorize this policy or a production run.
 
 Only the environment-bound production job has id-token: write. It requests a fresh
@@ -22,10 +22,10 @@ reported by the protected readiness endpoint. No Render runtime credential value
 enters the executor. Deployment authentication remains a separate provider key;
 its broader provider-side scope is not narrowed by this code.
 Vercel build-input verification lists undecrypted metadata, rejects Bird/Yoco
-credential names, and retrieves only the two expected public inputs by their IDs.
-It never requests bulk environment decryption. Existing sensitive public inputs
-may require owner correction if Vercel cannot return those public values; no
-provider configuration or secret value was inspected during implementation.
+credential names, and supplies the two approved public values as explicit deployment build inputs.
+It never requests bulk environment decryption or reads the sensitive project values.
+No reclassification of those entries is required. Missing effective public-input
+evidence on the deployment itself denies; live provider readback remains unqualified.
 
 ## First-release bootstrap
 
@@ -40,9 +40,10 @@ stops there; there is no fallback. With a verified production predecessor,
 authenticated readiness is mandatory before Render too. Qualification-only runs
 with production skipped never create a predecessor.
 
-Existing Vercel Git-source/baseline validation is unchanged. The observed unlinked
-project and metadata-only source identity still block production; this task does
-not fabricate a predecessor, reconnect Git or deploy a bootstrap release. Database
+The [Vercel file-source correction](vercel-file-source.md) supports the existing
+unlinked project, while preserving fail-closed predecessor validation. The old
+metadata-only frontend source still cannot authenticate a rollback baseline.
+This task does not fabricate a predecessor, reconnect Git or deploy a bootstrap release. Database
 privileges, production backup/rollback qualification and provider credentials remain
 separate prerequisites. Configuration does not prove independent IAM isolation.
 

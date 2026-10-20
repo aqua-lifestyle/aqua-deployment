@@ -1,6 +1,6 @@
 {
-  "version": 4,
-  "epoch": "aqgreen-mvp-oidc-readiness-v1",
+  "version": 5,
+  "epoch": "aqgreen-mvp-vercel-files-v1",
   "profile": "normal-integrated",
   "baseline": "automatic",
   "authorization": {
@@ -23,6 +23,14 @@
     "profile": "normal-integrated",
     "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
     "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
-    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY"
+    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+    "frontend": {
+      "mode": "vercel-files-v1",
+      "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend",
+      "publicBuildInputs": {
+        "NEXT_PUBLIC_ABP_API_URL": "https://aqualifestyle-api.onrender.com",
+        "NEXT_PUBLIC_DEFAULT_TENANT_NAME": "Default"
+      }
+    }
   }
 }

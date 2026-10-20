@@ -15,14 +15,15 @@ changed required evidence and uncertain prior provider operations. No candidate
 code runs with provider credentials. Trusted administrators may change policy;
 this model does not claim to prevent their deliberate authorized changes.
 
-`tools/deployment/unattended-policy.json` explicitly selects policy version 4,
-`github-evidence-v1`, epoch `aqgreen-mvp-oidc-readiness-v1`. Versions/modes outside
+`tools/deployment/unattended-policy.json` explicitly selects policy version 5,
+`github-evidence-v1`, epoch `aqgreen-mvp-vercel-files-v1`. Versions/modes outside
 this contract deny. Missing GitHub evidence never falls back to an attestation,
 manual token, permissive default or candidate-supplied success flag.
 
 The standing policy binds the application/main branch, executor repository,
 production environment, fixed provider identities and the normal-integrated
-runtime profile described in [OIDC readiness](oidc-runtime-readiness.md). It permits automatic admission for each eligible main merge
+runtime profile described in [OIDC readiness](oidc-runtime-readiness.md), plus the
+[file-source root and two approved public build inputs](vercel-file-source.md). It permits automatic admission for each eligible main merge
 without recurring human approval. The exact executor main revision must itself
 be the merge commit of a PR merged by one of the two trusted administrators,
 confirmed through GitHub user ID and login. This is approval of executor policy,

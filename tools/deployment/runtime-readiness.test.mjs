@@ -11,7 +11,7 @@ const response=sha=>({status:200,body:{contract:'aqua.production-readiness',vers
 test('normal runtime permits required Bird/Yoco configuration without fetching their values',async()=>{
   const f=fixture(),reads=[],read=f.api.render;f.api.render=async(route,body)=>{if(!body)reads.push(route);return read(route,body);};
   await f.execute();assert.deepEqual(f.posts.map(x=>x.provider),['render','vercel']);
-  assert.equal(standingPolicy.profile,'normal-integrated');assert.equal(standingPolicy.version,4);
+  assert.equal(standingPolicy.profile,'normal-integrated');assert.equal(standingPolicy.version,5);
   for(const route of reads.filter(x=>x.includes('/env-vars'))){const key=route.split('/env-vars/')[1];assert.ok(Object.hasOwn(runtimeSettings,key));}
   assert.ok(!reads.some(x=>/ApiKey|SecretKey|WebhookSecret|secret-files|env-vars\?/.test(x)));
 });
@@ -21,7 +21,7 @@ test('bootstrap never asks the legacy API for the new endpoint and always checks
   f.api.render=async(route,body)=>{if(body)events.push('render');return render(route,body);};
   f.api.vercel=async(route,body)=>{if(body)events.push('vercel');return vercel(route,body);};
   f.api.readiness=async sha=>{assert.equal(sha,source);assert.equal(f.state.newRender?.status,'live');events.push('ready');return response(sha);};
-  await f.execute();assert.deepEqual(events,['render','ready','vercel','ready']);
+  await f.execute();assert.deepEqual(events,['render','ready','ready','vercel','ready']);
 });
 
 test('missing, unauthorized, contradictory, wrong-revision or secret-bearing readiness stops before Vercel',async()=>{

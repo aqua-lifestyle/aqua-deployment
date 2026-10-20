@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {fixture,qualified,runnerEnv,source,previous,run,jobs,fixtureNow} from './fixtures/provider.mjs';
+import {fixture,qualified,runnerEnv,source,previous,run,jobs,fixtureNow,frontendFixtureFiles} from './fixtures/provider.mjs';
 import {clients,freezeCandidate,validatePolicy,verifyCandidate,targets,standingPolicy,qualify,
   evidencePlan,releaseKey,validateLegacyHistory,main,validateResumeReceipt,validateBaselineReceipt,
   validateAdmissionJob,requireDeploymentAttestation,admissionJobName} from './release-control.mjs';
@@ -15,7 +15,7 @@ test('external rollout preserves exact Render-first sequence and independently b
   const f=fixture();await f.execute();
   assert.deepEqual(f.posts.map(x=>x.provider),['render','vercel']);
   assert.equal(f.posts[0].body.commitId,source);
-  assert.equal(f.posts[1].body.gitSource.sha,source);
+  assert.equal(f.posts[1].body.meta.aquaSourceSha,source);assert.equal(f.posts[1].body.gitSource,undefined);
   assert.equal(f.posts[1].body.project,targets.vercel.id);
   assert.equal(f.reports.at(-1).renderSha,source);assert.equal(f.reports.at(-1).vercelSha,source);
   assert.equal(f.reports.at(-1).executorRepository,targets.executor.repository);
@@ -55,7 +55,7 @@ for(const [label,mutate] of [
   ['missing environment',f=>{f.state.environment={};}],
   ['restricted operation enabled',f=>{f.state.vars.find(x=>x.envVar.key==='App__FinancialOperations__Enabled').envVar.value='true';}],
   ['redirected provider target',f=>{f.state.service.id='srv-untrusted';}],
-  ['unlinked frontend',f=>{f.state.project.link=null;}],
+  ['unexpected frontend Git link',f=>{f.state.project.link={type:'github',repoId:'foreign'};}],
   ['migration',f=>{f.state.files=[{filename:'EF/Migrations/Unauthorized.cs'}];}],
   ['concurrent provider operation',f=>{f.state.renderRows.push({id:'dep-foreign',status:'queued',commit:{id:previous}});}],
 ])test(`${label} cannot acquire a provider mutation`,async()=>{
@@ -207,6 +207,7 @@ test('real Git source passes candidate, admission and deployment entries without
     mkdirSync(join(repo,'tools/deployment'),{recursive:true});
     writeFileSync(join(repo,'tools/deployment/release-control.mjs'),`throw Error('CANDIDATE_CONTROLLER_MUST_NOT_EXECUTE');`);
     writeFileSync(join(repo,'tools/deployment/targets.json'),JSON.stringify({render:{id:'attacker',healthUrl:'https://attacker.invalid'}}));
+    for(const [name,bytes] of Object.entries(frontendFixtureFiles)){const path=join(repo,targets.vercel.rootDirectory,name);mkdirSync(join(path,'..'),{recursive:true});writeFileSync(path,bytes);}
     git(['add','.']);git(['commit','-qm','Disposable source']);const sha=git(['rev-parse','HEAD']);
     const executorSha=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
     const event=join(dir,'event.json');writeFileSync(event,JSON.stringify({inputs:{ci_run_id:'123',ci_run_attempt:'1',sha}}));
