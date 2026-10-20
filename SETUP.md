@@ -6,6 +6,26 @@ The Vercel file-source behavior remains unchanged; see
 [the exact source/build-input and recovery contract](docs/vercel-file-source.md).
 Historical Git-link and recovery-only setup descriptions below are not current setup requirements.
 
+## One-off provider credential verification
+
+After its separately authorized protected merge, an approved administrator can
+dispatch `provider-credential-check.yml` on protected `main`. Its only job uses
+the existing `production-release` environment and the two existing provider
+secrets. A credential-free context check precedes the secret-bearing GET step;
+ordinary PR safety CI receives no secrets. No deployment workflow is dispatched.
+Fixed approved account IDs, Render service and Vercel team/project are checked.
+Reads cover identities, target metadata/history, pinned baselines, domain/aliases,
+and the controller's existing non-secret runtime/environment metadata endpoints.
+Redirects and failed reads deny without retries, credential fallback or permission
+changes. Output contains only fixed check names, HTTP statuses and PASS/FAIL.
+
+A successful check proves authentication and those reads, not deployment-write
+permissions, billing availability, rollback eligibility, readiness or release
+authorization. It emits no admission receipt and cannot bypass deployment
+admission. Provider tokens remain limited to environment jobs. Any live check
+must use the exact approved merged revision; this implementation does not
+authorize its own merge or execute the check from PR code.
+
 # One-time MVP setup and production holds
 
 The current bounded OIDC readiness correction is documented in
