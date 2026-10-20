@@ -150,7 +150,7 @@ test('source fetch is inert, fixed-origin, SHA-only and strips inherited credent
     assert.ok(calls.every(x=>!x.args.includes('checkout')&&!x.args.includes('submodule')));
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
-test('separate pre-secret admission gates the only provider-secret job',()=>{
+test('separate pre-secret admission gates deployment; only the protected GET check also receives provider secrets',()=>{
   const wf=readFileSync(new URL('../../.github/workflows/deploy.yml',import.meta.url),'utf8');
   const extract = (name,next) => wf.match(new RegExp(`\\n  ${name}:([\\s\\S]*?)(?=\\n  ${next}:|$)`))?.[1] ?? '';
   const candidate=extract('candidate','admission'),admission=extract('admission','production'),production=extract('production','');
@@ -174,8 +174,21 @@ test('separate pre-secret admission gates the only provider-secret job',()=>{
   assert.match(admission,/AQUA_ADMISSION_RECEIPT_OUTPUT/);
   assert.doesNotMatch(wf,/AQUA_AUTHORIZATION_BUNDLE|ATTESTATION_REPLAY_DATABASE_URL/);
   assert.equal((production.match(/node tools\/deployment\/release-control\.mjs deploy/g)??[]).length,1);
-  for(const name of readdirSync(new URL('../../.github/workflows/',import.meta.url)).filter(n=>n.endsWith('.yml')&&n!=='deploy.yml'))
-    assert.doesNotMatch(readFileSync(new URL(`../../.github/workflows/${name}`,import.meta.url),'utf8'),/secrets\.(RENDER_API_KEY|VERCEL_TOKEN)/);
+  for(const name of readdirSync(new URL('../../.github/workflows/',import.meta.url)).filter(n=>n.endsWith('.yml')&&n!=='deploy.yml')){
+    const other=readFileSync(new URL(`../../.github/workflows/${name}`,import.meta.url),'utf8');
+    if(name==='provider-credential-check.yml'){
+      // Explicit owner-authorized GET-only exception, never another release path.
+      assert.match(other,/workflow_dispatch:/);
+      assert.match(other,/github.ref == 'refs\/heads\/main' && github.ref_protected/);
+      assert.match(other,/environment: production-release/);
+      assert.ok(other.indexOf('.mjs context')<other.indexOf('secrets.RENDER_API_KEY'));
+      assert.deepEqual([...other.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),['RENDER_API_KEY','VERCEL_TOKEN']);
+      assert.deepEqual([...other.matchAll(/^\s+run: (.*)$/gm)].map(x=>x[1]),[
+        'node tools/deployment/verify-provider-credentials.mjs context',
+        'node tools/deployment/verify-provider-credentials.mjs verify']);
+      assert.doesNotMatch(other,/pull_request|push:|workflow_run|repository_dispatch|id-token:|write/);
+    }else assert.doesNotMatch(other,/secrets\.(RENDER_API_KEY|VERCEL_TOKEN)/);
+  }
   for(const line of wf.split('\n').filter(l=>l.includes('uses:')))assert.match(line,/@[a-f0-9]{40}/);
 });
 
