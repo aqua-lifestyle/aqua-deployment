@@ -27,8 +27,7 @@ function setup() {
     { id: baseline.renderDeployId, commit: { id: baseline.renderSha } });
   for (const key of Object.keys(runtimeSettings)) add(renderRoot,
     `/services/${targets.render.id}/env-vars/${key}`, { key, value: privateResponse });
-  add(vercelRoot, '/v2/user', { user: { id: 'PwdB234Akdmh3zLIxgLXgtBR', email: privateResponse } });
-  add(vercelRoot, `/v2/teams/${targets.vercel.teamId}`, { id: targets.vercel.teamId });
+  responses.set(`${vercelRoot}/v2/teams/${targets.vercel.teamId}`, { id: targets.vercel.teamId });
   add(vercelRoot, `/v9/projects/${targets.vercel.id}`,
     { id: targets.vercel.id, accountId: targets.vercel.teamId });
   add(vercelRoot, `/v10/projects/${targets.vercel.id}/env?decrypt=false`,
@@ -83,6 +82,25 @@ test('required reads are GET-only on fixed targets, with provider tokens and res
     assert.ok(!JSON.stringify(f.reports).includes(secret));
 });
 
+test('team-scoped verification does not depend on personal user access and uses documented endpoint context', async () => {
+  const f = setup();
+  assert.equal(await f.run((url, options) => new URL(url).pathname === '/v2/user' ?
+    new Response(null, { status: 404 }) : f.fetcher(url, options)), true);
+  assert.ok(!f.calls.some(c => new URL(c.url).pathname === '/v2/user'));
+  assert.ok(f.calls.some(c => c.url === vercelRoot + '/v2/teams/' + targets.vercel.teamId));
+  assert.ok(f.calls.some(c => c.url === vercelRoot + '/v9/projects/' + targets.vercel.id + '?teamId=' + targets.vercel.teamId));
+  for (const body of [{ id: targets.vercel.id, accountId: 'another-team' },
+    { id: 'another-project', accountId: targets.vercel.teamId }]) {
+    const x = setup(), projectUrl = vercelRoot + '/v9/projects/' + targets.vercel.id + '?teamId=' + targets.vercel.teamId;
+    x.responses.set(projectUrl, body);
+    assert.equal(await x.run(), false);
+    const failure = x.reports.find(r => r.provider === 'Vercel' && r.result === 'FAIL');
+    assert.equal(failure.check, 'project'); assert.equal(failure.authentication, 'PASS');
+    assert.equal(failure.failureCategory, 'RESPONSE_IDENTITY_OR_FORMAT_UNVERIFIED');
+    assert.ok(!x.calls.some(c => c.url.includes('/env?')));
+  }
+});
+
 test('missing credentials deny before any provider request without CLI or other-token fallback', async () => {
   for (const name of ['RENDER_API_KEY', 'VERCEL_TOKEN']) for (const value of [undefined, '', '   ']) {
     const f = setup(); f.env[name] = value;
@@ -118,7 +136,7 @@ test('substituted identities/resources, malformed bodies and secret-bearing erro
     const f = setup(); f.responses.set(url, Array.isArray(body) ? {} : null);
     assert.equal(await f.run(), false);
   }
-  for (const path of ['/users', '/v2/user', `/v2/teams/${targets.vercel.teamId}`,
+  for (const path of ['/users', `/v2/teams/${targets.vercel.teamId}`,
     `/v9/projects/${targets.vercel.id}`]) {
     const f = setup(), url = [...f.responses.keys()].find(url => new URL(url).pathname.endsWith(path));
     f.responses.set(url, { id: 'wrong-identity', user: { id: 'wrong-user' }, accountId: 'wrong-team' });
@@ -130,6 +148,32 @@ test('substituted identities/resources, malformed bodies and secret-bearing erro
     for (const secret of [renderSecret, vercelSecret, privateResponse])
       assert.ok(!JSON.stringify(f.reports).includes(secret));
   }
+});
+
+test('Vercel diagnostics distinguish observed HTTP classes without exposing provider messages or guessing a 404 cause', async () => {
+  const expected = [[400, 'REQUEST_CONTEXT_REJECTED', 'bad_request'],
+    [401, 'AUTHENTICATION_REJECTED'], [402, 'PAYMENT_REQUIRED'],
+    [403, 'PERMISSION_OR_POLICY_DENIED', 'forbidden'],
+    [404, 'RESOURCE_OR_CONTEXT_NOT_FOUND', 'not_found'], [429, 'RATE_LIMITED', 'rate_limited']];
+  for (const [status, category, providerCode] of expected) {
+    const f = setup();
+    assert.equal(await f.run((url, options) => url.startsWith(vercelRoot) ?
+      Response.json({ error: { code: providerCode ?? privateResponse,
+        message: privateResponse + vercelSecret } }, { status }) : f.fetcher(url, options)), false);
+    const failure = f.reports.find(r => r.provider === 'Vercel' && r.result === 'FAIL');
+    assert.equal(failure.httpStatus, status); assert.equal(failure.failureCategory, category);
+    assert.equal(failure.providerErrorCode, providerCode);
+    assert.equal(failure.authentication, 'NOT_VERIFIED');
+    assert.ok(!f.reports.some(r => r.provider === 'Vercel' && r.check === 'project'));
+    for (const secret of [renderSecret, vercelSecret, privateResponse])
+      assert.ok(!JSON.stringify(f.reports).includes(secret));
+  }
+  const f = setup();
+  assert.equal(await f.run((url, options) => url.startsWith(vercelRoot) ?
+    Response.json({ error: { code: 'forbidden', message: privateResponse } }, { status: 401 }) :
+    f.fetcher(url, options)), false);
+  assert.equal(f.reports.find(r => r.provider === 'Vercel' && r.result === 'FAIL').failureCategory,
+    'AUTHENTICATION_REJECTED'); // Status is not replaced by an ambiguous generic code.
 });
 
 test('dedicated workflow exposes provider secrets only in the protected main GET-check step', () => {

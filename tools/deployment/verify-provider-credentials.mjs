@@ -5,7 +5,6 @@ import { clients, targets, standingPolicy } from './release-control.mjs';
 import { runtimeSettings } from './runtime-readiness.mjs';
 
 const approvedRenderUser = 'usr-d9f04o3tqb8s73bbhjbg';
-const approvedVercelUser = 'PwdB234Akdmh3zLIxgLXgtBR';
 const executor = targets.executor.repository;
 const denied = () => { throw Error('PROVIDER_CHECK_CONTEXT_DENIED'); };
 
@@ -31,14 +30,40 @@ export async function verifyProviderCredentials(env, { checkoutSha, fetcher = fe
     }
   }
   let active;
-  const api = clients(env, async (url, options) => {
+  const transport = async (url, options) => {
     // The fixed read plan is the only transport authority, including destinations.
     if (!active || url !== active.url || options.method !== 'GET' || options.body !== undefined ||
       options.redirect !== 'error') throw Error('GET_ONLY_CHECK_DENIED');
-    const response = await fetcher(url, options);
+    let response;
+    try { response = await fetcher(url, options); }
+    catch { active.failureCategory = 'NETWORK_UNAVAILABLE'; throw Error('GET_UNAVAILABLE'); }
     emit({ provider: active.provider, check: active.check, httpStatus: response.status });
+    if (active.provider === 'Vercel' && !response.ok) {
+      active.httpStatus = response.status;
+      active.failureCategory = ({ 400: 'REQUEST_CONTEXT_REJECTED', 401: 'AUTHENTICATION_REJECTED',
+        402: 'PAYMENT_REQUIRED', 403: 'PERMISSION_OR_POLICY_DENIED',
+        404: 'RESOURCE_OR_CONTEXT_NOT_FOUND', 429: 'RATE_LIMITED' })[response.status] ??
+        (response.status >= 500 ? 'PROVIDER_UNAVAILABLE' : 'UNEXPECTED_HTTP_STATUS');
+      // Provider messages and arbitrary codes can contain sensitive data. Retain
+      // only documented generic enum codes; never echo messages or raw bodies.
+      try {
+        const code = (await response.clone().json())?.error?.code;
+        if (['forbidden', 'not_found', 'bad_request', 'rate_limited',
+          'internal_server_error', 'method_unknown'].includes(code)) active.providerErrorCode = code;
+      } catch { /* HTTP status remains authoritative when error JSON is absent. */ }
+    }
     return response;
-  });
+  };
+  const api = clients(env, transport);
+  // Team identity is a path parameter, not deployment-client team query context.
+  // No personal user endpoint/permission is required to authenticate fixed scope.
+  const readTeam = async url => {
+    const response = await transport(url, { method: 'GET', redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+      headers: { Authorization: `Bearer ${env.VERCEL_TOKEN}`, Accept: 'application/json' } });
+    if (!response.ok) throw Error('TEAM_GET_REJECTED');
+    return response.json();
+  };
   const baseline = standingPolicy.firstReleaseRecovery.baseline;
   const plans = [
     ['Render', api.render, 'https://api.render.com/v1', '', [
@@ -51,7 +76,6 @@ export async function verifyProviderCredentials(env, { checkoutSha, fetcher = fe
         j => j.key === key && typeof j.value === 'string'])
     ]],
     ['Vercel', api.vercel, 'https://api.vercel.com', `teamId=${targets.vercel.teamId}`, [
-      ['identity', '/v2/user', j => j.user?.id === approvedVercelUser],
       ['team', `/v2/teams/${targets.vercel.teamId}`, j => j.id === targets.vercel.teamId],
       ['project', `/v9/projects/${targets.vercel.id}`,
         j => j.id === targets.vercel.id && j.accountId === targets.vercel.teamId],
@@ -69,17 +93,23 @@ export async function verifyProviderCredentials(env, { checkoutSha, fetcher = fe
     let authentication = 'NOT_VERIFIED';
     try {
       for (const [check, path, validate] of checks) {
+        const teamRead = provider === 'Vercel' && check === 'team';
         active = { provider, check, url: origin + path +
-          (query ? (path.includes('?') ? '&' : '?') + query : '') };
-        const result = await read(path);
+          (query && !teamRead ? (path.includes('?') ? '&' : '?') + query : '') };
+        const result = teamRead ? await readTeam(active.url) : await read(path);
         if (!result || !validate(result)) throw Error('READ_IDENTITY_OR_SHAPE_MISMATCH');
-        if (check === 'identity') authentication = 'PASS';
+        if (check === 'identity' || teamRead) authentication = 'PASS';
       }
       emit({ provider, result: 'PASS', authentication, requiredReads: 'PASS' });
     } catch {
       // Raw errors/bodies may contain secrets; only fixed phases/statuses escape.
       emit({ provider, check: active.check, result: 'FAIL', authentication,
-        requiredReads: 'FAIL', code: 'REQUIRED_GET_OR_IDENTITY_FAILED' });
+        requiredReads: 'FAIL', code: 'REQUIRED_GET_OR_IDENTITY_FAILED',
+        ...(provider === 'Vercel' ? {
+          failureCategory: active.failureCategory ?? 'RESPONSE_IDENTITY_OR_FORMAT_UNVERIFIED',
+          ...(active.httpStatus === undefined ? {} : { httpStatus: active.httpStatus }),
+          ...(active.providerErrorCode ? { providerErrorCode: active.providerErrorCode } : {})
+        } : {}) });
       passed = false;
     }
   }

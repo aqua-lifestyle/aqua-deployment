@@ -13,11 +13,28 @@ dispatch `provider-credential-check.yml` on protected `main`. Its only job uses
 the existing `production-release` environment and the two existing provider
 secrets. A credential-free context check precedes the secret-bearing GET step;
 ordinary PR safety CI receives no secrets. No deployment workflow is dispatched.
-Fixed approved account IDs, Render service and Vercel team/project are checked.
+The approved Render account ID and service are checked. Vercel authentication
+is established by successful fixed-team and project reads, not personal user
+profile access: `GET /v2/teams/{teamId}` (team ID in the path), then
+`GET /v9/projects/{projectId}?teamId={teamId}` with matching `accountId`.
+The checker does not call `/v2/user` or claim to establish the token owner's
+personal identity from team/project access.
 Reads cover identities, target metadata/history, pinned baselines, domain/aliases,
 and the controller's existing non-secret runtime/environment metadata endpoints.
 Redirects and failed reads deny without retries, credential fallback or permission
-changes. Output contains only fixed check names, HTTP statuses and PASS/FAIL.
+changes. Output contains only fixed check names, HTTP statuses, PASS/FAIL and
+sanitized Vercel diagnostic categories/documented generic error enums. A 404
+means resource/context not found; it is not classified as an invalid token.
+401 authentication rejection, 402 payment required and 403 access/policy denial
+remain distinct. Provider messages and unrecognized codes are never echoed.
+
+The original hosted check stopped on `/v2/user?teamId=...` with HTTP 404; this
+does not establish the server-side reason. The documented user endpoint has no
+team query parameter and was an unnecessary prerequisite. Reference:
+[team lookup](https://vercel.com/docs/rest-api/teams/get-a-team),
+[project lookup](https://vercel.com/docs/rest-api/projects/find-a-project-by-id-or-name),
+[user lookup](https://vercel.com/docs/rest-api/user/get-the-user),
+[generic errors](https://vercel.com/docs/rest-api/errors).
 
 A successful check proves authentication and those reads, not deployment-write
 permissions, billing availability, rollback eligibility, readiness or release
