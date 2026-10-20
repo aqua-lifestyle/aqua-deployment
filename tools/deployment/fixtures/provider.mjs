@@ -1,5 +1,5 @@
 // Provider substitutes reused from PR106's controller tests, not live evidence.
-import {readFileSync,mkdtempSync,writeFileSync,utimesSync,rmSync} from 'node:fs';
+import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,symlinkSync,utimesSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -19,7 +19,30 @@ export function zipFixture(filename, bytes, extra = {}) {
     return readFileSync(join(dir,'artifact.zip'));
   } finally {rmSync(dir,{recursive:true,force:true});}
 }
-const source = 'c'.repeat(40), previous = 'b'.repeat(40);
+// A real disposable Git archive, not a candidate-provided self-hash.
+export const frontendFixtureFiles = {
+  'package.json': JSON.stringify({scripts:{build:'next build'}}),
+  'package-lock.json': '{}',
+  'vercel.json': JSON.stringify({framework:'nextjs',installCommand:'npm ci',buildCommand:'npm run build'}),
+  'next.config.ts': 'export default {};',
+  'app/page.tsx': 'export default function Page() {return null;}'
+};
+export function frontendFixtureArchive(files = frontendFixtureFiles) {
+  const dir=mkdtempSync(join(tmpdir(),'aqua-git-frontend-'));
+  try {
+    const git=(...args)=>execFileSync('git',['-C',dir,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe'],
+      env:{...process.env,GIT_AUTHOR_DATE:'2026-10-19T08:00:00Z',GIT_COMMITTER_DATE:'2026-10-19T08:00:00Z'}});
+    git('init','-q');
+    for(const [name,bytes] of Object.entries(files)){
+      const path=join(dir,targets.vercel.rootDirectory,name);mkdirSync(join(path,'..'),{recursive:true});if(bytes?.symlink)symlinkSync(bytes.symlink,path);else writeFileSync(path,bytes);
+    }
+    git('add','.');git('-c','user.name=fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','Frontend fixture');
+    const sha=git('rev-parse','HEAD').trim();
+    return {sha,archive:execFileSync('git',['-C',dir,'archive','--format=tar',sha])};
+  } finally {rmSync(dir,{recursive:true,force:true});}
+}
+const frontendSource=frontendFixtureArchive();
+const source=frontendSource.sha, previous = 'b'.repeat(40);
 const run = () => ({ id: 123, run_attempt: 1, repository: { full_name: targets.repository },
   head_repository: { full_name: targets.repository }, event: 'push', head_branch: 'main',
   head_sha: source, path: '.github/workflows/ci.yml', name: 'Continuous integration',
@@ -51,7 +74,7 @@ const variables = () => Object.entries(Object.fromEntries(Object.entries(runtime
   .map(([key, value]) => ({ envVar: { key, value } }));
 const project = () => ({ id: targets.vercel.id, name: targets.vercel.name, accountId: targets.vercel.teamId,
   rootDirectory: targets.vercel.rootDirectory, nodeVersion: '24.x', autoAssignCustomDomains: true,
-  link: { type: 'github', repoId: '789', repo: 'aqua-lifestyle', org: 'aqua-lifestyle', productionBranch: 'main' },
+  link: null,
   targets: { production: { id: 'dpl_Baseline' } } });
 const publicVars = () => [
   { id: 'public-api', key: 'NEXT_PUBLIC_ABP_API_URL', value: targets.vercel.publicApiUrl, target: ['production'] },
@@ -119,7 +142,7 @@ function fixture() {
       base: { ref: 'main', repo: { full_name: targets.repository } }, head: { sha: 'd'.repeat(40) },
       user: { login: 'author', id: 1 }, merged_at: '2026-10-16T10:00:00Z' },
     publicVars: publicVars(), newRender: undefined, newVercel: undefined, renderReads: 0, vercelReads: 0,
-    providerCalls: 0 };
+    providerCalls: 0, uploads: [], frontendArchive: frontendSource.archive };
   state.report={version:1,context:{kind:'ci',repository:targets.repository,sha:source,runId:'123',runAttempt:1},
     inventorySha256:inventoryDigest,exitCode:0,
     results:approvedInventory.tests.map(t=>({...t,outcome:'passed',executions:1})),
@@ -180,7 +203,7 @@ function fixture() {
       state.providerCalls++;
       if (body) { posts.push({ provider: 'vercel', route, body });
         state.newVercel = { id: 'dpl_New', readyState: 'BUILDING', target: 'production',
-          projectId: targets.vercel.id, gitSource: { sha: source, repoId: '789' }, meta: body.meta };
+          projectId: targets.vercel.id, meta: body.meta, build:body.build, env:body.env, projectSettings:body.projectSettings };
         return structuredClone(state.newVercel); }
       if (route.startsWith('/v9/')) return state.project;
       if (route.startsWith('/v10/')) return { envs: state.publicVars };
@@ -196,6 +219,7 @@ function fixture() {
       }
       throw new Error('Unexpected Vercel fixture route');
     },
+    uploadVercel: async (data,digest) => {state.providerCalls++;state.uploads.push({data,digest});},
     health: async () => health(state.newRender?.status === 'live' ? source : previous),
     readiness: async sha => ({status:200,body:{contract:'aqua.production-readiness',version:1,status:'Ready',
       buildId:sha,birdConfiguration:'StartupValidated',yocoConfiguration:'StartupValidated',
@@ -241,7 +265,7 @@ function fixture() {
       structuredClone(initialAdmission);
     return deploy(api, state.candidate, state.policy,
       createAuditWriter(state.candidate, r => reports.push(r)), { ...immediate, env: state.env,
-        admissionReceipt,readSourceDigest,now:()=>fixtureNow,
+        admissionReceipt,readSourceDigest,now:()=>fixtureNow,frontendArchive:state.frontendArchive,
         evidencePlan: state.plan ?? {policySha256:state.candidate.policySha256,verifiedReleases:[],baseline:null,resume:null,resumeChain:[]},
         receiptRows: state.receiptRows, baselineRows: state.baselineRows });
   };
