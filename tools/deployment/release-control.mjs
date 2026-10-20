@@ -822,6 +822,14 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   const servicePath = `/services/${targets.render.id}`;
   const projectPath = `/v9/projects/${targets.vercel.id}`;
   const legacyDomainPath = `${projectPath}/domains/${legacyRecoveryPair.productionDomain}`;
+  const checkRecoveryPair = async (baseline, web, project) => {
+    const replacement = prior.vercelDeployId;
+    const aliasId = replacement && project.targets?.production?.id === replacement ?
+      replacement : firstRecovery.vercelDeployId;
+    const mapping = await api.vercel(`/v2/deployments/${aliasId}/aliases`);
+    validateLegacyProviderPair(firstRecovery, baseline, web, project,
+      await api.vercel(legacyDomainPath), replacement, { deploymentId: aliasId, aliases: mapping?.aliases });
+  };
   const repository = await api.gh('');
   const readRender = async () => {
     const service = await api.render(servicePath);
@@ -903,7 +911,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   requireThat(baseline.id === baselineProof.renderDeployId && baseline.commit?.id === baselineProof.renderSha &&
     ['live', 'deactivated'].includes(baseline.status), 'ROLLBACK_BASELINE_REVISION_UNAVAILABLE');
   const oldWeb = await api.vercel(`/v13/deployments/${baselineProof.vercelDeployId}`);
-  if (firstRecovery) validateLegacyProviderPair(firstRecovery, baseline, oldWeb, project, await api.vercel(legacyDomainPath), prior.vercelDeployId);
+  if (firstRecovery) await checkRecoveryPair(baseline, oldWeb, project);
   requireThat(oldWeb.id === baselineProof.vercelDeployId && oldWeb.projectId === targets.vercel.id &&
     oldWeb.target === 'production' && oldWeb.readyState === 'READY' && !oldWeb.aliasError &&
     (firstRecovery && baselineProof.vercelSourceProvenance === 'UNVERIFIED_LEGACY' ?
@@ -980,9 +988,9 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       latestRender.some(x => x.id === baselineProof.renderDeployId && x.status === 'live' &&
         x.commit?.id === baselineProof.renderSha) && latestRender.every(x => !activeRender.has(x.status)) &&
       latestRender.every(x => x.commit?.id !== qualified.sha), 'RENDER_CHANGED_BEFORE_REQUEST');
-    if (firstRecovery) validateLegacyProviderPair(firstRecovery,
+    if (firstRecovery) await checkRecoveryPair(
       await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`),
-      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project, await api.vercel(legacyDomainPath), prior.vercelDeployId);
+      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project);
     report({ phase: 'render-requesting' });
     render = await api.render(`${servicePath}/deploys`, { commitId: qualified.sha, clearCache: 'do_not_clear' });
   }
@@ -1008,9 +1016,9 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   requireThat(project.targets?.production?.id === baselineProof.vercelDeployId ||
     (existingVercel && project.targets?.production?.id === existingVercel.id), 'VERCEL_BASELINE_DRIFT');
   if (!existingVercel) {
-    if (firstRecovery) validateLegacyProviderPair(firstRecovery,
+    if (firstRecovery) await checkRecoveryPair(
       await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`),
-      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project, await api.vercel(legacyDomainPath), prior.vercelDeployId);
+      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project);
     await guard();
     await readRender();
     const latestVercel = await deploymentHistory(api, 'vercel');
@@ -1045,9 +1053,9 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     project = await api.vercel(projectPath);
     validateVercel(project, repository.id);
     requireThat(project.targets?.production?.id === baselineProof.vercelDeployId, 'VERCEL_BASELINE_DRIFT');
-    if (firstRecovery) validateLegacyProviderPair(firstRecovery,
+    if (firstRecovery) await checkRecoveryPair(
       await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`),
-      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project, await api.vercel(legacyDomainPath), prior.vercelDeployId);
+      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project);
     await readVercelVariables();
     await readProtectedReadiness(qualified.sha);
     await guard();

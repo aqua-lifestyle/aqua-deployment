@@ -83,8 +83,7 @@ test('changed provider identities, missing domain and unavailable artifacts stop
     f => f.state.domain.verified = false,
     f => f.state.domain.projectId = 'prj_other',
     f => f.state.domain.redirect = 'attacker.invalid',
-    f => { const read=f.api.vercel; f.api.vercel=async (...args)=>{
-      const r=await read(...args); if(args[0].endsWith('/'+legacyRecoveryPair.vercelDeployId))r.alias=[];return r;}; },
+    f => f.state.recoveryAliases={aliases:[]},
     f => { const read=f.api.render; f.api.render=async (...args)=>{
       if(args[0].endsWith('/deploys/'+legacyRecoveryPair.renderDeployId))throw Error('artifact unavailable');return read(...args);}; }
   ]) {
@@ -126,8 +125,11 @@ test('an alias moved after Vercel requires the exact acknowledged replacement an
   const render={id:proof.renderDeployId,commit:{id:proof.renderSha},status:'deactivated'};
   const web={id:proof.vercelDeployId,projectId:proof.vercelProjectId,target:'production',readyState:'READY',alias:[]};
   const project={...f.state.project,targets:{production:{id:'dpl_Replacement'}}};
-  assert.throws(()=>validateLegacyProviderPair(proof,render,web,project,f.state.domain),/IDENTITY_MISMATCH/);
-  assert.throws(()=>validateLegacyProviderPair(proof,render,web,project,f.state.domain,'dpl_Other'),/IDENTITY_MISMATCH/);
-  validateLegacyProviderPair(proof,render,web,project,f.state.domain,'dpl_Replacement');
-  assert.throws(()=>validateLegacyProviderPair(proof,render,{...web,id:'dpl_Other'},project,f.state.domain,'dpl_Replacement'),/IDENTITY_MISMATCH/);
+  const aliases={deploymentId:'dpl_Replacement',aliases:[{alias:proof.productionDomain}]};
+  assert.throws(()=>validateLegacyProviderPair(proof,render,web,project,f.state.domain,undefined,aliases),/IDENTITY_MISMATCH/);
+  assert.throws(()=>validateLegacyProviderPair(proof,render,web,project,f.state.domain,'dpl_Other',aliases),/IDENTITY_MISMATCH/);
+  validateLegacyProviderPair(proof,render,web,project,f.state.domain,'dpl_Replacement',aliases);
+  assert.throws(()=>validateLegacyProviderPair(proof,render,web,project,f.state.domain,'dpl_Replacement',
+    {...aliases,deploymentId:proof.vercelDeployId}),/IDENTITY_MISMATCH/);
+  assert.throws(()=>validateLegacyProviderPair(proof,render,{...web,id:'dpl_Other'},project,f.state.domain,'dpl_Replacement',aliases),/IDENTITY_MISMATCH/);
 });
