@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { schemaSource } from './commission-schema-first.mjs';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
@@ -105,6 +106,9 @@ test('qualification dispatch executes normal candidate/admission, retains a purp
       AQUA_ADMISSION_RECEIPT_OUTPUT: join(dir, 'admission.json'), AQUA_ADMISSION_RECEIPT_FILE: join(dir, 'admission.json') };
     delete env.RENDER_API_KEY; delete env.VERCEL_TOKEN;
     const f = fixture(); f.state.candidate = { ...f.state.candidate, sha, executorSha, qualificationOnly: true };
+    f.state.files = schemaSource.migrationFiles.map(p => ({filename:p.path,status:p.status}));
+    for (const pin of [...schemaSource.migrationFiles,...schemaSource.holdSources])
+      f.state.sourceDigests.set(pin.path,pin.sha256);
     f.state.report.context.sha = sha;
     const transform = value => value === source ? sha : Array.isArray(value) ? value.map(transform) :
       value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k,v]) => [k,transform(v)])) : value;

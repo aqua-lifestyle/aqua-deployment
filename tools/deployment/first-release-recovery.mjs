@@ -23,17 +23,17 @@ const exact = (value, keys) => value && typeof value === 'object' && !Array.isAr
 // Same custody model as the existing administrator ruleset readback: original,
 // non-secret operator evidence is reviewed in a protected executor merge. This
 // is not independent provider attestation, a self-hash, or rollback execution.
-export function validateFirstReleaseRecovery(readback, candidate, policy, now = Date.now) {
+export function validateFirstReleaseRecovery(readback, candidate, policy, now = Date.now, schemaProof = null) {
   check(readback && typeof readback === 'object' && !Array.isArray(readback),
     'FIRST_RELEASE_RECOVERY_EVIDENCE_REQUIRED');
   check(objectDigest(readback) === policy.firstReleaseRecovery.evidenceSha256,
     'FIRST_RELEASE_RECOVERY_EVIDENCE_CHANGED');
   check(exact(readback, ['contract', 'version', 'status', 'observation']) &&
-    readback.contract === 'aqua.first-release-recovery-readback' && readback.version === 1 &&
+    readback.contract === 'aqua.first-release-recovery-readback' && readback.version === (schemaProof ? 2 : 1) &&
     readback.status === 'VERIFIED', 'FIRST_RELEASE_RECOVERY_EVIDENCE_REQUIRED');
   const o = readback.observation;
   check(exact(o, ['observedAt', 'expiresAt', 'observer', 'candidateSha', 'baseline',
-    'renderArtifact', 'vercelArtifact', 'compatibility']), 'FIRST_RELEASE_RECOVERY_EVIDENCE_INVALID');
+    'renderArtifact', 'vercelArtifact', 'compatibility', ...(schemaProof ? ['recovery'] : [])]), 'FIRST_RELEASE_RECOVERY_EVIDENCE_INVALID');
   const time = now(), observed = Date.parse(o.observedAt), expiry = Date.parse(o.expiresAt);
   check(Number.isFinite(time) && Number.isFinite(observed) && Number.isFinite(expiry) &&
     observed <= time + 30_000 && observed >= time - policy.authorization.maxCiAgeSeconds * 1000 &&
@@ -54,9 +54,13 @@ export function validateFirstReleaseRecovery(readback, candidate, policy, now = 
       'FIRST_RELEASE_RECOVERY_ARTIFACT_UNAVAILABLE');
   }
   check(exact(o.compatibility, ['schemaAndData', 'configuration', 'evidenceReference']) &&
-    o.compatibility.schemaAndData === true && o.compatibility.configuration === true &&
+    o.compatibility.schemaAndData === !schemaProof && o.compatibility.configuration === true &&
     reference(o.compatibility.evidenceReference), 'FIRST_RELEASE_RECOVERY_COMPATIBILITY_UNVERIFIED');
-  return { kind: 'pinned-legacy-retained-artifact-v1', evidenceSha256: objectDigest(readback),
+  if (schemaProof) check(exact(o.recovery, ['mode', 'sourceSha', 'schemaEvidenceSha256', 'legacyFinancialRollbackAllowed']) &&
+    o.recovery.mode === 'forward-only-hold-aware' && o.recovery.sourceSha === candidate.sha &&
+    o.recovery.schemaEvidenceSha256 === schemaProof.evidenceSha256 &&
+    o.recovery.legacyFinancialRollbackAllowed === false, 'FIRST_RELEASE_FORWARD_RECOVERY_REQUIRED');
+  return { kind: schemaProof ? 'pinned-legacy-forward-remediation-v1' : 'pinned-legacy-retained-artifact-v1', evidenceSha256: objectDigest(readback),
     frontendSourceProvenance: 'UNVERIFIED_LEGACY', ...legacyRecoveryPair };
 }
 

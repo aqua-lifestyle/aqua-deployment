@@ -61,7 +61,10 @@ const runnerEnv = (attempt = 1) => ({ GITHUB_REPOSITORY: targets.executor.reposi
   GITHUB_RUN_ID: '456', GITHUB_RUN_ATTEMPT: String(attempt), GITHUB_REF: 'refs/heads/main',
   GITHUB_WORKFLOW_REF: `${targets.executor.repository}/.github/workflows/deploy.yml@refs/heads/main`,
   RENDER_API_KEY: 'synthetic-render-key', VERCEL_TOKEN: 'synthetic-vercel-token' });
-const policy = () => structuredClone(standingPolicy);
+// Preserve explicit v6 compatibility coverage. New schema-first tests select v7
+// deliberately; missing v7 evidence never falls back to this historical policy.
+const policy = () => { const p = structuredClone(standingPolicy); p.version = 6;
+  p.firstReleaseRecovery.kind = 'pinned-legacy-retained-artifact-v1'; delete p.schemaFirst; return p; };
 const installedGovernance = JSON.parse(readFileSync(new URL('./installed-main-governance.json', import.meta.url)));
 const governance = () => structuredClone(installedGovernance.rules);
 const service = () => ({ id: targets.render.id, name: targets.render.name,
@@ -282,6 +285,7 @@ function fixture() {
         admissionReceipt,readSourceDigest,now:()=>fixtureNow,frontendArchive:state.frontendArchive,
         evidencePlan: state.plan ?? {policySha256:state.candidate.policySha256,verifiedReleases:[],baseline:null,resume:null,resumeChain:[],firstReleaseRecoveryEvidenceSha256:state.policy.firstReleaseRecovery.evidenceSha256},
         recoveryReadback:state.recoveryReadback,
+        schemaReadback:state.schemaReadback,
         receiptRows: state.receiptRows, baselineRows: state.baselineRows });
   };
   return { state, api, posts, reports, execute, authorizationFor,readSourceDigest };

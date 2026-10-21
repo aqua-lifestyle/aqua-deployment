@@ -1,14 +1,20 @@
 {
-  "version": 6,
-  "epoch": "aqgreen-mvp-first-release-recovery-v1",
+  "version": 7,
+  "epoch": "aqgreen-mvp-commission-schema-first-v1",
   "profile": "normal-integrated",
   "baseline": "automatic",
   "authorization": {
     "kind": "github-evidence-v1",
     "approval": "trusted-administrator-executor-merge",
     "administrators": [
-      { "login": "Xolani-M", "id": 86495928 },
-      { "login": "aqualifestyleclub", "id": 307076734 }
+      {
+        "login": "Xolani-M",
+        "id": 86495928
+      },
+      {
+        "login": "aqualifestyleclub",
+        "id": 307076734
+      }
     ],
     "inventorySourceCommit": "b57c2810bc15d1f7893126697a0bfbb3f5b3ade2",
     "inventorySha256": "85e0b5175527509de9badd368d4db82da2429cf6e295345f25049f913674fa9f",
@@ -34,7 +40,7 @@
     }
   },
   "firstReleaseRecovery": {
-    "kind": "pinned-legacy-retained-artifact-v1",
+    "kind": "pinned-legacy-forward-remediation-v1",
     "baseline": {
       "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
       "renderDeployId": "dep-db8av3dg1s2s739m6sgg",
@@ -45,6 +51,11 @@
       "productionDomain": "www.aqualifestyleclub.co.za",
       "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend"
     },
-    "evidenceSha256": "bc45116416d8ced214799e23d94c8ece01b42d61af2f663ef57db7690002b913"
+    "evidenceSha256": "82af13bdbaafe6f0f1b08341df4ae0c60d06e9d251161070709d479770a44c70"
+  },
+  "schemaFirst": {
+    "kind": "commission-invalidation-schema-first-v1",
+    "sourceManifestSha256": "41dbfe3fe5ac390d8d17f3c4b350e18a2c32d0ee4be9ace1b355841d7ab636e4",
+    "evidenceSha256": "d066d6901c7a592cb8b6363690ce1be2b647f2a120879ccc27e7db5f93ea9ea6"
   }
 }
