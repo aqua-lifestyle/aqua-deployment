@@ -19,11 +19,14 @@ export const approvedInventoryBytes = readFileSync(new URL('./approved-security-
 export const approvedInventory = validateInventory(JSON.parse(approvedInventoryBytes));
 export const inventoryDigest = sha256(approvedInventoryBytes);
 export const maxArtifactBytes = 4 * 1024 * 1024;
+const schemaPins = JSON.parse(readFileSync(new URL('./commission-schema-source.json', import.meta.url)));
+const schemaPaths = [...schemaPins.migrationFiles, ...schemaPins.holdSources].map(p => p.path);
 
 // Never check out or execute application code to inspect definitions.
 export function gitSourceDigest(directory, sha, path) {
   check(typeof directory === 'string' && /^[a-f0-9]{40}$/.test(sha) &&
-    (approvedInventory.sources.some(s => s.path === path) || path === 'tools/deployment/mandatory-security-tests.json'),
+    (approvedInventory.sources.some(s => s.path === path) || path === 'tools/deployment/mandatory-security-tests.json' ||
+      schemaPaths.includes(path)),
   'APPROVED_SOURCE_PATH_REQUIRED');
   try {
     const entry = execFileSync('git', ['-C', directory, 'ls-tree', '-z', sha, '--', path], { encoding: 'utf8', maxBuffer: 4096 });

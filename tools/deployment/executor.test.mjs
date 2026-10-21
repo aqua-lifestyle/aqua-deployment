@@ -7,7 +7,7 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {objectDigest} from './github-evidence.mjs';
 import {fixture,qualified,runnerEnv,source,previous,run,jobs,fixtureNow,frontendFixtureFiles} from './fixtures/provider.mjs';
-import {clients,freezeCandidate,validatePolicy,verifyCandidate,targets,standingPolicy,qualify,
+import {clients,freezeCandidate,validateRun,validatePolicy,verifyCandidate,targets,standingPolicy,qualify,
   evidencePlan,releaseKey,validateLegacyHistory,main,validateResumeReceipt,validateBaselineReceipt,
   validateAdmissionJob,requireDeploymentAttestation,admissionJobName} from './release-control.mjs';
 import {fetchSource} from './fetch-source.mjs';
@@ -101,7 +101,7 @@ test('candidate artifact must match independently fetched Git bytes and exact CI
   assert.throws(()=>verifyCandidate(candidate,q,bytes,Buffer.from('different Git archive')));
 });
 test('external receipts and history belong to executor, never application runs',async()=>{
-  const q=qualified(),calls=[];
+  const q=freezeCandidate(validateRun(run(),jobs(),source),runnerEnv(),standingPolicy),calls=[];
   const r={id:456,run_attempt:1,run_number:1,head_sha:q.executorSha,head_branch:'main',event:'workflow_dispatch',
     path:'.github/workflows/deploy.yml',name:'Qualified production executor',status:'in_progress',
     repository:{full_name:targets.executor.repository},head_repository:{full_name:targets.executor.repository}};

@@ -1,4 +1,16 @@
-The first-release recovery correction selects policy v6; see
+The commission-invalidation correction selects policy v7; see the
+[schema-first and forward-only operator procedure](docs/first-release-recovery.md#commission-invalidation-schema-first-policy-v7).
+It adds no migration execution, deployment dispatch, credential or activation step.
+Both protected operator readbacks remain UNVERIFIED, so production admission stops
+before environment credentials become available. Qualified B6 acquisition against
+the unchanged 54-migration production schema must precede separately authorized DDL.
+The exact migration and hold-aware source are pinned; later unrelated schema changes
+still deny. Financial/V2/worker fences, all 17 CI checks and OIDC readiness remain.
+Do not use the retained legacy backend for financial operations after this migration.
+Recovery retains the new schema and invalidations and uses hold-aware forward remediation.
+Automatic deployment remains disabled; this PR does not authorize a merge or release.
+
+The earlier first-release recovery correction selected policy v6; see
 [the pinned retained-artifact exception and required operator evidence](docs/first-release-recovery.md).
 The checked-in readback remains UNVERIFIED and blocks production admission. No
 provider inspection or production operation was performed by this correction.

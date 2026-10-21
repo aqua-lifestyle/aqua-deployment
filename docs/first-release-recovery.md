@@ -6,6 +6,87 @@ credentials, release dispatch, rollback, database work or provider mutations.
 
 ## Scope and authority
 
+### Commission invalidation: schema-first policy v7
+
+This is the bounded implementation of the owner's migration/recovery instruction,
+not authorization to execute it. Policy v7 replaces the blanket schema rejection
+only for the exact three migration paths/digests in `commission-schema-source.json`:
+`20261021051549_AddAQGreenSalesEvidenceInvalidation`, its designer and model snapshot.
+The payout service and guard source digests are pinned too. They were read from
+CI-qualified application `73890aa1b7c843238bbca1b450000d43d8ef8b5b`. Candidate code is
+read as inert regular Git blobs; it supplies neither policy nor operator evidence.
+Any missing/modified/renamed/deleted/extra migration or changed payout guard denies.
+
+`governance/commission-schema-readback.json` is UNVERIFIED. A protected executor PR
+must eventually retain the original sanitized operator records and bind the
+complete readback digest in `schemaFirst.evidenceSha256`. The existing trusted
+administrator merge establishes custody/approval, not independent cryptographic
+proof of the underlying database/B6 facts. No sensitive database values are needed.
+The strict observation fields are defined by `validateSchemaReadback`:
+
+1. **B6 first:** Agent 2's qualified acquisition and its acceptance reference/digest,
+   exact Tenant and database-identity digest, observed schema digest and 54 applied
+   migration count. Acquisition must use the unchanged production schema before
+   any DDL. Do not repeat acquisition or change Agent 2's extraction profile here.
+2. **Separate DDL authorization:** an explicit AUTHORIZED owner record naming the
+   candidate SHA, exact migration ID and migration-file SHA-256, trusted actor and
+   UTC authorization time. A general executor merge is not this authorization.
+3. **Schema first:** separately authorized maintenance applies only this additive
+   migration through the existing maintenance procedure. Verify its actual prior
+   history and generated SQL first; if additional/unrecognized migrations are
+   pending, stop. Never turn on API startup migration or install a pre-deploy hook.
+   The applied readback must show 54→55, unchanged pre-existing history, matching
+   pre-DDL B6 schema and working append-only guards, with original evidence references.
+   These counts are required production observations, not inferred from source-file
+   counts or fabricated from synthetic tests. A mismatch blocks rather than bypasses.
+4. **Keep operations held:** record that financial operations, V2 commissioning,
+   workers and startup migration remain held. Existing provider metadata and
+   authenticated post-Render readiness independently recheck the configuration
+   holds. Deployment does not authorize D10 or financial activity. The application
+   payout guard also denies on unavailable schema before payout mutation.
+5. **Recovery:** verify availability of the exact new source and an operator procedure
+   that retains the migrated schema, invalidation facts and payout enforcement.
+   Recovery mode is `forward-only-hold-aware`; legacy financial rollback is false.
+   The new schema cannot be rolled back once invalidations exist. Do not restore an
+   older database over those facts or enable financial operations on legacy binaries.
+
+Timestamps must establish B6 acceptance ≤ exact DDL authorization < applied DDL ≤
+operator readback. The initial readback must be within the existing 24-hour limit.
+Original evidence references are immutable executor `governance/` blob URLs; this
+reuses the existing approval boundary and does not fetch arbitrary URLs with tokens.
+The same approved schema evidence and source pins can support later code-only
+descendants after a verified same-policy production predecessor; additional DDL
+or changed guard definitions require separate review, not a permissive fallback.
+
+The retained-artifact recovery observation uses **version 2** for this path. It
+retains exact provider identities/availability and configuration evidence, explicitly
+sets `compatibility.schemaAndData=false` for legacy financial recovery, and adds
+`recovery: {mode: 'forward-only-hold-aware', sourceSha: <candidate>,
+schemaEvidenceSha256: <approved schema readback digest>, legacyFinancialRollbackAllowed: false}`.
+Both artifact availability checks remain; provider rollback eligibility is not
+permission to run the legacy backend financially. Old version-1 recovery claims
+cannot authorize this mode. Both checked-in records intentionally remain UNVERIFIED.
+
+The credential-free admission job consumes these facts before creating a receipt.
+Production revalidates them before any provider read and again before mutations.
+Policy/receipt/run/attempt/source binding, history serialization, uncertain-request
+denial, Render-first sequencing and OIDC-before-Vercel remain unchanged. Qualification
+mode can verify source/CI without applied production evidence; its receipt cannot deploy.
+
+For a partial release, the existing same-run audit/retry path may finish only known,
+acknowledged operations on the exact candidate. Lost responses, failed deployments
+and unreceipted IDs still stop. A separately authorized operator can recover through
+existing provider functionality with the same hold-aware source and retained schema;
+never substitute the pinned legacy backend. Preserve original provider IDs/audits.
+The controller does not automatically adopt a foreign recovery deployment or invent
+a verified receipt; actual provider state must be reconciled before another release.
+
+No operational B6 acquisition, applied-schema verification, provider rebuild or
+recovery success is claimed by the synthetic controller tests. B6 acceptance and
+explicit D10 authorization remain separate prerequisites for Placement V2 activation.
+
+### Historical policy v6 retained-pair path
+
 Policy v6 (`aqgreen-mvp-first-release-recovery-v1`) retains GitHub-evidence admission,
 the 17 mandatory checks and the unchanged 240-test inventory. The only provenance
 exception permits this exact Vercel deployment as a retained recovery artifact:
@@ -108,6 +189,10 @@ that exact replacement permits this normal reconciliation state.
 The retained baseline and verified project-domain identity still cannot change.
 
 ## Controlled recovery, separately authorized
+
+The legacy rollback instructions below apply only to the historical v6 path with
+genuinely compatible schema/data. **They do not apply to the v7 commission migration**;
+use the forward-only procedure above and preserve invalidation holds.
 
 - Failure after Render but before Vercel: leave the original frontend unchanged;
   stop the release and preserve exact provider request/response IDs. If necessary,

@@ -8,6 +8,8 @@ import { AttestationDenied, verifyPrototypeAttestation } from './authorization-a
 import { approvedBypassReadback, approvedReadbacks, GovernanceReadbackDenied } from './governance-readback.mjs';
 import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody, validateFileDeployment } from './vercel-source.mjs';
 import { runtimeSettings, protectedReadiness, validateReadiness } from './runtime-readiness.mjs';
+import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateMigrationDelta,
+  SchemaFirstDenied } from './commission-schema-first.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   gitSourceDigest, verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission,
   readGitHubArtifact, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
@@ -72,11 +74,13 @@ export function policyDigest(policy) {
   const a = policy?.authorization;
   const expectedScope = { repository: targets.repository, branch: 'main', executorRepository: execution.repository, ...targetIdentity,
     frontend: { mode: 'vercel-files-v1', rootDirectory: targets.vercel.rootDirectory, publicBuildInputs: approvedPublicInputs(targets.vercel) } };
-  requireThat(policy?.version === 6 && /^[a-z0-9-]{1,80}$/.test(policy.epoch) &&
+  const schemaFirst = policy?.version === 7;
+  requireThat((policy?.version === 6 || schemaFirst) && /^[a-z0-9-]{1,80}$/.test(policy.epoch) &&
     policy.profile === targets.profile && policy.baseline === 'automatic' &&
-    owns(policy, ['version', 'epoch', 'profile', 'baseline', 'authorization', 'scope', 'firstReleaseRecovery']) &&
+    owns(policy, ['version', 'epoch', 'profile', 'baseline', 'authorization', 'scope', 'firstReleaseRecovery',
+      ...(schemaFirst ? ['schemaFirst'] : [])]) && (!schemaFirst || validSchemaPolicy(policy.schemaFirst)) &&
     owns(policy.firstReleaseRecovery, ['kind', 'baseline', 'evidenceSha256']) &&
-    policy.firstReleaseRecovery.kind === 'pinned-legacy-retained-artifact-v1' &&
+    policy.firstReleaseRecovery.kind === (schemaFirst ? 'pinned-legacy-forward-remediation-v1' : 'pinned-legacy-retained-artifact-v1') &&
     objectDigest(policy.firstReleaseRecovery.baseline) === objectDigest(legacyRecoveryPair) &&
     /^[a-f0-9]{64}$/.test(policy.firstReleaseRecovery.evidenceSha256) &&
     owns(a, ['kind', 'approval', 'administrators', 'inventorySourceCommit', 'inventorySha256', 'maxCiAgeSeconds', 'maxAdmissionAgeSeconds']) &&
@@ -514,7 +518,7 @@ export function createAuditWriter(identity, emit) {
   return row => {
     for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt',
       'baselineRenderDeployId', 'baselineVercelDeployId', 'baselineRenderSha', 'baselineVercelSha',
-      'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256',
+      'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256', 'schemaFirstEvidenceSha256', 'recoveryMode',
       'authorizationId', 'evidenceSha256', 'inventorySha256', 'evidenceArtifactId', 'vercelSourceProof'])
       if (row[key] !== undefined) known[key] = row[key];
     emit({ ...row, ...Object.fromEntries(releaseIdentityFields.map(key => [key, identity[key]])), ...known });
@@ -555,7 +559,7 @@ export function validateResumeReceipt(rows, frozen) {
     }
     for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt',
       'baselineRenderDeployId', 'baselineRenderSha', 'baselineVercelDeployId', 'baselineVercelSha',
-      'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256']) {
+      'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256', 'schemaFirstEvidenceSha256', 'recoveryMode']) {
       if (row[key] === undefined) continue;
       requireThat(known[key] === undefined || known[key] === row[key], 'CONTRADICTORY_RESUME_RECEIPT');
       known[key] = row[key];
@@ -803,20 +807,25 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     plan.resume?.runId === qualified.releaseRunId && plan.resume.runAttempt === qualified.releaseRunAttempt - 1 &&
     plan.resume.sha === (external ? qualified.executorSha : qualified.sha) && options.receiptRows, 'RESUME_RECEIPT_REQUIRED');
   const prior = options.receiptRows ? validateResumeReceipt(options.receiptRows, qualified) : {};
+  const schemaProof = await verifySchemaFirst(api, qualified, policy, readSource,
+    options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now);
   const firstRecovery = !plan.baseline ? validateFirstReleaseRecovery(
-    options.recoveryReadback ?? approvedRecoveryReadback, qualified, policy, options.now) : null;
+    options.recoveryReadback ?? approvedRecoveryReadback, qualified, policy, options.now, schemaProof) : null;
   requireThat(plan.firstReleaseRecoveryEvidenceSha256 === (firstRecovery?.evidenceSha256 ?? null),
     'FIRST_RELEASE_RECOVERY_PLAN_MISMATCH');
   requireThat(!firstRecovery || plan.verifiedReleases.length === 0, 'FIRST_RELEASE_RECOVERY_ALREADY_CONSUMED');
   const githubGuard = guard;
   guard = async () => {
     await githubGuard();
+    await verifySchemaFirst(api, qualified, policy, readSource,
+      options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now);
     if (firstRecovery) validateFirstReleaseRecovery(
-      options.recoveryReadback ?? approvedRecoveryReadback, qualified, policy, options.now);
+      options.recoveryReadback ?? approvedRecoveryReadback, qualified, policy, options.now, schemaProof);
   };
   report({ phase: 'evidence-selected', authorizationId: options.admissionReceipt.authorizationId,
     evidenceSha256: options.admissionReceipt.evidenceSha256, inventorySha256: evidence.inventorySha256,
-    evidenceArtifactId: evidence.artifact.id });
+    evidenceArtifactId: evidence.artifact.id, ...(schemaProof ? {
+      schemaFirstEvidenceSha256: schemaProof.evidenceSha256, recoveryMode: schemaProof.recoveryMode } : {}) });
   const frontend = prepareFrontend(options.frontendArchive, qualified.sha, targets.vercel, policy.scope.frontend.publicBuildInputs);
   requireThat(!prior.vercelSourceProof || objectDigest(prior.vercelSourceProof) === objectDigest(frontend.proof), 'CONTRADICTORY_RESUME_RECEIPT');
   const servicePath = `/services/${targets.render.id}`;
@@ -929,9 +938,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   }
   const compare = await api.gh(`/compare/${baseline.commit.id}...${qualified.sha}`);
   requireThat(compare.status === 'ahead' || compare.status === 'identical', 'SOURCE_NOT_BASELINE_DESCENDANT');
-  requireThat(compare.files?.length < 300 && !compare.files.some(f =>
-    /\/Migrations\//i.test(f.filename) || /\/Migrations\//i.test(f.previous_filename ?? '')),
-  'SCHEMA_CHANGE_REQUIRES_SEPARATE_AUTHORIZATION');
+  validateMigrationDelta(compare, !!schemaProof);
   const renderDeploys = await deploymentHistory(api, 'render');
   const live = renderDeploys.filter(x => x.status === 'live');
   requireThat(live.length === 1 && (live[0].id === baselineProof.renderDeployId ||
@@ -1198,11 +1205,13 @@ export async function main(env, options = {}) {
     await validateInfrastructure(api, q, policy);
     await validateCandidateProvenance(api, q);
     const plan = await evidencePlan(api, q, policy);
+    const schemaProof = await verifySchemaFirst(api, q, policy, readSource,
+      options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now);
     // Provider credentials remain unavailable here. The named operator's original
     // eligibility/compatibility readback must be approved with this executor SHA.
     // Qualification-only execution never constitutes production authorization.
     if (!q.qualificationOnly && !plan.baseline)
-      validateFirstReleaseRecovery(options.recoveryReadback ?? approvedRecoveryReadback, q, policy, options.now);
+      validateFirstReleaseRecovery(options.recoveryReadback ?? approvedRecoveryReadback, q, policy, options.now, schemaProof);
     const receipt = createGitHubAdmission(q, policy, evidence, options.now);
     requireThat(typeof env.AQUA_ADMISSION_RECEIPT_OUTPUT === 'string', 'ADMISSION_OUTPUT_REQUIRED');
     writeFileSync(env.AQUA_ADMISSION_RECEIPT_OUTPUT, JSON.stringify(receipt) + '\n', { flag: 'wx', mode: 0o600 });
@@ -1235,6 +1244,7 @@ export async function main(env, options = {}) {
   };
   await deploy(api, q, policy, report, { env, evidencePlan: plan, admissionReceipt,
     readSourceDigest: readSource, now: options.now,
+    schemaReadback: options.schemaReadback,
     recoveryReadback: options.recoveryReadback,
     ...options.deploymentOptions, frontendArchive: trustedSourceArchive,
     baselineRows: plan.baseline ? readAudit(env.BASELINE_RECEIPT_FILE) : undefined,
@@ -1248,7 +1258,7 @@ export async function run(env, options = {}) {
   catch (error) {
     const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied ||
       error instanceof GovernanceReadbackDenied || error instanceof VercelSourceDenied ||
-      error instanceof FirstReleaseRecoveryDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
+      error instanceof FirstReleaseRecoveryDenied || error instanceof SchemaFirstDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
     if (failureReport) failureReport(code);
     else if (env.RELEASE_REPORT)
       appendFileSync(env.RELEASE_REPORT, JSON.stringify({ phase: 'blocked', code, identityVerified: false }) + '\n');

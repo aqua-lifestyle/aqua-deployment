@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "sourceSha": "73890aa1b7c843238bbca1b450000d43d8ef8b5b",
+  "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
+  "migrationFiles": [
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Migrations/20261021051549_AddAQGreenSalesEvidenceInvalidation.cs",
+      "status": "added",
+      "sha256": "09b319ef4c6ce530fc0ac152b27d6a0595605f300620b02e31ede149f23f5441"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Migrations/20261021051549_AddAQGreenSalesEvidenceInvalidation.Designer.cs",
+      "status": "added",
+      "sha256": "41672d66e4e0904a9024a4947468d006171e39559e6ae3db2cc9913cee450657"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Migrations/AqualLifeStyleDbContextModelSnapshot.cs",
+      "status": "modified",
+      "sha256": "0f34d3e62aaf89b0ed25a4f2597d81a7b9e3f1cc0082ed14d570199b1e0292bf"
+    }
+  ],
+  "holdSources": [
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/Admin/Commissions/AdminCommissionAppService.cs",
+      "sha256": "54935c85ffa8b474d42857aca216efe996ef2b46ed6dab45b063edc0b78e00f7"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/EntityFrameworkCore/AQGreenSalesEvidencePayoutGuard.cs",
+      "sha256": "44c91e1a396547b8de0529d3c1ac95ced9cea979f5269815d3400849ce27d673"
+    }
+  ]
+}

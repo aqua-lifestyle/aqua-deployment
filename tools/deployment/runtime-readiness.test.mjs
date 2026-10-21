@@ -11,7 +11,7 @@ const response=sha=>({status:200,body:{contract:'aqua.production-readiness',vers
 test('normal runtime permits required Bird/Yoco configuration without fetching their values',async()=>{
   const f=fixture(),reads=[],read=f.api.render;f.api.render=async(route,body)=>{if(!body)reads.push(route);return read(route,body);};
   await f.execute();assert.deepEqual(f.posts.map(x=>x.provider),['render','vercel']);
-  assert.equal(standingPolicy.profile,'normal-integrated');assert.equal(standingPolicy.version,6);
+  assert.equal(standingPolicy.profile,'normal-integrated');assert.equal(standingPolicy.version,7);
   for(const route of reads.filter(x=>x.includes('/env-vars'))){const key=route.split('/env-vars/')[1];assert.ok(Object.hasOwn(runtimeSettings,key));}
   assert.ok(!reads.some(x=>/ApiKey|SecretKey|WebhookSecret|secret-files|env-vars\?/.test(x)));
 });
