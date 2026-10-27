@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fixture, source, previous, fixtureNow, zipFixture, runnerEnv } from './fixtures/provider.mjs';
 import { standingPolicy, policyDigest, evidencePlan, clients, admissionJobName, releaseKey } from './release-control.mjs';
 import { approvedInventory, approvedInventoryBytes, inventoryDigest, verifyApprovedDefinitions,
   verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission, gitSourceDigest, sha256 } from './github-evidence.mjs';
+import { schemaSource } from './commission-schema-first.mjs';
 const now = () => fixtureNow;
 const verified = f => verifyGitHubEvidence(f.api, f.state.candidate, f.state.policy, f.readSourceDigest, now);
 
@@ -266,4 +267,20 @@ test('inert Git definition reads reject symlinks, missing files and unapproved p
     assert.throws(()=>gitSourceDigest(dir,sha,'tools/deployment/missing.mjs'),/APPROVED_SOURCE_PATH_REQUIRED/);
     assert.throws(()=>gitSourceDigest(dir,sha,'.github/workflows/ci.yml'),/NOT_REGULAR/);
   }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('the real Git reader admits every executor-pinned clean-start source without executing it', () => {
+  const dir=mkdtempSync(join(tmpdir(),'aqua-clean-start-definition-git-'));
+  try {
+    const git=args=>execFileSync('git',args,{cwd:dir,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+    git(['init','-q']);git(['config','user.name','Fixture']);git(['config','user.email','fixture@example.invalid']);
+    const content="throw Error('NEVER_EXECUTE');\n";
+    assert.ok(schemaSource.cleanStartSources.length>0);
+    for(const pin of schemaSource.cleanStartSources){
+      mkdirSync(dirname(join(dir,pin.path)),{recursive:true});writeFileSync(join(dir,pin.path),content);
+    }
+    git(['add','.']);git(['commit','-qm','inert clean-start fixture']);const sha=git(['rev-parse','HEAD']);
+    for(const pin of schemaSource.cleanStartSources) assert.equal(gitSourceDigest(dir,sha,pin.path),sha256(content));
+    assert.throws(()=>gitSourceDigest(dir,sha,'unapproved-clean-start.sql'),/APPROVED_SOURCE_PATH_REQUIRED/);
+  } finally {rmSync(dir,{recursive:true,force:true});}
 });

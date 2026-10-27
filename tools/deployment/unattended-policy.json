@@ -1,6 +1,6 @@
 {
   "version": 7,
-  "epoch": "aqgreen-mvp-commission-schema-first-v1",
+  "epoch": "aqgreen-clean-start-schema-first-v1",
   "profile": "normal-integrated",
   "baseline": "automatic",
   "authorization": {
@@ -16,8 +16,8 @@
         "id": 307076734
       }
     ],
-    "inventorySourceCommit": "b57c2810bc15d1f7893126697a0bfbb3f5b3ade2",
-    "inventorySha256": "85e0b5175527509de9badd368d4db82da2429cf6e295345f25049f913674fa9f",
+    "inventorySourceCommit": "84bf271a18e4cc3f60c46b2a6d64a6bfed0c0bea",
+    "inventorySha256": "6c14c5dde4bc7fa439fc4c8f1e9301cfc2c7d38b511996c2463653e94b2a142b",
     "maxCiAgeSeconds": 86400,
     "maxAdmissionAgeSeconds": 3600
   },
@@ -54,8 +54,8 @@
     "evidenceSha256": "82af13bdbaafe6f0f1b08341df4ae0c60d06e9d251161070709d479770a44c70"
   },
   "schemaFirst": {
-    "kind": "commission-invalidation-schema-first-v1",
-    "sourceManifestSha256": "41dbfe3fe5ac390d8d17f3c4b350e18a2c32d0ee4be9ace1b355841d7ab636e4",
-    "evidenceSha256": "d066d6901c7a592cb8b6363690ce1be2b647f2a120879ccc27e7db5f93ea9ea6"
+    "kind": "commission-invalidation-clean-start-v1",
+    "sourceManifestSha256": "da7aeb8b52c5506db58d232e1c18674fcb5e7ad58c889e9a3da8334e963dc224",
+    "evidenceSha256": "eb00db7fa0ed4de7d148e8919dce32917d78b72a7cee268a4009eb9e4229a660"
   }
 }

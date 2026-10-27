@@ -16,6 +16,7 @@ const time = offset => new Date(fixtureNow + offset).toISOString();
 function schemaFixture() {
   const f = fixture();
   f.state.policy = structuredClone(standingPolicy);
+  f.state.policy.schemaFirst.kind = 'commission-invalidation-schema-first-v1';
   f.state.files = schemaSource.migrationFiles.map(p => ({filename:p.path,status:p.status}));
   for (const p of [...schemaSource.migrationFiles,...schemaSource.holdSources]) f.state.sourceDigests.set(p.path,p.sha256);
   f.state.schemaReadback = {contract:'aqua.commission-schema-first-readback',version:1,status:'VERIFIED',observation:{
@@ -52,6 +53,59 @@ test('the exact applied additive migration uses forward-only recovery and preser
   assert.equal(f.reports.at(-1).schemaFirstEvidenceSha256,objectDigest(f.state.schemaReadback));
   assert.equal(f.reports.at(-1).renderSha,source);
   assert.ok(f.posts.every(x=>!JSON.stringify(x).includes('rollback')));
+});
+
+function cleanStartFixture() {
+  const f=schemaFixture();
+  f.state.policy.schemaFirst.kind='commission-invalidation-clean-start-v1';
+  f.state.vars.push({envVar:{key:'App__AQGreenV2__Commissioning__AdmissionMode',value:'CLEAN_START'}});
+  for(const pin of schemaSource.cleanStartSources) f.state.sourceDigests.set(pin.path,pin.sha256);
+  const o=f.state.schemaReadback.observation;
+  const base=o.b6; delete o.b6; f.state.schemaReadback.version=2;
+  o.cleanStart={mode:'CLEAN_START',status:'RESET_ACCEPTED',databaseIdentitySha256:base.databaseIdentitySha256,
+    tenantId:1,migrationCount:54,schemaDigest:base.schemaDigest,classificationDigest:'1'.repeat(64),
+    preflightDigest:'2'.repeat(64),resetSqlDigest:schemaSource.cleanStartSources.find(p=>p.path.endsWith('/reset.sql')).sha256,
+    resetReceiptDigest:'3'.repeat(64),ownerAuthorizationDigest:'4'.repeat(64),independentAcceptanceDigest:'5'.repeat(64),
+    independenceRecordDigest:'6'.repeat(64),resetAt:time(-5000),acceptedAt:base.acceptedAt,evidenceReference:reference,
+    operator:admin,reviewer:{login:'aqualifestyleclub',id:307076734},independenceVerified:true,
+    protectedRecordsPreserved:true,genuineMembershipCount:0,realFinancialExposureCount:0,unclassifiedCount:0,
+    activeHistoricalCount:0,automaticPayoutsDisabled:true,recoveryEvidenceDigest:'7'.repeat(64),noAdditionalChargeConfirmed:true};
+  return f;
+}
+
+test('CLEAN_START explicitly admits independently accepted reset before exact migration then Render and Vercel',async()=>{
+  const f=cleanStartFixture();await f.refresh();await f.executeSchema();
+  assert.deepEqual(f.posts.map(p=>p.provider),['render','vercel']);
+  assert.equal(f.state.schemaReadback.observation.b6,undefined);
+  assert.equal(f.reports.at(-1).recoveryMode,'forward-only-hold-aware');
+});
+
+test('CLEAN_START denies real exposure, unknown classification, missing independence, recovery cost and enabled payouts before providers',async()=>{
+  const edits=[c=>c.genuineMembershipCount=1,c=>c.realFinancialExposureCount=1,c=>c.unclassifiedCount=1,
+    c=>delete c.realFinancialExposureCount,c=>c.activeHistoricalCount=1,c=>c.protectedRecordsPreserved=false,
+    c=>c.independenceVerified=false,c=>c.independenceRecordDigest=null,c=>c.reviewer=admin,
+    c=>c.automaticPayoutsDisabled=false,c=>c.noAdditionalChargeConfirmed=false,c=>c.resetReceiptDigest=null,
+    c=>c.ownerAuthorizationDigest=null,c=>c.resetSqlDigest='0'.repeat(64),c=>c.tenantId=2,
+    c=>c.resetAt=time(-1000)];
+  for(const edit of edits){const f=cleanStartFixture();edit(f.state.schemaReadback.observation.cleanStart);
+    await f.refresh();await assert.rejects(f.executeSchema(),/CLEAN_START_/);
+    assert.equal(f.state.providerCalls,0);assert.equal(f.posts.length,0);}
+});
+
+test('CLEAN_START source tampering and mixed B6 admission cannot be substituted for reviewed reset',async()=>{
+  for(const edit of [f=>f.state.schemaReadback.observation.b6={status:'ACQUISITION_ACCEPTED'},
+    f=>f.state.policy.schemaFirst.kind='commission-invalidation-schema-first-v1',
+    f=>f.state.sourceDigests.set(schemaSource.cleanStartSources[0].path,'0'.repeat(64))]){
+    const f=cleanStartFixture();edit(f);
+    await assert.rejects(async()=>{await f.refresh();await f.executeSchema();});
+    assert.equal(f.state.providerCalls,0);assert.equal(f.posts.length,0);}
+});
+
+test('CLEAN_START must retain its pending commissioning fence in the actual Render configuration',async()=>{
+  const f=cleanStartFixture();await f.refresh();
+  f.state.vars.find(r=>r.envVar.key==='App__AQGreenV2__Commissioning__AdmissionMode').envVar.value='HISTORICAL_B6';
+  await assert.rejects(f.executeSchema(),/NORMAL_RUNTIME_CONFIGURATION_UNVERIFIED/);
+  assert.equal(f.posts.length,0);
 });
 
 test('unverified or altered schema evidence denies before any provider read with no legacy fallback',async()=>{

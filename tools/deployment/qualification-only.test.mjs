@@ -107,7 +107,7 @@ test('qualification dispatch executes normal candidate/admission, retains a purp
     delete env.RENDER_API_KEY; delete env.VERCEL_TOKEN;
     const f = fixture(); f.state.candidate = { ...f.state.candidate, sha, executorSha, qualificationOnly: true };
     f.state.files = schemaSource.migrationFiles.map(p => ({filename:p.path,status:p.status}));
-    for (const pin of [...schemaSource.migrationFiles,...schemaSource.holdSources])
+    for (const pin of [...schemaSource.migrationFiles,...schemaSource.holdSources,...schemaSource.cleanStartSources])
       f.state.sourceDigests.set(pin.path,pin.sha256);
     f.state.report.context.sha = sha;
     const transform = value => value === source ? sha : Array.isArray(value) ? value.map(transform) :

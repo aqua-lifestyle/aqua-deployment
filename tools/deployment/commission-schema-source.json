@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceSha": "73890aa1b7c843238bbca1b450000d43d8ef8b5b",
+  "sourceSha": "84bf271a18e4cc3f60c46b2a6d64a6bfed0c0bea",
   "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
   "migrationFiles": [
     {
@@ -27,6 +27,68 @@
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/EntityFrameworkCore/AQGreenSalesEvidencePayoutGuard.cs",
       "sha256": "44c91e1a396547b8de0529d3c1ac95ced9cea979f5269815d3400849ce27d673"
+    }
+  ],
+  "cleanStartSources": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "4e40f54d5fa1bfea67fcc88f96bf94bb1071882e92b81229785ec9e81dc71d8e"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenCleanStartRootAppService.cs",
+      "sha256": "3b8b8206217579238cb1f43e49f57f3f9cf9b275e81a55352c471719f060f7b8"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenD10ProductionSelectors.cs",
+      "sha256": "a6e10f4555c9c566be9e21148a3b4de299ef80750ed5245d5d5e575efe2080d4"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Core/Domain/AQGreen/AQGreenCleanStartEvidence.cs",
+      "sha256": "0592dd2e3c4542ba3f558a60f79ba55c14f5968031329ad559bcbd31c5304fb7"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Core/Domain/AQGreen/AQGreenD10Commissioning.cs",
+      "sha256": "5ebe2e49956e271a6cd64db241ee9e0db0d255845c3bb7752d0a2aa3e7716119"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Core/Domain/AQGreen/IAQGreenReconciliationEvidenceSnapshot.cs",
+      "sha256": "94cc603b057d6f7bf2a3e0896919ca5a6dc1aba27e95202ff830db16cc1a08ae"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/AqualLifeStyle.EntityFrameworkCore.csproj",
+      "sha256": "244f0435d23e39bb7bc6d6c79b4339afa6ddab3a2407564fff97dfeef8340cf3"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/EntityFrameworkCore/AQGreenReconciliationEvidenceSnapshot.cs",
+      "sha256": "9b0e95b53946d66645d2c8b69c3bd80c2e3691bded57478d9c06031827775ae4"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/migration-55.reviewed.sql",
+      "sha256": "1f45ef7b67fa6eae747ca70edfed05679ef63cf4cfe2f2cf308b9d31b8c1faea"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/preflight.sql",
+      "sha256": "12f2e7cee40682e6bf1d031211842143d0d0a8de5dcf79d5333a06555a1152d6"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/reset.sql",
+      "sha256": "29535d77b81021e5d2ca76369818c35b0d9cd74e0fe6ef7a618b63e335ea5f52"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/restore.sql",
+      "sha256": "1f9e1e8493037151e3d96d8c3a76b8f09e622854e703b838171fcef0a7bd33e1"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/state.sql",
+      "sha256": "db3d36ac23172c2005aa6edd202ea6f9cb6b4635c75c1bdbd2889f47571fd100"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/AQGreenD10OperatorEvidenceSource.cs",
+      "sha256": "7128bd0670f261c1df7e1193dcdb5337b1308c0d363cf05b101b65e5c3994048"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/ApplicationRecoveryMiddleware.cs",
+      "sha256": "9e8b550d2c96ec82a9bbeb5b05b7d9977192aea091555095d561143af6c006c8"
     }
   ]
 }
