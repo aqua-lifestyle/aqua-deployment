@@ -7,7 +7,7 @@ import { approvedRecoveryReadback, legacyRecoveryPair, validateFirstReleaseRecov
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
 import { approvedBypassReadback, approvedReadbacks, GovernanceReadbackDenied } from './governance-readback.mjs';
 import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody, validateFileDeployment } from './vercel-source.mjs';
-import { runtimeSettings, protectedReadiness, validateReadiness } from './runtime-readiness.mjs';
+import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validateReadiness } from './runtime-readiness.mjs';
 import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateMigrationDelta,
   SchemaFirstDenied } from './commission-schema-first.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
@@ -332,7 +332,8 @@ export async function validateCandidateProvenance(api, candidate) {
     current.base.repo?.full_name === targets.repository, 'MERGED_PR_EVIDENCE_CHANGED');
 }
 
-export function validateRender(service, rows) {
+export function validateRender(service, rows, cleanStart = false) {
+  const expected = cleanStart ? cleanStartRuntimeSettings : runtimeSettings;
   const d = service.serviceDetails;
   requireThat(service.id === targets.render.id && service.name === targets.render.name &&
     service.repo?.replace(/\.git$/, '') === `https://github.com/${targets.repository}` &&
@@ -344,9 +345,9 @@ export function validateRender(service, rows) {
     d.envSpecificDetails?.preDeployCommand === '' && d.envSpecificDetails?.dockerCommand === '',
   'RENDER_TARGET_OR_RECOVERY_CONFIGURATION_DRIFT');
   const vars = Object.fromEntries(rows.map(x => [x.envVar.key, x.envVar.value]));
-  requireThat(rows.length === Object.keys(runtimeSettings).length &&
+  requireThat(rows.length === Object.keys(expected).length &&
     new Set(rows.map(x => x.envVar.key)).size === rows.length &&
-    Object.entries(runtimeSettings).every(([key, allowed]) => allowed.includes(vars[key])),
+    Object.entries(expected).every(([key, allowed]) => allowed.includes(vars[key])),
   'NORMAL_RUNTIME_CONFIGURATION_UNVERIFIED');
 }
 
@@ -437,7 +438,7 @@ export function clients(env, fetcher = fetch) {
       if (route.includes('/env-vars') || route.includes('/secret-files')) {
         const prefix = `/services/${targets.render.id}/env-vars/`;
         requireThat(body === undefined && route.startsWith(prefix) &&
-          Object.hasOwn(runtimeSettings, route.slice(prefix.length)), 'SECRET_BEARING_RENDER_READ_FORBIDDEN');
+          Object.hasOwn(cleanStartRuntimeSettings, route.slice(prefix.length)), 'SECRET_BEARING_RENDER_READ_FORBIDDEN');
       }
       return request('https://api.render.com/v1', env.RENDER_API_KEY, route, body);
     },
@@ -841,14 +842,16 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   };
   const repository = await api.gh('');
   const readRender = async () => {
+    const cleanStart = policy.schemaFirst?.kind === 'commission-invalidation-clean-start-v1';
+    const expected = cleanStart ? cleanStartRuntimeSettings : runtimeSettings;
     const service = await api.render(servicePath);
     const rows = [];
-    for (const key of Object.keys(runtimeSettings)) {
+    for (const key of Object.keys(expected)) {
       const envVar = await api.render(`${servicePath}/env-vars/${key}`);
       requireThat(envVar?.key === key, 'NORMAL_RUNTIME_CONFIGURATION_UNVERIFIED');
       rows.push({ envVar });
     }
-    validateRender(service, rows);
+    validateRender(service, rows, cleanStart);
   };
   await readRender();
   let project = await api.vercel(projectPath);

@@ -19,7 +19,7 @@ const utc = v => typeof v === 'string' && /Z$/.test(v) && Number.isFinite(Date.p
 
 export function validSchemaPolicy(p) {
   return exact(p, ['kind', 'sourceManifestSha256', 'evidenceSha256']) &&
-    p.kind === 'commission-invalidation-schema-first-v1' &&
+    ['commission-invalidation-schema-first-v1', 'commission-invalidation-clean-start-v1'].includes(p.kind) &&
     p.sourceManifestSha256 === objectDigest(schemaSource) && digest(p.evidenceSha256);
 }
 
@@ -41,19 +41,22 @@ export function validateMigrationDelta(compare, schemaEnabled = false, requireAd
 }
 
 export function validateSchemaReadback(r, q, policy, hasBaseline, now = Date.now) {
+  const clean = policy.schemaFirst?.kind === 'commission-invalidation-clean-start-v1';
+  const ownerAttested = clean && r?.observation?.cleanStart?.paymentAdmissionMode === 'OWNER_ATTESTED_TEST_ONLY_V1';
   check(validSchemaPolicy(policy.schemaFirst), 'SCHEMA_POLICY_INVALID');
   check(r && objectDigest(r) === policy.schemaFirst.evidenceSha256, 'SCHEMA_EVIDENCE_CHANGED');
   check(exact(r, ['contract', 'version', 'status', 'observation']) &&
-    r.contract === 'aqua.commission-schema-first-readback' && r.version === 1 && r.status === 'VERIFIED',
+    r.contract === 'aqua.commission-schema-first-readback' && r.version === (clean ? ownerAttested ? 3 : 2 : 1) && r.status === 'VERIFIED',
   'SCHEMA_EVIDENCE_REQUIRED');
   const o = r.observation;
   check(exact(o, ['candidateSha', 'observedAt', 'observer', 'databaseIdentitySha256', 'tenantId',
-    'b6', 'authorization', 'application', 'controls', 'recovery']) && sha(o.candidateSha) &&
+    clean ? 'cleanStart' : 'b6', 'authorization', 'application', 'controls', 'recovery']) && sha(o.candidateSha) &&
     (hasBaseline || o.candidateSha === q.sha) && digest(o.databaseIdentitySha256) &&
     Number.isSafeInteger(o.tenantId) && o.tenantId > 0, 'SCHEMA_SCOPE_MISMATCH');
   check(exact(o.observer, ['login', 'id']) && policy.authorization.administrators.some(
     a => a.login === o.observer.login && a.id === o.observer.id), 'SCHEMA_OBSERVER_UNAPPROVED');
-  check(exact(o.b6, ['status', 'databaseIdentitySha256', 'tenantId', 'migrationCount',
+  if (clean) validateCleanStart(o.cleanStart, o, policy);
+  else check(exact(o.b6, ['status', 'databaseIdentitySha256', 'tenantId', 'migrationCount',
     'schemaDigest', 'acquisitionDigest', 'acceptedAt', 'evidenceReference']) &&
     o.b6.status === 'ACQUISITION_ACCEPTED' && o.b6.databaseIdentitySha256 === o.databaseIdentitySha256 &&
     o.b6.tenantId === o.tenantId && o.b6.migrationCount === 54 && digest(o.b6.schemaDigest) &&
@@ -66,17 +69,18 @@ export function validateSchemaReadback(r, q, policy, hasBaseline, now = Date.now
       a => a.login === o.authorization.authorizedBy.login && a.id === o.authorization.authorizedBy.id) &&
     reference(o.authorization.evidenceReference),
   'EXACT_MIGRATION_AUTHORIZATION_REQUIRED');
+  const population = clean ? o.cleanStart : o.b6;
   const a = o.application;
   check(exact(a, ['migrationId', 'appliedAt', 'beforeCount', 'afterCount', 'beforeSchemaDigest',
     'beforeHistoryDigest', 'afterHistoryDigest', 'existingHistoryUnchanged', 'appendOnlyGuardsVerified',
     'evidenceReference']) && a.migrationId === schemaSource.migrationId && a.beforeCount === 54 &&
-    a.afterCount === 55 && a.beforeSchemaDigest === o.b6.schemaDigest &&
+    a.afterCount === 55 && a.beforeSchemaDigest === population.schemaDigest &&
     digest(a.beforeHistoryDigest) && digest(a.afterHistoryDigest) && a.beforeHistoryDigest !== a.afterHistoryDigest &&
     a.existingHistoryUnchanged === true &&
     a.appendOnlyGuardsVerified === true && reference(a.evidenceReference), 'APPLIED_ADDITIVE_SCHEMA_REQUIRED');
   const time = now();
-  check([o.observedAt, o.b6.acceptedAt, o.authorization.authorizedAt, a.appliedAt].every(utc) &&
-    Date.parse(o.b6.acceptedAt) <= Date.parse(o.authorization.authorizedAt) &&
+  check([o.observedAt, population.acceptedAt, o.authorization.authorizedAt, a.appliedAt].every(utc) &&
+    Date.parse(population.acceptedAt) <= Date.parse(o.authorization.authorizedAt) &&
     Date.parse(o.authorization.authorizedAt) < Date.parse(a.appliedAt) &&
     Date.parse(a.appliedAt) <= Date.parse(o.observedAt) && Number.isFinite(time) &&
     Date.parse(o.observedAt) <= time && (hasBaseline ||
@@ -98,11 +102,53 @@ export function validateSchemaReadback(r, q, policy, hasBaseline, now = Date.now
     initialSourceSha: o.candidateSha, recoveryMode: o.recovery.mode };
 }
 
+function validateCleanStart(c, o, policy) {
+  const ownerAttested = c?.paymentAdmissionMode === 'OWNER_ATTESTED_TEST_ONLY_V1';
+  const classificationFields = ownerAttested ? ['paymentAdmissionMode','ownerTestOnlyAttestationDigest',
+    'ownerAttestsNoGenuineMemberships','providerModeVerification','paymentEvidenceConserved',
+    'paymentEvidenceDigest','resetPaymentEvidenceDigest','tenantFinancialRecordsDigest','resetTenantFinancialRecordsDigest',
+    'auditHistoryPreserved','historicalCommissionInputsHeld'] : ['genuineMembershipCount','realFinancialExposureCount'];
+  check(exact(c, ['mode','status','databaseIdentitySha256','tenantId','migrationCount','schemaDigest',
+    'classificationDigest','preflightDigest','resetSqlDigest','resetReceiptDigest','ownerAuthorizationDigest',
+    'independentAcceptanceDigest','independenceRecordDigest','resetAt','acceptedAt','evidenceReference',
+    'operator','reviewer','independenceVerified','protectedRecordsPreserved',
+    'unclassifiedCount','activeHistoricalCount','automaticPayoutsDisabled',
+    'recoveryEvidenceDigest','noAdditionalChargeConfirmed',...classificationFields]) && c.mode === 'CLEAN_START' && c.status === 'RESET_ACCEPTED' &&
+    c.tenantId === 1 && c.tenantId === o.tenantId && c.databaseIdentitySha256 === o.databaseIdentitySha256 &&
+    c.migrationCount === 54 && c.protectedRecordsPreserved === true && c.automaticPayoutsDisabled === true &&
+    c.noAdditionalChargeConfirmed === true && c.independenceVerified === true &&
+    ['unclassifiedCount','activeHistoricalCount'].every(k => c[k] === 0) &&
+    ['schemaDigest','classificationDigest','preflightDigest','resetSqlDigest','resetReceiptDigest','ownerAuthorizationDigest',
+      'independentAcceptanceDigest','independenceRecordDigest','recoveryEvidenceDigest'].every(k => digest(c[k])) &&
+    exact(c.operator,['login','id']) && c.operator.login === 'Xolani-M' && c.operator.id === 86495928 &&
+    exact(c.reviewer,['login','id']) && c.reviewer.login === 'aqualifestyleclub' && c.reviewer.id === 307076734 &&
+    policy.authorization.administrators.some(a => a.login === c.operator.login && a.id === c.operator.id) &&
+    reference(c.evidenceReference) && utc(c.resetAt) && utc(c.acceptedAt) &&
+    Date.parse(c.resetAt) <= Date.parse(c.acceptedAt), 'CLEAN_START_CLASSIFICATION_RESET_AND_INDEPENDENT_ACCEPTANCE_REQUIRED');
+  // Account identities select the approved principals. Actual human independence
+  // must additionally be verified in the protected record bound above.
+  if (ownerAttested) {
+    check(c.ownerAttestsNoGenuineMemberships === true && c.providerModeVerification === 'NOT_INDEPENDENTLY_VERIFIED' &&
+      c.auditHistoryPreserved === true && c.historicalCommissionInputsHeld === true &&
+      c.paymentEvidenceConserved === true &&
+      ['ownerTestOnlyAttestationDigest','paymentEvidenceDigest','resetPaymentEvidenceDigest',
+        'tenantFinancialRecordsDigest','resetTenantFinancialRecordsDigest'].every(k => digest(c[k]) && c[k] !== '0'.repeat(64)) &&
+      c.paymentEvidenceDigest === c.resetPaymentEvidenceDigest && c.tenantFinancialRecordsDigest === c.resetTenantFinancialRecordsDigest,
+    'CLEAN_START_OWNER_ATTESTATION_AND_PAYMENT_PRESERVATION_REQUIRED');
+  } else check(c.genuineMembershipCount === 0 && c.realFinancialExposureCount === 0,
+    'CLEAN_START_VERIFIED_ZERO_EXPOSURE_REQUIRED');
+  check(schemaSource.cleanStartSources?.some(p => p.path.endsWith('/reset.sql') && p.sha256 === c.resetSqlDigest),
+    'CLEAN_START_RESET_SQL_NOT_PINNED');
+}
+
 export async function verifySchemaFirst(api, q, policy, readSource, readback = approvedSchemaReadback,
   hasBaseline = false, now = Date.now) {
   if (policy.version !== 7) return null; // Explicit historical policy, never an evidence fallback.
   check(validSchemaPolicy(policy.schemaFirst), 'SCHEMA_POLICY_INVALID');
-  for (const pin of [...schemaSource.migrationFiles, ...schemaSource.holdSources])
+  const clean = policy.schemaFirst.kind === 'commission-invalidation-clean-start-v1';
+  check(!clean || schemaSource.cleanStartSources?.length > 0, 'CLEAN_START_SOURCES_NOT_PINNED');
+  for (const pin of [...schemaSource.migrationFiles, ...schemaSource.holdSources,
+    ...(clean ? schemaSource.cleanStartSources : [])])
     check(await readSource(pin.path) === pin.sha256, 'SCHEMA_OR_PAYOUT_GUARD_SOURCE_CHANGED');
   // The legacy-to-candidate diff must contain exactly the three pinned schema
   // files, including on later code-only releases. No further DDL is authorized.

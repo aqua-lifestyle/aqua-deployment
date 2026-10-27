@@ -20,7 +20,8 @@ export const approvedInventory = validateInventory(JSON.parse(approvedInventoryB
 export const inventoryDigest = sha256(approvedInventoryBytes);
 export const maxArtifactBytes = 4 * 1024 * 1024;
 const schemaPins = JSON.parse(readFileSync(new URL('./commission-schema-source.json', import.meta.url)));
-const schemaPaths = [...schemaPins.migrationFiles, ...schemaPins.holdSources].map(p => p.path);
+const schemaPaths = [...schemaPins.migrationFiles, ...schemaPins.holdSources,
+  ...(schemaPins.cleanStartSources ?? [])].map(p => p.path);
 
 // Never check out or execute application code to inspect definitions.
 export function gitSourceDigest(directory, sha, path) {

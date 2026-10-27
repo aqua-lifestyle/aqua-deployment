@@ -8,6 +8,8 @@ export const runtimeSettings = Object.freeze({
   AQGreenV2Demo__Enabled: ['false'], AQGreenV2Pilot__Enabled: ['false'],
   App__AQGreenV2__Commissioning__Enabled: ['false'], SEED_DEMO_DATA: ['false']
 });
+export const cleanStartRuntimeSettings = Object.freeze({...runtimeSettings,
+  App__AQGreenV2__Commissioning__AdmissionMode: ['CLEAN_START']});
 export const readinessUrl = 'https://aqualifestyle-api.onrender.com/api/deployment-readiness';
 const deny = code => { throw Error(code); };
 

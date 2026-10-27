@@ -1,6 +1,6 @@
 {
   "contract": "aqua.commission-schema-first-readback",
-  "version": 1,
+  "version": 2,
   "status": "UNVERIFIED",
   "observation": null
 }
