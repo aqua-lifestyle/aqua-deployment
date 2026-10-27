@@ -101,6 +101,45 @@ test('CLEAN_START source tampering and mixed B6 admission cannot be substituted 
     assert.equal(f.state.providerCalls,0);assert.equal(f.posts.length,0);}
 });
 
+function ownerAttestedFixture() {
+  const f=cleanStartFixture(), c=f.state.schemaReadback.observation.cleanStart;
+  f.state.schemaReadback.version=3;
+  delete c.genuineMembershipCount;delete c.realFinancialExposureCount;
+  Object.assign(c,{paymentAdmissionMode:'OWNER_ATTESTED_TEST_ONLY_V1',ownerTestOnlyAttestationDigest:'8'.repeat(64),
+    ownerAttestsNoGenuineMemberships:true,providerModeVerification:'NOT_INDEPENDENTLY_VERIFIED',
+    paymentEvidenceConserved:true,paymentEvidenceDigest:'9'.repeat(64),resetPaymentEvidenceDigest:'9'.repeat(64),
+    tenantFinancialRecordsDigest:'a'.repeat(64),resetTenantFinancialRecordsDigest:'a'.repeat(64),
+    auditHistoryPreserved:true,historicalCommissionInputsHeld:true});
+  return f;
+}
+
+test('OWNER_ATTESTED_TEST_ONLY preserves positive payment evidence without asserting verified zero or provider mode',async()=>{
+  const f=ownerAttestedFixture();await f.refresh();await f.executeSchema();
+  assert.deepEqual(f.posts.map(p=>p.provider),['render','vercel']);
+  const c=f.state.schemaReadback.observation.cleanStart;
+  assert.equal(c.protectedPaymentCount,undefined);assert.equal(c.realFinancialExposureCount,undefined);
+  assert.equal(c.providerModeVerification,'NOT_INDEPENDENTLY_VERIFIED');
+});
+
+test('OWNER_ATTESTED_TEST_ONLY rejects missing authority, false provider claims, preservation drift and historical eligibility',async()=>{
+  const edits=[c=>c.ownerTestOnlyAttestationDigest=null,c=>c.paymentAdmissionMode='INFERRED_TEST',
+    c=>c.ownerAttestsNoGenuineMemberships=false,c=>c.providerModeVerification='INDEPENDENTLY_VERIFIED',
+    c=>c.paymentEvidenceConserved=false,c=>c.protectedPaymentCount=4,c=>c.paymentEvidenceDigest='b'.repeat(64),
+    c=>c.resetTenantFinancialRecordsDigest='b'.repeat(64),c=>c.auditHistoryPreserved=false,
+    c=>c.historicalCommissionInputsHeld=false,c=>c.automaticPayoutsDisabled=false,
+    c=>c.unclassifiedCount=1,c=>c.activeHistoricalCount=1,c=>c.protectedRecordsPreserved=false,
+    c=>c.realFinancialExposureCount=0];
+  for(const edit of edits){const f=ownerAttestedFixture();edit(f.state.schemaReadback.observation.cleanStart);
+    await assert.rejects(async()=>{await f.refresh();await f.executeSchema();},/CLEAN_START_|SCHEMA_EVIDENCE_REQUIRED/);
+    assert.equal(f.posts.length,0);}
+});
+
+test('owner-attested classification is not accepted under the previous verified-zero readback version',async()=>{
+  const f=ownerAttestedFixture();f.state.schemaReadback.version=2;
+  await assert.rejects(async()=>{await f.refresh();await f.executeSchema();},/SCHEMA_EVIDENCE_REQUIRED/);
+  assert.equal(f.posts.length,0);
+});
+
 test('CLEAN_START must retain its pending commissioning fence in the actual Render configuration',async()=>{
   const f=cleanStartFixture();await f.refresh();
   f.state.vars.find(r=>r.envVar.key==='App__AQGreenV2__Commissioning__AdmissionMode').envVar.value='HISTORICAL_B6';

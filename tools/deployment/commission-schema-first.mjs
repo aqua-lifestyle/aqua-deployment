@@ -42,10 +42,11 @@ export function validateMigrationDelta(compare, schemaEnabled = false, requireAd
 
 export function validateSchemaReadback(r, q, policy, hasBaseline, now = Date.now) {
   const clean = policy.schemaFirst?.kind === 'commission-invalidation-clean-start-v1';
+  const ownerAttested = clean && r?.observation?.cleanStart?.paymentAdmissionMode === 'OWNER_ATTESTED_TEST_ONLY_V1';
   check(validSchemaPolicy(policy.schemaFirst), 'SCHEMA_POLICY_INVALID');
   check(r && objectDigest(r) === policy.schemaFirst.evidenceSha256, 'SCHEMA_EVIDENCE_CHANGED');
   check(exact(r, ['contract', 'version', 'status', 'observation']) &&
-    r.contract === 'aqua.commission-schema-first-readback' && r.version === (clean ? 2 : 1) && r.status === 'VERIFIED',
+    r.contract === 'aqua.commission-schema-first-readback' && r.version === (clean ? ownerAttested ? 3 : 2 : 1) && r.status === 'VERIFIED',
   'SCHEMA_EVIDENCE_REQUIRED');
   const o = r.observation;
   check(exact(o, ['candidateSha', 'observedAt', 'observer', 'databaseIdentitySha256', 'tenantId',
@@ -102,16 +103,21 @@ export function validateSchemaReadback(r, q, policy, hasBaseline, now = Date.now
 }
 
 function validateCleanStart(c, o, policy) {
+  const ownerAttested = c?.paymentAdmissionMode === 'OWNER_ATTESTED_TEST_ONLY_V1';
+  const classificationFields = ownerAttested ? ['paymentAdmissionMode','ownerTestOnlyAttestationDigest',
+    'ownerAttestsNoGenuineMemberships','providerModeVerification','paymentEvidenceConserved',
+    'paymentEvidenceDigest','resetPaymentEvidenceDigest','tenantFinancialRecordsDigest','resetTenantFinancialRecordsDigest',
+    'auditHistoryPreserved','historicalCommissionInputsHeld'] : ['genuineMembershipCount','realFinancialExposureCount'];
   check(exact(c, ['mode','status','databaseIdentitySha256','tenantId','migrationCount','schemaDigest',
     'classificationDigest','preflightDigest','resetSqlDigest','resetReceiptDigest','ownerAuthorizationDigest',
     'independentAcceptanceDigest','independenceRecordDigest','resetAt','acceptedAt','evidenceReference',
-    'operator','reviewer','independenceVerified','protectedRecordsPreserved','genuineMembershipCount',
-    'realFinancialExposureCount','unclassifiedCount','activeHistoricalCount','automaticPayoutsDisabled',
-    'recoveryEvidenceDigest','noAdditionalChargeConfirmed']) && c.mode === 'CLEAN_START' && c.status === 'RESET_ACCEPTED' &&
+    'operator','reviewer','independenceVerified','protectedRecordsPreserved',
+    'unclassifiedCount','activeHistoricalCount','automaticPayoutsDisabled',
+    'recoveryEvidenceDigest','noAdditionalChargeConfirmed',...classificationFields]) && c.mode === 'CLEAN_START' && c.status === 'RESET_ACCEPTED' &&
     c.tenantId === 1 && c.tenantId === o.tenantId && c.databaseIdentitySha256 === o.databaseIdentitySha256 &&
     c.migrationCount === 54 && c.protectedRecordsPreserved === true && c.automaticPayoutsDisabled === true &&
     c.noAdditionalChargeConfirmed === true && c.independenceVerified === true &&
-    ['genuineMembershipCount','realFinancialExposureCount','unclassifiedCount','activeHistoricalCount'].every(k => c[k] === 0) &&
+    ['unclassifiedCount','activeHistoricalCount'].every(k => c[k] === 0) &&
     ['schemaDigest','classificationDigest','preflightDigest','resetSqlDigest','resetReceiptDigest','ownerAuthorizationDigest',
       'independentAcceptanceDigest','independenceRecordDigest','recoveryEvidenceDigest'].every(k => digest(c[k])) &&
     exact(c.operator,['login','id']) && c.operator.login === 'Xolani-M' && c.operator.id === 86495928 &&
@@ -121,6 +127,16 @@ function validateCleanStart(c, o, policy) {
     Date.parse(c.resetAt) <= Date.parse(c.acceptedAt), 'CLEAN_START_CLASSIFICATION_RESET_AND_INDEPENDENT_ACCEPTANCE_REQUIRED');
   // Account identities select the approved principals. Actual human independence
   // must additionally be verified in the protected record bound above.
+  if (ownerAttested) {
+    check(c.ownerAttestsNoGenuineMemberships === true && c.providerModeVerification === 'NOT_INDEPENDENTLY_VERIFIED' &&
+      c.auditHistoryPreserved === true && c.historicalCommissionInputsHeld === true &&
+      c.paymentEvidenceConserved === true &&
+      ['ownerTestOnlyAttestationDigest','paymentEvidenceDigest','resetPaymentEvidenceDigest',
+        'tenantFinancialRecordsDigest','resetTenantFinancialRecordsDigest'].every(k => digest(c[k]) && c[k] !== '0'.repeat(64)) &&
+      c.paymentEvidenceDigest === c.resetPaymentEvidenceDigest && c.tenantFinancialRecordsDigest === c.resetTenantFinancialRecordsDigest,
+    'CLEAN_START_OWNER_ATTESTATION_AND_PAYMENT_PRESERVATION_REQUIRED');
+  } else check(c.genuineMembershipCount === 0 && c.realFinancialExposureCount === 0,
+    'CLEAN_START_VERIFIED_ZERO_EXPOSURE_REQUIRED');
   check(schemaSource.cleanStartSources?.some(p => p.path.endsWith('/reset.sql') && p.sha256 === c.resetSqlDigest),
     'CLEAN_START_RESET_SQL_NOT_PINNED');
 }

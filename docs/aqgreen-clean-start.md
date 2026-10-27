@@ -1,5 +1,25 @@
 # Explicit AQGreen CLEAN_START schema-first admission
 
+Current owner-attested application candidate:
+`4956432a1b3649d1724c2cf12b89237829c2a765`. The owner classification is
+OWNER_ATTESTED_TEST_ONLY_V1, not independently verified provider mode. The
+protected-payment-preserving reset, D10, late-callback and commission exclusions
+are pinned below. Final full CI and independent implementation acceptance remain
+required; no production operation is authorized by publication.
+
+Earlier preparation results below are historical. The missing local pg dependency
+was restored from the existing unchanged lockfile; the real PostgreSQL replay
+suite then passed all three focused tests, including concurrent authorization use.
+Final local full executor suite: 141 passed, zero failed/skipped, including actual
+PostgreSQL concurrent authorization use. Artifact:
+/tmp/aqgreen-owner-attested-final-executor-tests.log. Application validation:
+195 targeted backend cases passed; two added rollback fixtures initially had a
+SQL whitespace error and both passed after correction. The PostgreSQL 18.4
+root/joining/spillover flow passed with its execution marker; launcher privacy
+tests passed 17/17. No provider delivery or production mutation is established.
+Exact-source application CI: https://github.com/aqua-lifestyle/aqua-lifestyle/actions/runs/40526465085.
+Its outcome must be checked before release; this publication does not assert it.
+
 Owner direction of 27 October 2026 authorizes implementation/non-production
 validation only. Application counterpart: `aqua-lifestyle-clean-start`, base
 `73890aa1b7c843238bbca1b450000d43d8ef8b5b`; executor base
@@ -8,8 +28,9 @@ validation only. Application counterpart: `aqua-lifestyle-clean-start`, base
 
 The selected v7 policy uses a new epoch and explicit
 `commission-invalidation-clean-start-v1` kind. Historical schema-first/B6 validation
-is preserved under its own kind. The clean-start kind accepts only v2 readback
-with `cleanStart`; it rejects mixed/synthetic B6 claims. Actual governance readback
+is preserved under its own kind. The clean-start kind accepts v2 verified-zero or
+v3 explicitly OWNER_ATTESTED_TEST_ONLY_V1 readback with `cleanStart`; it rejects
+mixed/synthetic B6 claims and unknown admission variants. Actual governance readback
 remains UNVERIFIED; no fixture or agent recommendation permits deployment.
 
 Every clean-start source is pinned in `commission-schema-source.json`, alongside
@@ -19,12 +40,18 @@ provider identity, Render-before-Vercel and forward-only hold-preserving recover
 remain mandatory. This executor never runs the reset or migration itself.
 
 The real protected operator record must establish exact-source disposable-data
-classification, zero genuine/unclassified exposure, protected-record preservation,
+classification, zero unclassified/active historical membership, protected-record preservation,
 operator Xolani-M, qualified independent human Aqua with the protected independence
 record (different accounts alone are insufficient), exact reset SQL/receipt and
 owner authority, independently accepted reset before separate exact DDL approval,
 54→55 history/append-only verification, financial/V2/worker holds and recovery with
-zero additional charges confirmed. Missing/null counts never imply zero.
+zero additional charges confirmed. Missing/null counts never imply zero. The v2
+branch still requires verified zero genuine/payment exposure. The v3 branch instead
+records the owner's formal test-only attestation, its digest and
+`providerModeVerification: NOT_INDEPENDENTLY_VERIFIED`; it does not publish or
+invent zero genuine-payment counts. It requires conserved payment evidence,
+matching payment/financial fingerprints, audit preservation and retired financial
+inputs held. All nine non-payment guards remain enforced by the pinned SQL/D10.
 
 After actual reset/schema evidence is independently reviewed, update the readback
 and its policy digest through the existing protected executor merge. That merge
@@ -62,3 +89,10 @@ the actual RESET_ACCEPTED/DDL evidence. Updating candidate pins is not human
 amendment acceptance or production execution authorization. All private production
 readback remains UNVERIFIED. The existing application contract/validation documents
 define exact scope, output and reauthorization requirements.
+
+The later owner directive supersedes independent merchant classification as a
+prerequisite for OWNER_ATTESTED_TEST_ONLY_V1, while preserving financial facts and
+all obligations. Independent human acceptance now covers the implementation and
+actual conservation/retirement evidence, with the owner-attested basis disclosed.
+The existing UNVERIFIED readback remains unchanged; no production approval or
+actual provider classification is fabricated by the implementation or tests.
