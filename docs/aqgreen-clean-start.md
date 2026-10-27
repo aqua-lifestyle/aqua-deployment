@@ -52,3 +52,13 @@ supplies AQUA_TEST_DATABASE_URL and exercises real PostgreSQL replay concurrency
 its completed check run is the evidence for this candidate. Local skip counts
 above are carried-forward preparation evidence. No production workflow is
 dispatched, and schema readback deliberately remains UNVERIFIED.
+
+The proposed status-only amendment pins application source
+`e2031ac7f4112684f776d74cf4999243e15b5bde`, including its new check SQL and
+hash-bound launcher. It removes count output and proposes authenticated logical
+Render/TLS identity for the read-only screen only. It does not waive native reset/
+D10 binding, independent human classification, physical-history requirements or
+the actual RESET_ACCEPTED/DDL evidence. Updating candidate pins is not human
+amendment acceptance or production execution authorization. All private production
+readback remains UNVERIFIED. The existing application contract/validation documents
+define exact scope, output and reauthorization requirements.

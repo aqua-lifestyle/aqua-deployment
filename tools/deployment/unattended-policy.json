@@ -55,7 +55,7 @@
   },
   "schemaFirst": {
     "kind": "commission-invalidation-clean-start-v1",
-    "sourceManifestSha256": "da7aeb8b52c5506db58d232e1c18674fcb5e7ad58c889e9a3da8334e963dc224",
+    "sourceManifestSha256": "3af0165fb7262e6c7f408a5ad5a711a75895587bf4eb1fbbb46a4bfab1ec9465",
     "evidenceSha256": "eb00db7fa0ed4de7d148e8919dce32917d78b72a7cee268a4009eb9e4229a660"
   }
 }

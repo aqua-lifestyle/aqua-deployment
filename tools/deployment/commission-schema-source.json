@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceSha": "84bf271a18e4cc3f60c46b2a6d64a6bfed0c0bea",
+  "sourceSha": "e2031ac7f4112684f776d74cf4999243e15b5bde",
   "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
   "migrationFiles": [
     {
@@ -67,8 +67,12 @@
       "sha256": "1f45ef7b67fa6eae747ca70edfed05679ef63cf4cfe2f2cf308b9d31b8c1faea"
     },
     {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/preflight-checks.sql",
+      "sha256": "1d8845c76fa87843f48fc2e648a57333c94d2417fc018c4b499ff28d25e91651"
+    },
+    {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/preflight.sql",
-      "sha256": "12f2e7cee40682e6bf1d031211842143d0d0a8de5dcf79d5333a06555a1152d6"
+      "sha256": "b0b495e30d0f3b910980f6d212b75b57de725c35f56c253ff973f681382264dd"
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/reset.sql",
@@ -83,12 +87,16 @@
       "sha256": "db3d36ac23172c2005aa6edd202ea6f9cb6b4635c75c1bdbd2889f47571fd100"
     },
     {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/ApplicationRecoveryMiddleware.cs",
+      "sha256": "9e8b550d2c96ec82a9bbeb5b05b7d9977192aea091555095d561143af6c006c8"
+    },
+    {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/AQGreenD10OperatorEvidenceSource.cs",
       "sha256": "7128bd0670f261c1df7e1193dcdb5337b1308c0d363cf05b101b65e5c3994048"
     },
     {
-      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/ApplicationRecoveryMiddleware.cs",
-      "sha256": "9e8b550d2c96ec82a9bbeb5b05b7d9977192aea091555095d561143af6c006c8"
+      "path": "tools/operations/aqgreen-clean-start-preflight.mjs",
+      "sha256": "02cfc986a3435234308be8595a4775ad7d490b5c67e8380d87c983e93231c525"
     }
   ]
 }
