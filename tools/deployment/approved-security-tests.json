@@ -1205,7 +1205,7 @@
   "sources": [
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "4e40f54d5fa1bfea67fcc88f96bf94bb1071882e92b81229785ec9e81dc71d8e"
+      "sha256": "e28faa320901a6c9c88072d049e44964f35fad91a932318e43438ee6d1a72b17"
     },
     {
       "path": ".github/workflows/publish-images.yml",

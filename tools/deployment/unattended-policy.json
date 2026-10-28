@@ -16,8 +16,8 @@
         "id": 307076734
       }
     ],
-    "inventorySourceCommit": "84bf271a18e4cc3f60c46b2a6d64a6bfed0c0bea",
-    "inventorySha256": "6c14c5dde4bc7fa439fc4c8f1e9301cfc2c7d38b511996c2463653e94b2a142b",
+    "inventorySourceCommit": "1421ef639849265d1d6e23292417ab8107d5add4",
+    "inventorySha256": "8ae9edb167884e84db0ed9d342eb315bb6d19ee51722eb20f75fb2c4ea99dbd5",
     "maxCiAgeSeconds": 86400,
     "maxAdmissionAgeSeconds": 3600
   },
@@ -55,7 +55,7 @@
   },
   "schemaFirst": {
     "kind": "commission-invalidation-clean-start-v1",
-    "sourceManifestSha256": "fac8f9760be828d3cdd30885ea92aac88b3fd3298cf0fa5e4535faff76070234",
+    "sourceManifestSha256": "506cac7cd1eda6ede78712ab6b2274cd4c77117c648139efd77ade26627b3916",
     "evidenceSha256": "eb00db7fa0ed4de7d148e8919dce32917d78b72a7cee268a4009eb9e4229a660"
   }
 }
