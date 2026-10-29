@@ -121,15 +121,99 @@ export function fileDeploymentBody(bundle, target, meta) {
 
 // Original authenticated upload/create acknowledgements + immutable same-run
 // audit establish provenance. Echoed metadata by itself never grants adoption.
-export function validateFileDeployment(deployment, proof, target, meta, verifiedProjectRoot) {
+function validateFileDeploymentSource(deployment, proof, target, meta) {
   validateFrontendProof(proof, proof.sourceSha, target);
   check(deployment?.projectId === target.id && deployment.target === 'production' &&
     !deployment.gitSource && deployment.meta?.aquaFileSourceSha256 === objectDigest(proof) &&
     Object.entries(meta).every(([k, v]) => deployment.meta?.[k] === v), 'VERCEL_SOURCE_PROVENANCE_MISMATCH');
+}
+
+export function validateFileDeployment(deployment, proof, target, meta, verifiedProjectRoot, compiledReadback) {
+  validateFileDeploymentSource(deployment, proof, target, meta);
   const inputs = proof.publicBuildInputs;
-  check(Object.entries(inputs).every(([k, v]) => deployment.build?.env?.[k] === v && deployment.env?.[k] === v) &&
+  const providerValues = Object.entries(inputs).every(([k, v]) => deployment.build?.env?.[k] === v && deployment.env?.[k] === v);
+  let observedValues = false;
+  if (compiledReadback) {
+    const names = value => Array.isArray(value) && value.every(x => typeof x === 'string') &&
+      new Set(value).size === value.length && Object.keys(inputs).every(k => value.includes(k));
+    const source = proof.manifest.find(x => x.file === target.rootDirectory + '/src/shared/config/public-env.ts');
+    check(names(deployment.build?.env) && names(deployment.env) &&
+      source?.sha256 === 'da0b258523ed6ee8d8ce5f00f874518e0a212adce7418807427c244d9f43921e' &&
+      compiledReadback.deploymentId === deployment.id && compiledReadback.sourceProofSha256 === objectDigest(proof) &&
+      [compiledReadback.before, compiledReadback.after].every(p => p?.id === target.id && p.targets?.production?.id === deployment.id) &&
+      compiledReadback.productionUrl === target.productionUrl, 'VERCEL_COMPILED_READBACK_BINDING_REQUIRED');
+    observedValues = same(observeCompiledPublicInputs(compiledReadback.assets).values, inputs);
+  }
+  check((providerValues || observedValues) &&
     verifiedProjectRoot === target.rootDirectory &&
     (deployment.projectSettings?.rootDirectory === undefined || deployment.projectSettings.rootDirectory === target.rootDirectory) &&
     deployment.projectSettings?.buildCommand === 'npm run build' &&
     deployment.projectSettings?.installCommand === 'npm ci', 'VERCEL_EFFECTIVE_BUILD_INPUTS_UNVERIFIABLE');
+}
+
+// Parse only literal values in the frozen public-env module's compiled schema.
+// Never evaluate fetched JavaScript or infer an absent value from its default.
+export function observeCompiledPublicInputs(assets) {
+  check(Array.isArray(assets) && assets.length > 0 && assets.length <= 30 &&
+    new Set(assets.map(x => x.path)).size === assets.length, 'VERCEL_COMPILED_ASSET_INVENTORY_INVALID');
+  const found = [], records = []; let total = 0;
+  for (const asset of assets) {
+    check(/^\/_next\/static\/(?:immutable\/)?chunks\/[A-Za-z0-9_.-]+\.js$/.test(asset.path) &&
+      Buffer.isBuffer(asset.bytes) && asset.bytes.length > 0 && asset.bytes.length <= 3 * 1024 * 1024,
+    'VERCEL_COMPILED_ASSET_INVALID');
+    total += asset.bytes.length; check(total <= 15 * 1024 * 1024, 'VERCEL_COMPILED_ASSETS_TOO_LARGE');
+    const code = asset.bytes.toString('utf8');
+    const pattern = /\.parse\(\{NEXT_PUBLIC_ABP_API_URL:("(?:\\.|[^"\\])*"),NEXT_PUBLIC_DEFAULT_TENANT_NAME:("(?:\\.|[^"\\])*"),NEXT_PUBLIC_MONITORING_ENDPOINT:/g;
+    for (const match of code.matchAll(pattern)) {
+      found.push({ NEXT_PUBLIC_ABP_API_URL: JSON.parse(match[1]), NEXT_PUBLIC_DEFAULT_TENANT_NAME: JSON.parse(match[2]) });
+      records.push({ path: asset.path, sha256: hash(asset.bytes), bytes: asset.bytes.length });
+    }
+  }
+  check(found.length > 0 && found.every(x => same(x, found[0])), 'VERCEL_COMPILED_PUBLIC_VALUES_MISSING_OR_CONFLICTING');
+  return { values: found[0], assets: records };
+}
+
+// Read-only post-deployment qualification. api is the existing authenticated
+// GET-only provider reader; publicFetch never receives a provider credential.
+// The caller must first authenticate the original upload/create audit/proof.
+export async function verifyObservedFileDeployment(api, deployment, proof, target, meta, publicFetch = fetch) {
+  validateFileDeploymentSource(deployment, proof, target, meta);
+  check(deployment.readyState === 'READY', 'VERCEL_COMPLETED_DEPLOYMENT_REQUIRED');
+  const projectPath = `/v9/projects/${target.id}`;
+  const before = await api.vercel(projectPath);
+  const mapping = await api.vercel(`/v2/deployments/${deployment.id}/aliases`);
+  const host = new URL(target.productionUrl).hostname;
+  check(before.id === target.id && before.targets?.production?.id === deployment.id &&
+    mapping.aliases?.some(x => x.alias === host), 'VERCEL_PUBLIC_ALIAS_NOT_BOUND_TO_DEPLOYMENT');
+  const read = async path => {
+    try {
+      const r = await publicFetch(new URL(path, target.productionUrl).href, { redirect: 'error',
+        signal: AbortSignal.timeout(15000), headers: { 'Cache-Control': 'no-store' } });
+      check(r.status === 200, 'VERCEL_PUBLIC_ASSET_UNAVAILABLE');
+      const chunks = []; let size = 0;
+      for await (const chunk of r.body) { size += chunk.length; check(size <= 3 * 1024 * 1024,
+        'VERCEL_COMPILED_ASSET_INVALID'); chunks.push(Buffer.from(chunk)); }
+      return Buffer.concat(chunks);
+    } catch (e) { if (e instanceof VercelSourceDenied) throw e; throw new VercelSourceDenied('VERCEL_PUBLIC_ASSET_UNAVAILABLE'); }
+  };
+  const html = (await read('/login')).toString('utf8');
+  const paths = [...new Set([...html.matchAll(/<script[^>]+src="([^"]+)"/g)].map(x => x[1]))];
+  const selected = paths.filter(x => /^\/_next\/static\/(?:immutable\/)?chunks\/[A-Za-z0-9_.-]+\.js$/.test(x));
+  check(selected.length > 0 && selected.length <= 30, 'VERCEL_COMPILED_ASSET_INVENTORY_INVALID');
+  const assets = []; let total = 0;
+  for (const path of selected) {
+    const bytes = await read(path);
+    total += bytes.length; check(total <= 15 * 1024 * 1024, 'VERCEL_COMPILED_ASSETS_TOO_LARGE');
+    assets.push({ path, bytes });
+  }
+  const after = await api.vercel(projectPath);
+  const observation = observeCompiledPublicInputs(assets);
+  const readback = { deploymentId: deployment.id, sourceProofSha256: objectDigest(proof), before, after,
+    productionUrl: target.productionUrl, assets };
+  validateFileDeployment(deployment, proof, target, meta, after.rootDirectory, readback);
+  return { contract: 'aqua.observed-next-public-configuration-v1', deploymentId: deployment.id,
+    sourceSha: proof.sourceSha, sourceProofSha256: objectDigest(proof), productionUrl: target.productionUrl,
+    observedAt: new Date().toISOString(), aliasStable: true, observedPublicInputs: observation.values,
+    compiledAssets: observation.assets, provenance: 'original-authenticated-upload-and-create-audit',
+    configurationEvidence: 'compiled-literals-from-frozen-public-env-module', secretsRead: false };
 }
