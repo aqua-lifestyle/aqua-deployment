@@ -17,6 +17,14 @@ on:
         required: false
         type: boolean
         default: false
+      release_mode:
+        description: Full cutover or the single pinned schema-54 receiver/member frontend pair
+        required: false
+        type: choice
+        default: full
+        options:
+          - full
+          - schema54-member-reads-v1
 
 permissions:
   contents: read

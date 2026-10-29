@@ -8,6 +8,8 @@ import { AttestationDenied, verifyPrototypeAttestation } from './authorization-a
 import { approvedBypassReadback, approvedReadbacks, GovernanceReadbackDenied } from './governance-readback.mjs';
 import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody, validateFileDeployment } from './vercel-source.mjs';
 import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validateReadiness } from './runtime-readiness.mjs';
+import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied,
+  validateMemberIdentity, verifyMemberSource, verifyMemberAuthority, validateMemberReceipt, deployMemberRelease } from './member-release.mjs';
 import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateMigrationDelta,
   SchemaFirstDenied } from './commission-schema-first.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
@@ -113,19 +115,23 @@ export async function validateExecutorApproval(api, identity, policy = standingP
 
 export function validateDispatchInputs(inputs) {
   requireThat(inputs && typeof inputs === 'object' && !Array.isArray(inputs) &&
-    Object.keys(inputs).every(k => ['ci_run_id', 'ci_run_attempt', 'sha', 'qualification_only'].includes(k)) &&
+    Object.keys(inputs).every(k => ['ci_run_id', 'ci_run_attempt', 'sha', 'qualification_only', 'release_mode'].includes(k)) &&
     positiveId(inputs.ci_run_id) && positiveId(inputs.ci_run_attempt) && shaPattern.test(inputs.sha),
   'EXECUTOR_INPUT_INVALID');
   // workflow_dispatch's event payload uses strings; accept native booleans too,
   // without coercing null, empty strings, numbers or other truthy input.
   const mode = Object.hasOwn(inputs, 'qualification_only') ? inputs.qualification_only : false;
   requireThat([true, false, 'true', 'false'].includes(mode), 'EXECUTOR_INPUT_INVALID');
+  const releaseMode = Object.hasOwn(inputs, 'release_mode') ? inputs.release_mode : 'full';
+  requireThat(['full', memberPolicy.mode].includes(releaseMode) &&
+    (releaseMode === 'full' || inputs.sha === memberPolicy.frontendSha), 'EXECUTOR_INPUT_INVALID');
   return { ci_run_id: inputs.ci_run_id, ci_run_attempt: inputs.ci_run_attempt, sha: inputs.sha,
-    qualificationOnly: mode === true || mode === 'true' };
+    qualificationOnly: mode === true || mode === 'true', ...(releaseMode !== 'full' ? { releaseMode } : {}) };
 }
 
-export function freezeCandidate(qualified, env, policy = standingPolicy, qualificationOnly = false) {
+export function freezeCandidate(qualified, env, policy = standingPolicy, qualificationOnly = false, releaseMode = 'full') {
   requireThat(typeof qualificationOnly === 'boolean', 'EXECUTOR_INPUT_INVALID');
+  requireThat(['full', memberPolicy.mode].includes(releaseMode), 'EXECUTOR_INPUT_INVALID');
   requireThat(env.GITHUB_REPOSITORY === execution.repository && positiveId(env.GITHUB_RUN_ID) &&
     positiveId(env.GITHUB_RUN_ATTEMPT) && positiveAttempt(Number(env.GITHUB_RUN_ATTEMPT)) &&
     env.GITHUB_REF === 'refs/heads/main' &&
@@ -133,6 +139,7 @@ export function freezeCandidate(qualified, env, policy = standingPolicy, qualifi
     (!external || (shaPattern.test(env.GITHUB_SHA) && env.GITHUB_WORKFLOW_SHA === env.GITHUB_SHA)),
   'RELEASE_CONTEXT_UNVERIFIABLE');
   const candidate = { ...qualified, version: external ? 4 : 3, qualificationOnly,
+    ...(releaseMode === memberPolicy.mode ? { memberRelease: memberPolicyDigest } : {}),
     ...(external ? { executorRepository: execution.repository, executorSha: env.GITHUB_SHA } : {}), releaseRunId: env.GITHUB_RUN_ID,
     releaseRunAttempt: Number(env.GITHUB_RUN_ATTEMPT), policySha256: policyDigest(policy), ...targetIdentity };
   validateReleaseIdentity(candidate);
@@ -147,18 +154,21 @@ function validateReleaseIdentity(identity) {
     /^[a-f0-9]{64}$/.test(identity.policySha256) &&
     Object.entries(targetIdentity).every(([key, value]) => identity[key] === value),
   'RELEASE_IDENTITY_UNVERIFIABLE');
+  if (identity.memberRelease !== undefined) validateMemberIdentity(identity);
 }
 
 export function releaseKey(identity) {
   validateReleaseIdentity(identity);
   return createHash('sha256').update(JSON.stringify(
-    releaseIdentityFields.map(key => [key, identity[key]]))).digest('hex');
+    [...releaseIdentityFields, ...(identity.memberRelease !== undefined ? ['memberRelease'] : [])]
+      .map(key => [key, identity[key]]))).digest('hex');
 }
 
 export function verifyCandidate(candidate, qualified, archive, trustedArchive) {
   validateReleaseIdentity(candidate);
   requireThat(typeof qualified.qualificationOnly === 'boolean' &&
-    candidate.qualificationOnly === qualified.qualificationOnly, 'CANDIDATE_PURPOSE_MISMATCH');
+    candidate.qualificationOnly === qualified.qualificationOnly &&
+    candidate.memberRelease === qualified.memberRelease, 'CANDIDATE_PURPOSE_MISMATCH');
   for (const key of releaseIdentityFields)
     requireThat(candidate[key] === qualified[key], 'CANDIDATE_PROVENANCE_MISMATCH');
   requireThat(candidate.sourceSha256 === createHash('sha256').update(archive).digest('hex'),
@@ -332,8 +342,8 @@ export async function validateCandidateProvenance(api, candidate) {
     current.base.repo?.full_name === targets.repository, 'MERGED_PR_EVIDENCE_CHANGED');
 }
 
-export function validateRender(service, rows, cleanStart = false) {
-  const expected = cleanStart ? cleanStartRuntimeSettings : runtimeSettings;
+export function validateRender(service, rows, cleanStart = false, settings) {
+  const expected = settings ?? (cleanStart ? cleanStartRuntimeSettings : runtimeSettings);
   const d = service.serviceDetails;
   requireThat(service.id === targets.render.id && service.name === targets.render.name &&
     service.repo?.replace(/\.git$/, '') === `https://github.com/${targets.repository}` &&
@@ -438,7 +448,8 @@ export function clients(env, fetcher = fetch) {
       if (route.includes('/env-vars') || route.includes('/secret-files')) {
         const prefix = `/services/${targets.render.id}/env-vars/`;
         requireThat(body === undefined && route.startsWith(prefix) &&
-          Object.hasOwn(cleanStartRuntimeSettings, route.slice(prefix.length)), 'SECRET_BEARING_RENDER_READ_FORBIDDEN');
+          (Object.hasOwn(cleanStartRuntimeSettings, route.slice(prefix.length)) ||
+            Object.hasOwn(memberRuntimeSettings, route.slice(prefix.length))), 'SECRET_BEARING_RENDER_READ_FORBIDDEN');
       }
       return request('https://api.render.com/v1', env.RENDER_API_KEY, route, body);
     },
@@ -466,8 +477,24 @@ export function clients(env, fetcher = fetch) {
       let r;
       try { r = await fetcher(targets.render.healthUrl, { redirect: 'error',
         signal: AbortSignal.timeout(30_000), headers: { 'Cache-Control': 'no-cache' } });
-        return { status: r.status, recovery: r.headers.get('x-aqua-recovery-suspended'), body: await r.json() };
+        return { status: r.status, recovery: r.headers.get('x-aqua-recovery-suspended'),
+          receiver: r.headers.get('x-aqua-yoco-receiver'), body: await r.json() };
       } catch { throw new ReleaseFailure('API_HEALTH_UNAVAILABLE'); }
+    },
+    memberProbe: async () => {
+      const origin = new URL(targets.render.healthUrl).origin;
+      const status = async (path, method = 'GET') => {
+        try {
+          const r = await fetcher(origin + path, { method, redirect: 'error', signal: AbortSignal.timeout(15000),
+            headers: { 'Cache-Control': 'no-store', ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
+            ...(method === 'POST' ? { body: '{}' } : {}) });
+          await r.body?.cancel(); return r.status;
+        } catch { throw new ReleaseFailure('MEMBER_FENCE_PROBE_UNAVAILABLE'); }
+      };
+      return { capability: await status('/api/services/app/AQGreenPilot/GetStatus'),
+        unauthenticatedRead: await status('/api/services/app/Customer/GetMyCustomer'),
+        write: await status('/api/services/app/ClubMemberProgrammeParticipation/CreateAQGreenJoiningCheckout', 'POST'),
+        invalidSignature: await status('/api/payments/yoco/webhook', 'POST') };
     },
     readiness: async sha => {
       try { return await protectedReadiness(env, sha, fetcher); }
@@ -522,7 +549,8 @@ export function createAuditWriter(identity, emit) {
       'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256', 'schemaFirstEvidenceSha256', 'recoveryMode',
       'authorizationId', 'evidenceSha256', 'inventorySha256', 'evidenceArtifactId', 'vercelSourceProof'])
       if (row[key] !== undefined) known[key] = row[key];
-    emit({ ...row, ...Object.fromEntries(releaseIdentityFields.map(key => [key, identity[key]])), ...known });
+    emit({ ...row, ...Object.fromEntries(releaseIdentityFields.map(key => [key, identity[key]])),
+      ...(identity.memberRelease !== undefined ? { memberRelease: identity.memberRelease } : {}), ...known });
   };
 }
 
@@ -534,6 +562,7 @@ export function validateResumeReceipt(rows, frozen) {
   const pending = new Set();
   for (const row of rows) {
     validateReleaseIdentity(row);
+    requireThat(row.memberRelease === undefined && frozen.memberRelease === undefined, 'FULL_RELEASE_PURPOSE_REQUIRED');
     requireThat(releaseIdentityFields.filter(key => key !== 'releaseRunAttempt')
       .every(key => row[key] === frozen[key]) && row.releaseRunAttempt >= attempt &&
       row.releaseRunAttempt <= attempt + 1 && row.releaseRunAttempt < frozen.releaseRunAttempt,
@@ -659,15 +688,22 @@ export async function evidencePlan(api, candidate, policy) {
     }
   }
   requireThat(successful.every(r => r.run_number < current.run_number), 'NEWER_RELEASE_ALREADY_COMPLETED');
-  const latest = successful.sort((a, b) => b.run_number - a.run_number)[0];
+  successful.sort((a, b) => b.run_number - a.run_number);
+  const latestObserved = successful[0];
+  let latest;
   // GitHub's workflow-level concurrency is the serialization boundary. Consume
   // no portable ticket: authenticate every completed release's immutable audit.
   // Deleted history, expired evidence or a previously deployed SHA denies even
   // when the caller supplies another CI run/attempt or dispatches a fresh run.
-  const verifiedReleases = [];
+  const verifiedReleases = [], memberReleases = [];
   for (const past of successful) {
     const descriptor = await auditArtifact(api, past, past.run_attempt);
     const rows = await readReleaseAudit(api, descriptor);
+    if (rows[0]?.memberRelease !== undefined) {
+      memberReleases.push(validateMemberReceipt(rows, descriptor, targets));
+      continue;
+    }
+    latest ??= past;
     const proof = validateBaselineReceipt(rows, descriptor, candidate);
     requireThat(proof.origin.sha !== candidate.sha, 'SOURCE_ALREADY_VERIFIED');
     verifiedReleases.push({ ...descriptor, sourceSha: proof.origin.sha,
@@ -675,7 +711,7 @@ export async function evidencePlan(api, candidate, policy) {
       receiptSha256: sha256(Buffer.from(JSON.stringify(rows))) });
   }
   for (const run of runs.filter(r => r.id !== current.id &&
-    r.run_number > (latest?.run_number ?? 0))) {
+    r.run_number > (latestObserved?.run_number ?? 0))) {
     // A failed prior run may have submitted a request whose history is not visible
     // yet. Only a positively unexecuted provider step is safe to supersede.
     for (let attempt = 1; attempt <= run.run_attempt; attempt++) {
@@ -697,7 +733,10 @@ export async function evidencePlan(api, candidate, policy) {
     for (const descriptor of resumeChain) rows.push(...await readReleaseAudit(api, descriptor));
     validateResumeReceipt(rows, candidate);
   }
+  requireThat(candidate.memberRelease === undefined || memberReleases.length === 0,
+    'MEMBER_RELEASE_ALREADY_DEPLOYED');
   return { policySha256: candidate.policySha256, verifiedReleases,
+    ...(memberReleases.length ? { memberReleases } : {}),
     firstReleaseRecoveryEvidenceSha256: latest ? null : policy.firstReleaseRecovery.evidenceSha256,
     baseline: latest ? await auditArtifact(api, latest, latest.run_attempt) : null,
     resume: resumeChain.at(-1) ?? null, resumeChain };
@@ -713,7 +752,7 @@ async function readReleaseAudit(api, descriptor) {
   const bytes = await readGitHubArtifact(api, 'executor', artifact, 'release-report.jsonl');
   try {
     const lines = bytes.toString('utf8').trim().split('\n');
-    requireThat(lines.length > 0 && lines.length <= 100, 'AUDIT_RECEIPT_UNVERIFIABLE');
+    requireThat(lines.length > 0 && lines.length <= 500, 'AUDIT_RECEIPT_UNVERIFIABLE');
     return lines.map(line => JSON.parse(line));
   } catch { throw new ReleaseFailure('AUDIT_RECEIPT_UNVERIFIABLE'); }
 }
@@ -723,6 +762,7 @@ export function validateBaselineReceipt(rows, descriptor, candidate) {
   const first = rows[0], last = rows.at(-1);
   for (const row of rows) {
     validateReleaseIdentity(row);
+    requireThat(row.memberRelease === undefined && candidate.memberRelease === undefined, 'FULL_RELEASE_PURPOSE_REQUIRED');
     requireThat(releaseIdentityFields.every(key => row[key] === first[key]) &&
       row.releaseRunId === descriptor.runId && row.releaseRunAttempt === descriptor.runAttempt &&
       (external ? row.executorSha === descriptor.sha : row.sha === descriptor.sha) && row.policySha256 === candidate.policySha256,
@@ -797,12 +837,21 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now);
     await validateInfrastructure(api, qualified, policy);
     await validateCandidateProvenance(api, qualified);
+    if (qualified.memberRelease !== undefined) {
+      verifyMemberSource(options.env?.SOURCE_DIR, qualified);
+      await verifyMemberAuthority(api, qualified, options.env ?? process.env, options.now);
+    }
   };
   await guard();
   const plan = options.evidencePlan;
   requireThat(plan && plan.policySha256 === qualified.policySha256, 'FROZEN_EVIDENCE_PLAN_REQUIRED');
   requireThat(objectDigest(await evidencePlan(api, qualified, policy)) === objectDigest(plan),
     'RELEASE_EVIDENCE_PLAN_CHANGED');
+  if (qualified.memberRelease !== undefined) {
+    return deployMemberRelease(api, qualified, report, { ...options, guard, targets,
+      validateRender, validateVercel, validateHealth, deploymentHistory, waitFor, releaseKey,
+      validateAdmission: () => validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now) });
+  }
   requireThat(!!plan.baseline === !!options.baselineRows, 'BASELINE_RECEIPT_REQUIRED');
   requireThat(qualified.releaseRunAttempt === 1 ? !plan.resume && !options.receiptRows :
     plan.resume?.runId === qualified.releaseRunId && plan.resume.runAttempt === qualified.releaseRunAttempt - 1 &&
@@ -1163,7 +1212,7 @@ export async function main(env, options = {}) {
     const qualified = await qualify(api, inputs.ci_run_id);
     requireThat(qualified.sha === inputs.sha && String(qualified.ciRunAttempt) === inputs.ci_run_attempt,
       'CI_EVENT_PROVENANCE_MISMATCH');
-    q = freezeCandidate(qualified, env, policy, inputs.qualificationOnly);
+    q = freezeCandidate(qualified, env, policy, inputs.qualificationOnly, inputs.releaseMode);
     requireThat(execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim() === q.executorSha,
       'EXECUTOR_CHECKOUT_MISMATCH');
   } else {
@@ -1180,6 +1229,10 @@ export async function main(env, options = {}) {
   q = freezeCandidate(qualified, env, policy);
   requireThat(execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() === q.sha,
     'CHECKOUT_SOURCE_MISMATCH');
+  }
+  if (q.memberRelease !== undefined) {
+    verifyMemberSource(env.SOURCE_DIR, q);
+    await verifyMemberAuthority(api, q, env, options.now);
   }
   if (mode === 'candidate') {
     // Detect accidental reviewer/wait gates before entering the environment job.
@@ -1208,12 +1261,12 @@ export async function main(env, options = {}) {
     await validateInfrastructure(api, q, policy);
     await validateCandidateProvenance(api, q);
     const plan = await evidencePlan(api, q, policy);
-    const schemaProof = await verifySchemaFirst(api, q, policy, readSource,
-      options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now);
+    const schemaProof = q.memberRelease === undefined ? await verifySchemaFirst(api, q, policy, readSource,
+      options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now) : null;
     // Provider credentials remain unavailable here. The named operator's original
     // eligibility/compatibility readback must be approved with this executor SHA.
     // Qualification-only execution never constitutes production authorization.
-    if (!q.qualificationOnly && !plan.baseline)
+    if (q.memberRelease === undefined && !q.qualificationOnly && !plan.baseline)
       validateFirstReleaseRecovery(options.recoveryReadback ?? approvedRecoveryReadback, q, policy, options.now, schemaProof);
     const receipt = createGitHubAdmission(q, policy, evidence, options.now);
     requireThat(typeof env.AQUA_ADMISSION_RECEIPT_OUTPUT === 'string', 'ADMISSION_OUTPUT_REQUIRED');
@@ -1261,7 +1314,8 @@ export async function run(env, options = {}) {
   catch (error) {
     const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied ||
       error instanceof GovernanceReadbackDenied || error instanceof VercelSourceDenied ||
-      error instanceof FirstReleaseRecoveryDenied || error instanceof SchemaFirstDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
+      error instanceof FirstReleaseRecoveryDenied || error instanceof SchemaFirstDenied ||
+      error instanceof MemberReleaseDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
     if (failureReport) failureReport(code);
     else if (env.RELEASE_REPORT)
       appendFileSync(env.RELEASE_REPORT, JSON.stringify({ phase: 'blocked', code, identityVerified: false }) + '\n');

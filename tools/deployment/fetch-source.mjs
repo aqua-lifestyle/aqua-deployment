@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { targets, requireThat, validateDispatchInputs } from './release-control.mjs';
+import { memberPolicy } from './member-release.mjs';
 
 export function fetchSource(env, execute = execFileSync) {
   const inputs = validateDispatchInputs(JSON.parse(readFileSync(env.GITHUB_EVENT_PATH)).inputs);
@@ -16,6 +17,10 @@ export function fetchSource(env, execute = execFileSync) {
   git(['init', '--quiet']);
   git(['fetch', '--quiet', '--no-tags', '--depth=1', `https://github.com/${targets.repository}.git`, inputs.sha]);
   requireThat(git(['rev-parse', 'FETCH_HEAD']).trim() === inputs.sha, 'FETCHED_SOURCE_MISMATCH');
+  if (inputs.releaseMode === memberPolicy.mode) {
+    git(['fetch', '--quiet', '--no-tags', '--depth=1', `https://github.com/${targets.repository}.git`, memberPolicy.receiverSha]);
+    requireThat(git(['rev-parse', 'FETCH_HEAD']).trim() === memberPolicy.receiverSha, 'FETCHED_RECEIVER_MISMATCH');
+  }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try { fetchSource(process.env); }

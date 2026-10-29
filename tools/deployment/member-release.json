@@ -1,0 +1,16 @@
+{
+  "mode": "schema54-member-reads-v1",
+  "frontendSha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+  "receiverSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+  "receiverTree": "b82286fdba9b87a0b518f3ec017a04cf5cf152cc",
+  "receiverManifestSha256": "3e7563ad6d0b0dcc7a88ccfbca2b199b417ee952f1e7bc1f0d9387afbd4c2e7f",
+  "baselineRenderSha": "c629ecba2a9d07764ac7a25e30b35511c38657cb",
+  "baselineRenderDeployId": "dep-dbgsrlo8v5cc73fgmoo0",
+  "baselineVercelDeployId": "dpl_EwGB3apX3P5JnU5KfG3rLzn21Kgf",
+  "databaseResource": "dpg-d9f0jne1a83c73d8m780-a",
+  "databaseName": "aqualifestyle",
+  "tenantId": 1,
+  "migrationCount": 54,
+  "operator": { "login": "Xolani-M", "id": 86495928 },
+  "reviewer": { "login": "aqualifestyleclub", "id": 307076734 }
+}
