@@ -140,3 +140,49 @@ acceptance of the reviewed release, not a claim that Aqua reviewed the correctio
 Other PR numbers and unrelated descendants cannot use this exception and still
 require their own exact-source acceptance. Main CI, schema-54 operator evidence,
 protected admission and all runtime/financial/full-cutover gates remain mandatory.
+
+## Reconciled frontend continuation, 29 October 2026
+
+The actual receiver deployment from run `40850715880` is live as
+`dep-dbhh7l8m7kps73etljfg`, exact source `4eba379...`; Vercel was never requested.
+The original failed health response cannot be recovered. A controlled complete
+read-only observation now passes all eight unchanged readiness predicates:
+https://github.com/aqua-lifestyle/aqua-deployment/pull/9#issuecomment-6497700449 .
+This does not establish which historical field failed. No configuration or
+revision mismatch was found; no speculative health/configuration fix is applied.
+
+The owner directed completion of this recorded partial release. Protected PR #14
+adds only its operational reconciliation: `member-continuation.json` pins the
+original run, producing executor, artifact ID, ZIP digest, canonical receipt
+digest and acknowledged Render deployment. GitHub-only admission authenticates
+the original immutable ZIP and the exact pre-Vercel failure. The committed 1089-byte
+ZIP fixture is that non-sensitive public operational audit, not production member
+or financial data, synthetic historical acceptance or a provider-delivery claim.
+
+Only this failed run can be reconciled, only for the fixed member-release purpose.
+The full-release history guard is unchanged. Ambiguous/altered receipts, foreign
+deployments, attempted frontend mutations, changed source, expired evidence and
+other failed runs still deny. A fresh candidate/admission and schema-54 native
+operator readback remain mandatory. Before any frontend upload the executor
+verifies the exact live deployment, all eight readiness fields, receiver header,
+capabilities, authentication/fence negatives, holds, unchanged frontend baseline,
+project/domain and public build inputs. It issues **no Render POST** on this path.
+Readiness failures now retain each actual/expected checked field and failed-field
+names in the safe audit; assertions are unchanged. Original source/policy pins and
+all financial, retirement, migration-55, D10 and full-cutover gates remain intact.
+
+PR #14 may carry the original Aqua source acceptance only when its protected
+executing merge compares directly from `97526c0` with exactly the one reconciliation
+commit plus merge and these six paths: member release source/test, release-control,
+this document, the fixed reconciliation JSON and operational ZIP fixture. Existing
+policy, targets, workflow, provider clients, application code and source pins must
+be unchanged. Any rejection by Aqua still blocks. This records the owner's existing
+operational continuation direction; it does not claim a new Aqua review or repeat
+her prior decision. Other PRs cannot inherit this exception.
+
+Validation: six focused continuation tests passed, zero failed/skipped, including
+actual archive-digest substitution, altered receipt, wrong/current rejected source,
+no Render POST, wrong live source/deployment, holds, read failure and per-field
+diagnostics. Required PR/main CI and actual frontend/member verification are
+recorded separately when performed. No application source or production mutation
+occurred during this preparation.

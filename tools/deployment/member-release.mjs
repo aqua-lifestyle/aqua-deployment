@@ -8,6 +8,7 @@ import { prepareFrontend, fileDeploymentBody, validateFileDeployment, validateFr
 
 export const memberPolicy = JSON.parse(readFileSync(new URL('./member-release.json', import.meta.url)));
 export const memberPolicyDigest = objectDigest(memberPolicy);
+export const memberContinuation = JSON.parse(readFileSync(new URL('./member-continuation.json', import.meta.url)));
 export class MemberReleaseDenied extends Error {}
 const check = (ok, code) => { if (!ok) throw new MemberReleaseDenied(code); };
 export const memberRuntimeSettings = Object.freeze({
@@ -38,6 +39,22 @@ export function verifyMemberSource(directory, q) {
   }
 }
 
+export function validateMemberContinuation(rows, descriptor) {
+  check(descriptor.runId === memberContinuation.runId && descriptor.runAttempt === 1 &&
+    descriptor.sha === memberContinuation.executorSha && descriptor.artifactId === memberContinuation.artifactId &&
+    objectDigest(rows) === memberContinuation.receiptSha256, 'MEMBER_CONTINUATION_RECEIPT_MISMATCH');
+  const first = rows[0], last = rows.at(-1);
+  validateMemberIdentity(first);
+  check(first.releaseRunId === memberContinuation.runId && first.releaseRunAttempt === 1 &&
+    first.executorSha === memberContinuation.executorSha && first.sha === memberPolicy.frontendSha &&
+    rows.every(x => x.renderDeployId === undefined || x.renderDeployId === memberContinuation.renderDeployId) &&
+    rows.filter(x => x.phase === 'member-render-requested').length === 1 &&
+    !rows.some(x => x.phase.startsWith('member-vercel') || x.vercelDeployId !== undefined) &&
+    last.phase === 'failed' && last.code === 'API_REVISION_OR_RECOVERY_READINESS_FAILED',
+  'MEMBER_CONTINUATION_OUTCOME_NOT_RECONCILABLE');
+  return { ...memberContinuation, receiverSha: memberPolicy.receiverSha, frontendSha: memberPolicy.frontendSha };
+}
+
 // A verified member deployment resolves its own provider history, never supplies
 // conservation/schema evidence or becomes a same-SHA full-release predecessor.
 export function validateMemberReceipt(rows, descriptor, targets) {
@@ -51,17 +68,21 @@ export function validateMemberReceipt(rows, descriptor, targets) {
     first.releaseRunAttempt === 1 && first.executorSha === descriptor.sha &&
     first.executorRepository === 'aqua-lifestyle/aqua-deployment', 'MEMBER_AUDIT_IDENTITY_MISMATCH');
   for (const row of rows) check(identity.every(k => row[k] === first[k]), 'MEMBER_AUDIT_IDENTITY_MISMATCH');
-  const expected = ['member-baseline-selected', 'member-render-requesting', 'member-render-requested',
+  const reconciled = rows.some(x => x.phase === 'member-render-reconciled');
+  const expected = ['member-baseline-selected', ...(reconciled ? ['member-render-reconciled'] : ['member-render-requesting', 'member-render-requested']),
     'member-render-ready', 'member-vercel-files-requesting', 'member-vercel-files-uploaded',
     'member-vercel-requesting', 'member-vercel-requested', 'member-deployed'];
-  check(rows.filter(x => x.phase !== 'member-handoff-sample').map(x => x.phase).join() === expected.join(),
+  check(rows.filter(x => !['member-handoff-sample', 'member-readiness'].includes(x.phase)).map(x => x.phase).join() === expected.join(),
     'MEMBER_AUDIT_SEQUENCE_INVALID');
   const readyAt = rows.findIndex(x => x.phase === 'member-render-ready');
   check(rows.every((x, i) => x.phase !== 'member-handoff-sample' ||
     (i > 2 && i < readyAt && [memberPolicy.baselineRenderSha, memberPolicy.receiverSha].includes(x.observedRevision))),
     'MEMBER_AUDIT_HANDOFF_INVALID');
-  check(first.baselineRenderDeployId === memberPolicy.baselineRenderDeployId &&
-    first.baselineRenderSha === memberPolicy.baselineRenderSha && first.baselineVercelDeployId === memberPolicy.baselineVercelDeployId &&
+  check(first.baselineRenderDeployId === (reconciled ? memberContinuation.renderDeployId : memberPolicy.baselineRenderDeployId) &&
+    first.baselineRenderSha === (reconciled ? memberPolicy.receiverSha : memberPolicy.baselineRenderSha) &&
+    (!reconciled || objectDigest(rows.find(x => x.phase === 'member-render-reconciled').continuation) ===
+      objectDigest({ ...memberContinuation, receiverSha: memberPolicy.receiverSha, frontendSha: memberPolicy.frontendSha })) &&
+    first.baselineVercelDeployId === memberPolicy.baselineVercelDeployId &&
     last.renderSha === memberPolicy.receiverSha && last.vercelSha === memberPolicy.frontendSha &&
     /^dep-[a-z0-9]+$/.test(last.renderDeployId) && /^dpl_[A-Za-z0-9]+$/.test(last.vercelDeployId) &&
     rows.every(x => (x.renderDeployId === undefined || x.renderDeployId === last.renderDeployId) &&
@@ -89,17 +110,20 @@ export async function verifyMemberAuthority(api, q, env, now = Date.now) {
   check(pr.merged === true && pr.merge_commit_sha === q.executorSha && /^[a-f0-9]{40}$/.test(pr.head?.sha),
     'MEMBER_PROTECTED_MERGE_REQUIRED');
   let acceptedPr = pr;
-  // Owner-authorized parser correction only, not ancestor-review admission for
-  // arbitrary releases. PR #13 must be the exact protected merge being executed;
-  // the accepted policy/source pair and all other executor files stay unchanged.
-  if (pr.number === 13) {
-    const diff = await api.executor(`/compare/051bf90f7ba037657c9e9d244a6e6ffc81b9c7f1...${q.executorSha}`);
+  // Owner-authorized parser correction / recorded-state reconciliation only.
+  // These exact protected PRs cannot grant ancestor-review admission to any
+  // unrelated source, policy, target, financial or full-release change.
+  if ([13, 14].includes(pr.number)) {
+    const base = pr.number === 13 ? '051bf90f7ba037657c9e9d244a6e6ffc81b9c7f1' : memberContinuation.executorSha;
+    const diff = await api.executor(`/compare/${base}...${q.executorSha}`);
     const allowed = ['tools/deployment/member-release.mjs', 'tools/deployment/member-release.test.mjs',
-      'docs/schema54-member-release.md'];
-    check(diff.status === 'ahead' && diff.base_commit?.sha === '051bf90f7ba037657c9e9d244a6e6ffc81b9c7f1' &&
-      diff.total_commits === 2 && Array.isArray(diff.files) && diff.files.length === 3 &&
-      diff.files.every(x => allowed.includes(x.filename) && x.status === 'modified') &&
-      new Set(diff.files.map(x => x.filename)).size === 3, 'MEMBER_PARSER_CORRECTION_SCOPE_CHANGED');
+      'docs/schema54-member-release.md', ...(pr.number === 14 ? ['tools/deployment/release-control.mjs',
+        'tools/deployment/member-continuation.json', 'tools/deployment/fixtures/member-interrupted-audit.zip'] : [])];
+    const added = ['tools/deployment/member-continuation.json', 'tools/deployment/fixtures/member-interrupted-audit.zip'];
+    check(diff.status === 'ahead' && diff.base_commit?.sha === base &&
+      diff.total_commits === 2 && Array.isArray(diff.files) && diff.files.length === allowed.length &&
+      diff.files.every(x => allowed.includes(x.filename) && x.status === (added.includes(x.filename) ? 'added' : 'modified')) &&
+      new Set(diff.files.map(x => x.filename)).size === allowed.length, 'MEMBER_PARSER_CORRECTION_SCOPE_CHANGED');
     acceptedPr = await api.executor('/pulls/12');
     check(acceptedPr.number === 12 && acceptedPr.merged === true &&
       acceptedPr.merge_commit_sha === '051bf90f7ba037657c9e9d244a6e6ffc81b9c7f1' &&
@@ -172,6 +196,11 @@ export async function deployMemberRelease(api, q, report, options) {
   check(q.qualificationOnly === false && q.releaseRunAttempt === 1 && !options.receiptRows &&
     !options.evidencePlan.baseline && !options.evidencePlan.resume, 'MEMBER_NO_AUTOMATIC_RESUME');
   const { targets, guard, validateRender, validateVercel, validateHealth, deploymentHistory, waitFor, releaseKey } = options;
+  const continuation = options.evidencePlan.memberContinuation;
+  if (continuation) check(objectDigest(continuation) === objectDigest({ ...memberContinuation,
+    receiverSha: memberPolicy.receiverSha, frontendSha: memberPolicy.frontendSha }), 'MEMBER_CONTINUATION_PLAN_MISMATCH');
+  const baselineRenderId = continuation ? memberContinuation.renderDeployId : memberPolicy.baselineRenderDeployId;
+  const baselineRenderSha = continuation ? memberPolicy.receiverSha : memberPolicy.baselineRenderSha;
   const start = (options.now ?? Date.now)(), end = start + 40 * 60 * 1000;
   const clock = () => check((options.now ?? Date.now)() < end, 'MEMBER_EXECUTION_WINDOW_EXPIRED');
   const audit = row => report({ ...row, memberRelease: memberPolicyDigest,
@@ -227,8 +256,20 @@ export async function deployMemberRelease(api, q, report, options) {
     check(rows.every(x => !activeWeb.has(x.state ?? x.readyState) && x.meta?.aquaMemberRelease !== memberPolicyDigest),
       'MEMBER_CONCURRENT_OR_PREVIOUS_FRONTEND_REQUEST');
   };
+  let baselineRecorded = false, readinessRecorded = false;
   const receiverHealth = async (sha, capabilities = false) => {
-    const health = await api.health(); validateHealth(health, sha);
+    const health = await api.health(), j = health.body.result ?? health.body;
+    const expected = { httpStatus: 200, status: 'Healthy', buildId: sha, environment: 'Production',
+      databaseStatus: 'Healthy', redisStatus: 'Healthy', dataProtectionKeyStoreStatus: 'Healthy', recovery: null };
+    const actual = { httpStatus: health.status, status: j.status, buildId: j.buildId, environment: j.environment,
+      databaseStatus: j.databaseStatus, redisStatus: j.redisStatus,
+      dataProtectionKeyStoreStatus: j.dataProtectionKeyStoreStatus, recovery: health.recovery };
+    const failedFields = Object.keys(expected).filter(k => actual[k] !== expected[k]);
+    if (baselineRecorded && (!readinessRecorded || failedFields.length)) {
+      audit({ phase: 'member-readiness', expected, actual, failedFields,
+        observedAt: new Date((options.now ?? Date.now)()).toISOString() }); readinessRecorded = true;
+    }
+    validateHealth(health, sha);
     check(health.receiver === 'Schema54', 'MEMBER_COMPATIBILITY_RECEIVER_REQUIRED');
     if (capabilities) {
       const caps = (health.body.result ?? health.body).contractCapabilities;
@@ -241,30 +282,41 @@ export async function deployMemberRelease(api, q, report, options) {
   };
   await guard(); await readRender(); await readWeb(memberPolicy.baselineVercelDeployId);
   await checkDomain(memberPolicy.baselineVercelDeployId);
-  await checkRender(memberPolicy.baselineRenderDeployId, memberPolicy.baselineRenderSha);
-  await checkWeb(); await receiverHealth(memberPolicy.baselineRenderSha);
+  await checkRender(baselineRenderId, baselineRenderSha);
+  await checkWeb(); await receiverHealth(baselineRenderSha);
   const oldWeb = await api.vercel(`/v13/deployments/${memberPolicy.baselineVercelDeployId}`);
   check(oldWeb.id === memberPolicy.baselineVercelDeployId && oldWeb.projectId === targets.vercel.id &&
     oldWeb.target === 'production' && oldWeb.readyState === 'READY' && !oldWeb.aliasError,
     'MEMBER_BASELINE_FRONTEND_UNAVAILABLE');
-  audit({ phase: 'member-baseline-selected', baselineRenderDeployId: memberPolicy.baselineRenderDeployId,
-    baselineRenderSha: memberPolicy.baselineRenderSha, baselineVercelDeployId: memberPolicy.baselineVercelDeployId });
-  await guard(); await readRender(); await checkRender(memberPolicy.baselineRenderDeployId, memberPolicy.baselineRenderSha);
-  await readWeb(memberPolicy.baselineVercelDeployId); await checkWeb(); clock();
-  audit({ phase: 'member-render-requesting' });
-  let render = await api.render(`${servicePath}/deploys`, { commitId: memberPolicy.receiverSha, clearCache: 'do_not_clear' });
-  check(/^dep-[a-z0-9]+$/.test(render.id), 'MEMBER_RENDER_ID_UNAVAILABLE');
-  audit({ phase: 'member-render-requested', renderDeployId: render.id });
-  render = await waitFor(async () => {
-    clock(); await readRender();
-    const sample = await api.health();
-    const sha = (sample.body.result ?? sample.body).buildId;
-    check([memberPolicy.baselineRenderSha, memberPolicy.receiverSha].includes(sha), 'MEMBER_HANDOFF_REVISION_DRIFT');
-    validateHealth(sample, sha); check(sample.receiver === 'Schema54', 'MEMBER_HANDOFF_RECEIVER_UNAVAILABLE');
-    audit({ phase: 'member-handoff-sample', observedRevision: sha });
-    return api.render(`${servicePath}/deploys/${render.id}`);
-  }, x => x.status, 'live', activeRender, options);
-  check(render.commit?.id === memberPolicy.receiverSha, 'MEMBER_RENDER_SOURCE_MISMATCH');
+  audit({ phase: 'member-baseline-selected', baselineRenderDeployId: baselineRenderId,
+    baselineRenderSha, baselineVercelDeployId: memberPolicy.baselineVercelDeployId }); baselineRecorded = true;
+  let render;
+  if (continuation) {
+    // Existing acknowledged deployment only. No Render POST, retry or rollback.
+    await guard(); await readRender(); await checkRender(baselineRenderId, baselineRenderSha);
+    await receiverHealth(memberPolicy.receiverSha, true);
+    render = await api.render(`${servicePath}/deploys/${memberContinuation.renderDeployId}`);
+    check(render.id === memberContinuation.renderDeployId && render.status === 'live' &&
+      render.commit?.id === memberPolicy.receiverSha, 'MEMBER_RECONCILED_RENDER_CHANGED');
+    audit({ phase: 'member-render-reconciled', renderDeployId: render.id, continuation });
+  } else {
+    await guard(); await readRender(); await checkRender(baselineRenderId, baselineRenderSha);
+    await readWeb(memberPolicy.baselineVercelDeployId); await checkWeb(); clock();
+    audit({ phase: 'member-render-requesting' });
+    render = await api.render(`${servicePath}/deploys`, { commitId: memberPolicy.receiverSha, clearCache: 'do_not_clear' });
+    check(/^dep-[a-z0-9]+$/.test(render.id), 'MEMBER_RENDER_ID_UNAVAILABLE');
+    audit({ phase: 'member-render-requested', renderDeployId: render.id });
+    render = await waitFor(async () => {
+      clock(); await readRender();
+      const sample = await api.health();
+      const sha = (sample.body.result ?? sample.body).buildId;
+      check([memberPolicy.baselineRenderSha, memberPolicy.receiverSha].includes(sha), 'MEMBER_HANDOFF_REVISION_DRIFT');
+      validateHealth(sample, sha); check(sample.receiver === 'Schema54', 'MEMBER_HANDOFF_RECEIVER_UNAVAILABLE');
+      audit({ phase: 'member-handoff-sample', observedRevision: sha });
+      return api.render(`${servicePath}/deploys/${render.id}`);
+    }, x => x.status, 'live', activeRender, options);
+    check(render.commit?.id === memberPolicy.receiverSha, 'MEMBER_RENDER_SOURCE_MISMATCH');
+  }
   await checkRender(render.id, memberPolicy.receiverSha); await receiverHealth(memberPolicy.receiverSha, true);
   audit({ phase: 'member-render-ready', renderDeployId: render.id });
   await guard(); await readRender(); await readWeb(memberPolicy.baselineVercelDeployId); await checkWeb();
