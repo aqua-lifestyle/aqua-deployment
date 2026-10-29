@@ -1,6 +1,39 @@
 # Explicit AQGreen CLEAN_START schema-first admission
 
-Current owner-attested application candidate:
+## Prospective-boundary source pin refresh
+
+The owner authorized a prospective CLEAN_START effective time ("boundry can happen
+now") on30 October Johannesburg time. Application PR #117 at
+`fc955e8aaa466bc836c31e341d12afa3f68ee19c` introduces the explicitly selected
+`AQGreenCleanStartV2` / `OWNER_AUTHORIZED_PROSPECTIVE_UTC_V1` path. The native
+receipt policy/authorization must match independent D10 financial-boundary
+authority; V1 and historical B6 remain canonical. Commission-week calculations,
+financial-preservation, actual conservation/Aqua-before55, worker/payout holds
+and the separately recorded provider-test waiver are unchanged.
+
+This executor amendment refreshes only the five changed source-definition hashes
+and their manifest/policy digest: clean-start evidence, D10 binding, reset SQL,
+native state query and launcher state-integrity pin. All migration55 and payout
+guard source pins are asserted unchanged. It adds no deployment bypass, mode,
+provider mutation, candidate override or authority record.
+
+Application PR/main qualification and Aqua's exact new-amendment acceptance remain
+mandatory. Actual schema/recovery readbacks stay UNVERIFIED until the real
+operations and acceptance occur. This pin refresh does not reconcile or silently
+adopt the prior narrow-release deployment history as a successful full release;
+current provider-baseline reconciliation remains a separate existing admission
+requirement before dispatch. No production workflow is run by publishing/merging
+this source-definition amendment.
+
+Local source-schema validation passed18 tests, zero failed/skipped, including
+unknown authority, changed sources, preserved financial/payout guards and actual
+UNVERIFIED-readback denial before provider access. Required PR/main CI results
+are recorded on this amendment when observed. No previous member/verifier review
+is reopened or represented as acceptance of the new boundary code.
+
+## Historical implementation records
+
+Earlier owner-attested application candidate:
 `4956432a1b3649d1724c2cf12b89237829c2a765`. The owner classification is
 OWNER_ATTESTED_TEST_ONLY_V1, not independently verified provider mode. The
 protected-payment-preserving reset, D10, late-callback and commission exclusions
