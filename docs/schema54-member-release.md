@@ -186,3 +186,55 @@ no Render POST, wrong live source/deployment, holds, read failure and per-field
 diagnostics. Required PR/main CI and actual frontend/member verification are
 recorded separately when performed. No application source or production mutation
 occurred during this preparation.
+
+## Read-only qualification of the deployed frontend
+
+Run `40883686654` reconciled the existing receiver without another Render deploy,
+then uploaded and created frontend `53341b578bf08a61c554bf36f165beb82626b9e7` as
+`dpl_7PcajvRJGKp2AzuJGaLPLHy2bqUD`. Vercel reports READY and the production domain
+maps to it. That run nevertheless FAILED at
+`VERCEL_EFFECTIVE_BUILD_INPUTS_UNVERIFIABLE`; do not rewrite its historical result
+or treat READY as proof of configuration or authenticated member access.
+
+The verified cause is an incorrect response-shape assumption: Vercel's
+[official deployment model](https://github.com/vercel/sdk/blob/main/docs/models/getdeploymentresponsebodybuild.md)
+returns environment **names** as `string[]`, rather than readable value maps.
+Names alone cannot verify effective values. Do not replace them with requested
+values, decrypt project secrets or redeploy to repeat the completed operation.
+
+`verifyObservedFileDeployment` adds a GET-only post-deployment qualification path.
+Its caller must authenticate the original upload/create audit through the existing
+GitHub artifact reader, including workflow/repository/source identity and ZIP
+digest. The original audit is artifact `12901649081`, SHA-256
+`771a509135c2d03f69e357a1fe97988d424c96065ef5fd71455a38ccc248cb97`.
+Metadata echoes alone do not establish source provenance. The existing source
+proof, exact project, production target, build/install commands and root checks
+remain mandatory. Names-only metadata without observations continues to fail.
+
+For this frozen frontend, the accepted `public-env.ts` digest
+`da0b258523ed6ee8d8ce5f00f874518e0a212adce7418807427c244d9f43921e`
+binds direct static public-variable references. Next.js documents that these
+[public references are inlined at build time](https://nextjs.org/docs/app/guides/environment-variables#bundling-environment-variables-for-the-browser).
+Read the actual production login page and its same-origin public JS assets, with
+bounded response sizes/timeouts and no provider credentials. Parse only the two
+literal values in the compiled schema input, without evaluating JavaScript or
+using a schema default as evidence. Require consistent observed values matching
+the approved inputs, hashes of the observed assets, and authenticated project/
+production-domain mapping to the same deployment before and after readback.
+Missing values, conflicts, redirects, source changes and alias drift fail closed.
+The protected generated deployment hostname is not bypassed.
+
+This is verification of an already-created deployment, with no provider POST,
+source-pin change, new deploy admission or full-release bypass. The general
+deployment path is unchanged. Record the separate qualification evidence in the
+existing PR #9 trail. Actual signed-in member verification still requires an
+approved Tenant 1 Member session; public assets and synthetic sessions cannot
+replace it. Retain no credentials, cookie files, HARs, member screenshots or raw
+personal API responses. Retirement, conservation acceptance, migration 55, D10,
+worker and payout holds remain unchanged.
+
+Focused local validation: all 13 Vercel-source tests PASS, zero failed/skipped.
+These include observed-value success, missing/conflicting/default-only values,
+provider conflicts, source/provenance/binding mismatches, alias drift, credential
+separation, HTTP failure and response-size limits. Required PR/main CI and live
+post-deployment qualification are recorded separately when actually completed.
