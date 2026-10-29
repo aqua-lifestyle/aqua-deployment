@@ -88,18 +88,47 @@ export async function verifyMemberAuthority(api, q, env, now = Date.now) {
   const pr = await api.executor(`/pulls/${matches[0].number}`);
   check(pr.merged === true && pr.merge_commit_sha === q.executorSha && /^[a-f0-9]{40}$/.test(pr.head?.sha),
     'MEMBER_PROTECTED_MERGE_REQUIRED');
-  const reviews = await api.executor(`/pulls/${pr.number}/reviews?per_page=100`);
+  let acceptedPr = pr;
+  // Owner-authorized parser correction only, not ancestor-review admission for
+  // arbitrary releases. PR #13 must be the exact protected merge being executed;
+  // the accepted policy/source pair and all other executor files stay unchanged.
+  if (pr.number === 13) {
+    const diff = await api.executor(`/compare/051bf90f7ba037657c9e9d244a6e6ffc81b9c7f1...${q.executorSha}`);
+    const allowed = ['tools/deployment/member-release.mjs', 'tools/deployment/member-release.test.mjs',
+      'docs/schema54-member-release.md'];
+    check(diff.status === 'ahead' && diff.base_commit?.sha === '051bf90f7ba037657c9e9d244a6e6ffc81b9c7f1' &&
+      diff.total_commits === 2 && Array.isArray(diff.files) && diff.files.length === 3 &&
+      diff.files.every(x => allowed.includes(x.filename) && x.status === 'modified') &&
+      new Set(diff.files.map(x => x.filename)).size === 3, 'MEMBER_PARSER_CORRECTION_SCOPE_CHANGED');
+    acceptedPr = await api.executor('/pulls/12');
+    check(acceptedPr.number === 12 && acceptedPr.merged === true &&
+      acceptedPr.merge_commit_sha === '051bf90f7ba037657c9e9d244a6e6ffc81b9c7f1' &&
+      acceptedPr.head?.sha === '0dbbf1d36e29d52d7f8c59f3efad06898389b3d5' &&
+      acceptedPr.base?.ref === 'main' && acceptedPr.base.repo?.full_name === q.executorRepository,
+    'MEMBER_ACCEPTED_SOURCE_BINDING_CHANGED');
+    const currentReviews = await api.executor(`/pulls/${pr.number}/reviews?per_page=100`);
+    check(Array.isArray(currentReviews) && currentReviews.length < 100 && !currentReviews.some(x =>
+      x.user?.login === memberPolicy.reviewer.login && x.user?.id === memberPolicy.reviewer.id &&
+      x.commit_id === pr.head.sha && (['CHANGES_REQUESTED', 'DISMISSED'].includes(x.state) ||
+        /^(?:REJECT|REJECTED)[.!]?$/i.test(String(x.body ?? '').trim().split('\n')[0].trim()))),
+    'MEMBER_EXACT_EXECUTOR_ACCEPTANCE_REQUIRED');
+  }
+  const reviews = await api.executor(`/pulls/${acceptedPr.number}/reviews?per_page=100`);
   const comments = await api.executor(`/issues/${pr.number}/comments?per_page=100`);
-  check(Array.isArray(reviews) && reviews.length < 100 && Array.isArray(comments) && comments.length < 100,
+  const acceptanceComments = acceptedPr.number === pr.number ? comments :
+    await api.executor(`/issues/${acceptedPr.number}/comments?per_page=100`);
+  check(Array.isArray(reviews) && reviews.length < 100 && Array.isArray(comments) && comments.length < 100 &&
+    Array.isArray(acceptanceComments) && acceptanceComments.length < 100,
     'MEMBER_REVIEW_UNVERIFIABLE');
   const reviewer = x => x.user?.login === memberPolicy.reviewer.login && x.user?.id === memberPolicy.reviewer.id;
-  const explicit = text => /^(?:ACCEPT|ACCEPTED|APPROVED)[.!]?$/i.test(String(text ?? '').trim().split('\n')[0].trim());
-  const decision = text => /^(?:ACCEPT|ACCEPTED|APPROVED|REJECT|REJECTED)[.!]?$/i.test(String(text ?? '').trim().split('\n')[0].trim());
-  const decisions = [...reviews.filter(x => reviewer(x) && x.commit_id === pr.head.sha &&
+  const explicit = text => /^(?:ACCEPT|ACCEPTED|APPROVED)[.!]?$/i.test(String(text ?? '').trim().split('\n')[0].trim()) ||
+    String(text ?? '').trim() === 'Review and Accepted';
+  const decision = text => explicit(text) || /^(?:REJECT|REJECTED)[.!]?$/i.test(String(text ?? '').trim().split('\n')[0].trim());
+  const decisions = [...reviews.filter(x => reviewer(x) && x.commit_id === acceptedPr.head.sha &&
     ['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'].includes(x.state) &&
     (x.state !== 'COMMENTED' || decision(x.body))).map(x => ({
       accepted: x.state === 'APPROVED' || (x.state === 'COMMENTED' && explicit(x.body)), time: Date.parse(x.submitted_at) })),
-    ...comments.filter(x => reviewer(x) && String(x.body).includes(pr.head.sha) &&
+    ...acceptanceComments.filter(x => reviewer(x) && String(x.body).includes(acceptedPr.head.sha) &&
       /^(?:ACCEPT|ACCEPTED|APPROVED|REJECT|REJECTED)[.!]?$/i.test(String(x.body).trim().split('\n')[0].trim()))
       .map(x => ({ accepted: explicit(x.body), time: Date.parse(x.updated_at) }))];
   check(decisions.length > 0 && decisions.every(x => Number.isFinite(x.time)), 'MEMBER_EXACT_EXECUTOR_ACCEPTANCE_REQUIRED');

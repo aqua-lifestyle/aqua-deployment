@@ -50,12 +50,20 @@ function authorityFixture() {
       executorSha: q().executorSha, frontendSha: pin.frontendSha, receiverSha: pin.receiverSha,
       databaseResource: pin.databaseResource, databaseName: pin.databaseName, tenantId: 1,
       migrationCount: 54, migration55Absent: true, identityTlsReadOnlyVerified: true, observedAt: new Date(now()).toISOString()
-    }) }], ci: 'success', job: 'success'
+    }) }], ci: 'success', job: 'success', prNumber: 12, currentReviews: [], acceptanceComments: []
   };
   const api = { executor: async path => {
-    if (path.startsWith('/commits/')) return [{ number: 12, merge_commit_sha: q().executorSha,
+    if (path.startsWith('/commits/')) return [{ number: state.prNumber, merge_commit_sha: q().executorSha,
       merged_at: new Date(now()).toISOString(), base: { ref: 'main', repo: { full_name: q().executorRepository } } }];
-    if (path === '/pulls/12') return { number: 12, merged: true, merge_commit_sha: q().executorSha, head: { sha: head } };
+    if (path === '/pulls/12' && state.prNumber !== 12) return { number: 12, merged: true,
+      merge_commit_sha: '051bf90f7ba037657c9e9d244a6e6ffc81b9c7f1',
+      head: { sha: '0dbbf1d36e29d52d7f8c59f3efad06898389b3d5' },
+      base: { ref: 'main', repo: { full_name: q().executorRepository } } };
+    if (path === `/pulls/${state.prNumber}`) return { number: state.prNumber, merged: true,
+      merge_commit_sha: q().executorSha, head: { sha: head } };
+    if (path.startsWith('/compare/')) return state.diff;
+    if (path === '/pulls/13/reviews?per_page=100') return state.currentReviews;
+    if (path === '/issues/12/comments?per_page=100' && state.prNumber !== 12) return state.acceptanceComments;
     if (path.includes('/reviews?')) return [state.review];
     if (path.includes('/comments?')) return state.comments;
     if (path.includes('/workflows/')) return { total_count: 1, workflow_runs: [{ id: 987, run_attempt: 1,
@@ -80,6 +88,41 @@ test('member authority requires exact revision human acceptance, named operator 
   f.state.review.body = 'ACCEPTED'; await verifyMemberAuthority(f.api, q(), f.state.env, now);
   f.state.comments = [{ user: pin.reviewer, body: `REJECTED\n${f.head}`, updated_at: new Date(now() + 1000).toISOString() }];
   await assert.rejects(verifyMemberAuthority(f.api, q(), f.state.env, now));
+});
+
+test('recorded Review and Accepted review passes only with the authenticated reviewer, accepted state and exact SHA', async () => {
+  const f = authorityFixture(); f.state.review.state = 'COMMENTED'; f.state.review.body = 'Review and Accepted\n';
+  await verifyMemberAuthority(f.api, q(), f.state.env, now);
+  for (const change of [s => s.review.commit_id = 'a'.repeat(40), s => s.review.user = pin.operator,
+    s => s.review.user = { login: pin.reviewer.login, id: 1 }, s => s.review.state = 'DISMISSED',
+    s => s.review.state = 'CHANGES_REQUESTED', s => s.review.body = 'Review and not Accepted',
+    s => s.review.body = 'Review and Accepted\nPending approval', s => s.review.body = 'Review only']) {
+    const g = authorityFixture(); g.state.review.state = 'COMMENTED'; g.state.review.body = 'Review and Accepted\n';
+    change(g.state); await assert.rejects(verifyMemberAuthority(g.api, q(), g.state.env, now), /MEMBER_EXACT_EXECUTOR_ACCEPTANCE_REQUIRED/);
+  }
+});
+
+function parserCorrectionFixture() {
+  const f = authorityFixture(); f.state.prNumber = 13;
+  f.state.review.state = 'COMMENTED'; f.state.review.body = 'Review and Accepted\n';
+  f.state.review.commit_id = '0dbbf1d36e29d52d7f8c59f3efad06898389b3d5';
+  f.state.diff = { status: 'ahead', base_commit: { sha: '051bf90f7ba037657c9e9d244a6e6ffc81b9c7f1' }, total_commits: 2,
+    files: ['tools/deployment/member-release.mjs', 'tools/deployment/member-release.test.mjs',
+      'docs/schema54-member-release.md'].map(filename => ({ filename, status: 'modified' })) };
+  return f;
+}
+
+test('only the protected parser correction carries forward the original exact-source acceptance', async () => {
+  const f = parserCorrectionFixture(); await verifyMemberAuthority(f.api, q(), f.state.env, now);
+  for (const change of [s => s.prNumber = 14, s => s.diff.files[0].filename = 'tools/deployment/unattended-policy.json',
+    s => s.diff.files.push({ filename: 'tools/deployment/member-release.json', status: 'modified' }),
+    s => s.diff.total_commits = 3, s => s.diff.status = 'diverged',
+    s => s.diff.base_commit.sha = 'a'.repeat(40), s => s.review.commit_id = 'a'.repeat(40),
+    s => s.review.user = pin.operator, s => s.review.state = 'CHANGES_REQUESTED',
+    s => s.currentReviews = [{ user: pin.reviewer, state: 'CHANGES_REQUESTED', commit_id: f.head }]]) {
+    const g = parserCorrectionFixture(); change(g.state);
+    await assert.rejects(verifyMemberAuthority(g.api, q(), g.state.env, now));
+  }
 });
 
 test('schema readback must be fresh, operator-authenticated, exact-source and schema 54', async () => {

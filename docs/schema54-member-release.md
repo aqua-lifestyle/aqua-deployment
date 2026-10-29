@@ -40,7 +40,10 @@ writer; it cannot itself apply a migration or retirement.
 
 1. Aqua accepts the **exact new executor PR head**. An APPROVED review at that
    commit qualifies; alternatively an authenticated review/comment whose first
-   line is `ACCEPTED` and which binds the exact head qualifies. A later explicit
+   line is `ACCEPTED` and which binds the exact head qualifies. Aqua's recorded
+   native COMMENTED review with exact body `Review and Accepted` also qualifies;
+   negative, conditional or appended wording does not select this spelling.
+   A later explicit
    rejection, dismissed review, identity mismatch or changed revision fails.
    Reuse the existing reviewer qualification/independence record.
 2. Complete the protected merge and mandatory executor main-push safety CI.
@@ -117,3 +120,23 @@ Branch `feat/schema54-member-release`, based on executor main
 - Required new exact-source CI, exact executor acceptance, protected merge,
   admission, deployment and signed-in production verification remain outstanding
   until their actual results are recorded on the PR/operational trail.
+
+## Owner-authorized acceptance-parser correction
+
+PR #12 is MERGED as `051bf90f7ba037657c9e9d244a6e6ffc81b9c7f1`; its main CI
+passed 162 tests. Aqua's review #5695158604 accepts exact head
+`0dbbf1d36e29d52d7f8c59f3efad06898389b3d5` with `Review and Accepted`.
+The initial parser rejected that valid spelling. The owner explicitly directed
+correction without another human decision or duplicate acceptance.
+
+Only protected parser-correction PR #13 can carry this existing acceptance:
+its exact merge must be the executing revision, its comparison from `051bf90`
+must have precisely the one correction commit plus merge and modifications to
+only this document, `member-release.mjs` and its focused test. Policy, source pins,
+workflow, provider clients and every other executor file must remain unchanged.
+The original PR #12 merge/head and authenticated review are reverified; any
+explicit rejection of the correction blocks. This is truthful carried-forward
+acceptance of the reviewed release, not a claim that Aqua reviewed the correction.
+Other PR numbers and unrelated descendants cannot use this exception and still
+require their own exact-source acceptance. Main CI, schema-54 operator evidence,
+protected admission and all runtime/financial/full-cutover gates remain mandatory.
