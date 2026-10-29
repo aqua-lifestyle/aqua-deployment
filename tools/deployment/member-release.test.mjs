@@ -1,12 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { memberPolicy as pin, memberPolicyDigest, memberRuntimeSettings,
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { memberPolicy as pin, memberPolicyDigest, memberRuntimeSettings, memberContinuation, validateMemberContinuation,
   validateMemberIdentity, verifyMemberSource, verifyMemberAuthority, validateMemberReceipt, deployMemberRelease } from './member-release.mjs';
 import { validateDispatchInputs, freezeCandidate, verifyCandidate, standingPolicy, targets, releaseKey,
-  validateRender, validateVercel, validateHealth, deploymentHistory, waitFor } from './release-control.mjs';
+  validateRender, validateVercel, validateHealth, deploymentHistory, waitFor, evidencePlan } from './release-control.mjs';
 import { createGitHubAdmission, validateGitHubAdmission, sha256, inventoryDigest } from './github-evidence.mjs';
-import { frontendFixtureArchive, runnerEnv } from './fixtures/provider.mjs';
+import { frontendFixtureArchive, runnerEnv, fixture as fullFixture } from './fixtures/provider.mjs';
 
 const q = () => freezeCandidate({ repository: targets.repository, sha: pin.frontendSha,
   ciRunId: '123', ciRunAttempt: 1 }, runnerEnv(), standingPolicy, false, pin.mode);
@@ -62,7 +65,7 @@ function authorityFixture() {
     if (path === `/pulls/${state.prNumber}`) return { number: state.prNumber, merged: true,
       merge_commit_sha: q().executorSha, head: { sha: head } };
     if (path.startsWith('/compare/')) return state.diff;
-    if (path === '/pulls/13/reviews?per_page=100') return state.currentReviews;
+    if (['/pulls/13/reviews?per_page=100', '/pulls/14/reviews?per_page=100'].includes(path)) return state.currentReviews;
     if (path === '/issues/12/comments?per_page=100' && state.prNumber !== 12) return state.acceptanceComments;
     if (path.includes('/reviews?')) return [state.review];
     if (path.includes('/comments?')) return state.comments;
@@ -125,6 +128,74 @@ test('only the protected parser correction carries forward the original exact-so
   }
 });
 
+test('only the pinned continuation amendment reuses acceptance without changing source-pair policy', async () => {
+  const f = parserCorrectionFixture(); f.state.prNumber = 14;
+  f.state.diff.base_commit.sha = memberContinuation.executorSha;
+  f.state.diff.files.push({ filename: 'tools/deployment/release-control.mjs', status: 'modified' },
+    { filename: 'tools/deployment/member-continuation.json', status: 'added' },
+    { filename: 'tools/deployment/fixtures/member-interrupted-audit.zip', status: 'added' });
+  await verifyMemberAuthority(f.api, q(), f.state.env, now);
+  f.state.diff.files[0].filename = 'tools/deployment/member-release.json';
+  await assert.rejects(verifyMemberAuthority(f.api, q(), f.state.env, now));
+});
+
+const originalArchive = readFileSync(new URL('./fixtures/member-interrupted-audit.zip', import.meta.url));
+const originalRows = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'aqua-recorded-member-audit-'));
+  try {
+    const file = join(dir, 'audit.zip'); writeFileSync(file, originalArchive);
+    return execFileSync('unzip', ['-p', file, 'release-report.jsonl'], { encoding: 'utf8', maxBuffer: 1024 * 1024 })
+      .trim().split('\n').map(JSON.parse);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+})();
+const continuationDescriptor = { runId: memberContinuation.runId, runAttempt: 1,
+  sha: memberContinuation.executorSha, artifactId: memberContinuation.artifactId };
+const continuationProof = () => validateMemberContinuation(originalRows, continuationDescriptor);
+
+test('recorded interrupted audit is exact, acknowledged, pre-Vercel and cannot be replaced', () => {
+  assert.equal('sha256:' + sha256(originalArchive), memberContinuation.artifactDigest);
+  assert.equal(continuationProof().renderDeployId, memberContinuation.renderDeployId);
+  for (const mutate of [r => r.at(-1).code = 'UNEXPECTED_RELEASE_ERROR', r => r[0].sha = 'a'.repeat(40),
+    r => r[2].renderDeployId = 'dep-foreign', r => r.push({ phase: 'member-vercel-requesting' })]) {
+    const rows = structuredClone(originalRows); mutate(rows);
+    assert.throws(() => validateMemberContinuation(rows, continuationDescriptor));
+  }
+  assert.throws(() => validateMemberContinuation(originalRows, { ...continuationDescriptor, artifactId: '1' }));
+  assert.throws(() => validateMemberContinuation(originalRows, { ...continuationDescriptor, runAttempt: 2 }));
+});
+
+test('GitHub-only continuation plan authenticates the original artifact and never bypasses full-release history', async () => {
+  const f = fullFixture(); f.state.candidate = q();
+  const current = { id: 456, run_attempt: 1, run_number: 2, head_sha: q().executorSha, head_branch: 'main',
+    event: 'workflow_dispatch', path: '.github/workflows/deploy.yml', name: 'Qualified production executor',
+    status: 'in_progress', repository: { full_name: q().executorRepository }, head_repository: { full_name: q().executorRepository } };
+  const prior = { ...current, id: Number(memberContinuation.runId), head_sha: memberContinuation.executorSha,
+    run_number: 1, status: 'completed', conclusion: 'failure' };
+  const artifact = { id: Number(memberContinuation.artifactId), name: `production-release-audit-${prior.id}-1`,
+    digest: memberContinuation.artifactDigest, expired: false, size_in_bytes: originalArchive.length,
+    workflow_run: { id: prior.id, head_sha: prior.head_sha, head_branch: 'main', repository_id: 987, head_repository_id: 987 } };
+  const api = { ...f.api, artifact: async () => originalArchive, executor: async path => {
+    if (path === '') return { id: 987 };
+    if (path === '/actions/runs/456') return current;
+    if (path.includes('/actions/workflows/deploy.yml/')) return { total_count: 2, workflow_runs: [prior, current] };
+    if (path.includes(`/actions/runs/${prior.id}/attempts/1/jobs?`)) return { total_count: 3, jobs: [
+      { name: 'Qualify immutable source candidate', conclusion: 'success' },
+      { name: 'Verify approved GitHub evidence before provider access', conclusion: 'success' },
+      { name: 'Unattended recovery release', conclusion: 'failure', steps: [] }
+    ].map(x => ({ ...x, run_id: prior.id, run_attempt: 1, status: 'completed' })) };
+    if (path.includes(`/actions/runs/${prior.id}/artifacts?`)) return { total_count: 1, artifacts: [artifact] };
+    if (path === `/actions/artifacts/${artifact.id}`) return artifact;
+    assert.fail('Unexpected continuation evidence route: ' + path);
+  } };
+  const plan = await evidencePlan(api, q(), standingPolicy);
+  assert.equal(plan.memberContinuation.renderDeployId, memberContinuation.renderDeployId);
+  assert.equal(f.state.providerCalls, 0); assert.equal(f.posts.length, 0);
+  const full = { ...q() }; delete full.memberRelease;
+  await assert.rejects(evidencePlan(api, full, standingPolicy), /UNVERIFIED_PRIOR_RELEASE_REQUIRES_RECONCILIATION/);
+  artifact.digest = 'sha256:' + 'a'.repeat(64);
+  await assert.rejects(evidencePlan(api, q(), standingPolicy), /MEMBER_CONTINUATION_ARTIFACT_CHANGED/);
+});
+
 test('schema readback must be fresh, operator-authenticated, exact-source and schema 54', async () => {
   for (const change of [f => f.state.comments = [], f => f.state.comments[0].user = pin.reviewer,
     f => f.state.comments[0].body = f.state.comments[0].body.replace('"migrationCount":54', '"migrationCount":55'),
@@ -170,6 +241,7 @@ function fixture() {
       if (path.endsWith('/deploys/dep-member')) {
         s.render.status = s.renderFail ? 'build_failed' : 'live'; return s.render;
       }
+      if (path.endsWith('/deploys/' + memberContinuation.renderDeployId)) return s.render;
       assert.equal(path, `/services/${targets.render.id}`); return service;
     },
     vercel: async (path, body) => {
@@ -225,6 +297,42 @@ test('member release deploys only pinned receiver then pinned frontend; never cl
     const changed = structuredClone(rows); mutate(changed);
     assert.throws(() => validateMemberReceipt(changed, descriptor, targets));
   }
+});
+
+function resumedFixture() {
+  const f = fixture(); f.options.evidencePlan.memberContinuation = continuationProof();
+  f.s.render = { id: memberContinuation.renderDeployId, status: 'live', commit: { id: pin.receiverSha } };
+  return f;
+}
+
+test('reconciled receiver issues only the accepted Vercel request and never redeploys Render', async () => {
+  const f = resumedFixture(); await f.execute();
+  assert.deepEqual(f.s.posts.map(x => x.provider), ['vercel']);
+  assert.equal(f.s.posts[0].body.meta.aquaSourceSha, pin.frontendSha);
+  assert.ok(f.s.audit.some(x => x.phase === 'member-render-reconciled'));
+  assert.ok(!f.s.audit.some(x => x.phase === 'member-render-requesting'));
+  const rows = f.s.audit.map(x => ({ ...x, ...q() }));
+  assert.equal(validateMemberReceipt(rows, { runId: q().releaseRunId, runAttempt: 1, sha: q().executorSha }, targets).renderDeployId,
+    memberContinuation.renderDeployId);
+});
+
+test('continuation refuses foreign deployment, wrong source, disabled fence or failed readiness without provider mutation', async () => {
+  for (const mutate of [f => f.s.render.id = 'dep-foreign', f => f.s.render.commit.id = 'a'.repeat(40),
+    f => f.s.badHealth = true, f => f.s.vars.App__YocoCutover__Enabled = 'false',
+    f => f.options.evidencePlan.memberContinuation.artifactId = '1']) {
+    const f = resumedFixture(); mutate(f); await assert.rejects(f.execute());
+    assert.equal(f.s.posts.length, 0); assert.equal(f.s.uploads, 0);
+  }
+});
+
+test('failed readiness after reconciliation records every actual/expected field before stopping frontend upload', async () => {
+  const f = resumedFixture(), health = f.api.health; let calls = 0;
+  f.api.health = async () => { const r = await health(); if (++calls > 1) r.body.buildId = 'a'.repeat(40); return r; };
+  await assert.rejects(f.execute(), /API_REVISION_OR_RECOVERY_READINESS_FAILED/);
+  const diagnostic = f.s.audit.find(x => x.phase === 'member-readiness');
+  assert.deepEqual(diagnostic.failedFields, ['buildId']); assert.equal(diagnostic.actual.buildId, 'a'.repeat(40));
+  assert.equal(diagnostic.expected.buildId, pin.receiverSha); assert.equal(Object.keys(diagnostic.actual).length, 8);
+  assert.equal(f.s.posts.length, 0); assert.equal(f.s.uploads, 0);
 });
 
 for (const [label, mutate] of [

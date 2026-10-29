@@ -8,8 +8,8 @@ import { AttestationDenied, verifyPrototypeAttestation } from './authorization-a
 import { approvedBypassReadback, approvedReadbacks, GovernanceReadbackDenied } from './governance-readback.mjs';
 import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody, validateFileDeployment } from './vercel-source.mjs';
 import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validateReadiness } from './runtime-readiness.mjs';
-import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied,
-  validateMemberIdentity, verifyMemberSource, verifyMemberAuthority, validateMemberReceipt, deployMemberRelease } from './member-release.mjs';
+import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied, memberContinuation,
+  validateMemberContinuation, validateMemberIdentity, verifyMemberSource, verifyMemberAuthority, validateMemberReceipt, deployMemberRelease } from './member-release.mjs';
 import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateMigrationDelta,
   SchemaFirstDenied } from './commission-schema-first.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
@@ -710,12 +710,22 @@ export async function evidencePlan(api, candidate, policy) {
       ciRunId: proof.origin.ciRunId, ciRunAttempt: proof.origin.ciRunAttempt,
       receiptSha256: sha256(Buffer.from(JSON.stringify(rows))) });
   }
+  let continuation;
   for (const run of runs.filter(r => r.id !== current.id &&
     r.run_number > (latestObserved?.run_number ?? 0))) {
     // A failed prior run may have submitted a request whose history is not visible
     // yet. Only a positively unexecuted provider step is safe to supersede.
     for (let attempt = 1; attempt <= run.run_attempt; attempt++) {
       const production = await releaseProductionJob(api, run, attempt);
+      if (candidate.memberRelease !== undefined && String(run.id) === memberContinuation.runId) {
+        requireThat(run.run_attempt === 1 && attempt === 1 && run.conclusion === 'failure' &&
+          production.conclusion === 'failure', 'MEMBER_CONTINUATION_RUN_CHANGED');
+        const descriptor = await auditArtifact(api, run, attempt);
+        const metadata = await releaseApi(api)(`/actions/artifacts/${descriptor.artifactId}`);
+        requireThat(metadata.digest === memberContinuation.artifactDigest, 'MEMBER_CONTINUATION_ARTIFACT_CHANGED');
+        continuation = validateMemberContinuation(await readReleaseAudit(api, descriptor), descriptor);
+        continue;
+      }
       const deployStep = production?.name === 'Authorized recovery release' ?
         'Revalidate authority, providers, source and recovery before deployment' :
         'Revalidate policy, provenance, providers and recovery before automatic deployment';
@@ -735,7 +745,9 @@ export async function evidencePlan(api, candidate, policy) {
   }
   requireThat(candidate.memberRelease === undefined || memberReleases.length === 0,
     'MEMBER_RELEASE_ALREADY_DEPLOYED');
+  requireThat(candidate.memberRelease === undefined || continuation, 'MEMBER_CONTINUATION_EVIDENCE_REQUIRED');
   return { policySha256: candidate.policySha256, verifiedReleases,
+    ...(continuation ? { memberContinuation: continuation } : {}),
     ...(memberReleases.length ? { memberReleases } : {}),
     firstReleaseRecoveryEvidenceSha256: latest ? null : policy.firstReleaseRecovery.evidenceSha256,
     baseline: latest ? await auditArtifact(api, latest, latest.run_attempt) : null,
