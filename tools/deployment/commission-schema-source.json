@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceSha": "1421ef639849265d1d6e23292417ab8107d5add4",
+  "sourceSha": "fc955e8aaa466bc836c31e341d12afa3f68ee19c",
   "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
   "migrationFiles": [
     {
@@ -44,11 +44,11 @@
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Core/Domain/AQGreen/AQGreenCleanStartEvidence.cs",
-      "sha256": "b61506827ec05d0f7c941d9f07eaad69c852cb52883b5e5e70cbf62cc8eb99aa"
+      "sha256": "03744c30fb69c4b6db56df1d89a5ec010dd3e55f1615967e9604c7e922773159"
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Core/Domain/AQGreen/AQGreenD10Commissioning.cs",
-      "sha256": "3c208fe4ebb5d165075bbab0046facbe1c84b698ef050f61c137849d89123ca7"
+      "sha256": "9357589085e0f6749b8de32d7483a4e8af525272e6cb592319b8984b54c86502"
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Core/Domain/AQGreen/IAQGreenReconciliationEvidenceSnapshot.cs",
@@ -76,7 +76,7 @@
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/reset.sql",
-      "sha256": "51d93f6b07165bb0ed547cf1d2985b3ec83b61cf1dd278a0abecb577c8d34bf1"
+      "sha256": "f7f82dc9497ac1519b7d6b69785af12682526b9e2a500a949ba273d1b446a2cd"
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/restore.sql",
@@ -84,7 +84,7 @@
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/state.sql",
-      "sha256": "f3cd2d6b9248bbb1bf098cc721b98b5a025f0c9f015c97316b1886f80e27f138"
+      "sha256": "16d580d6782096bc9be9be3a862f57bd304a18eb75578338cb2d7ad4abd630f0"
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/ApplicationRecoveryMiddleware.cs",
@@ -96,7 +96,7 @@
     },
     {
       "path": "tools/operations/aqgreen-clean-start-preflight.mjs",
-      "sha256": "3429dafeb5b9c09b253a0db86889feae0942b1046ad2dd4a0482e58928fd2e59"
+      "sha256": "abfdf2f08b596575c625f7599050d009135f37086c7a69323a980af74c9bb45e"
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/Admin/Commissions/WeeklyCommissionCalculator.cs",
