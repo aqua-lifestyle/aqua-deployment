@@ -1,0 +1,19 @@
+{
+  "contract": "aqua.held-frontend-qualified-source-evidence",
+  "version": 1,
+  "evidenceScope": "Sanitized binding of the existing authenticated read-only qualification record; not a new source observation or a full-release predecessor receipt.",
+  "protectedQualificationRecordSha256": "c6fdea58908a56f19a70842fa823a31f7c53b202d81af10b6617690ef0929190",
+  "observedAt": "2026-10-29T14:43:45.961Z",
+  "qualificationResult": "PASS",
+  "verifierSha": "2d0c9fff1296fcdf3bb530f0c5efc009a0570f98",
+  "producingExecutorSha": "156d691e03ada60351d3cb90da2cd8ce9d27b2a3",
+  "originalAuditArtifactId": "12901649081",
+  "originalAuditArchiveSha256": "771a509135c2d03f69e357a1fe97988d424c96065ef5fd71455a38ccc248cb97",
+  "renderReceiverSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+  "deploymentId": "dpl_7PcajvRJGKp2AzuJGaLPLHy2bqUD",
+  "sourceSha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+  "sourceProofSha256": "e250d98a3f31ff86054cf0caa8b8ecdf3e02cb94de1b21e9fd8f119af038b304",
+  "sourceProvenance": "Original GitHub-authenticated upload/create audit and separate accepted compiled-public-input observation. Provider metadata echoes alone are not source proof.",
+  "currentDeploymentAndAliasMustBeVerifiedSeparately": true,
+  "fullReleaseSchemaOrFinancialAdmissionImplied": false
+}

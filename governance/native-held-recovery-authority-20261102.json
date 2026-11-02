@@ -1,0 +1,39 @@
+{
+  "contract": "aqua.native-held-first-release-recovery-authority",
+  "version": 1,
+  "recordedOn": "2026-11-02",
+  "businessDecisionStatus": "CONFIRMED",
+  "authorityOrigin": "Explicit owner authorization in the current authenticated conversation: AQGreen V2 — Owner Authorization: Bounded Native Recovery Admission Amendment.",
+  "decision": {
+    "minimumVersionedNativeRecoveryAdmissionAmendmentAuthorized": true,
+    "actualVerifiedHeldProviderBaselineRequired": true,
+    "sourceAndMigrationComparisonBaselinesMustRemainUnchanged": true,
+    "nativeHealthGatedDeploymentAndFailedDeploymentRetentionArePrimary": true,
+    "controlledExactSourceHeldReceiverRecoveryAuthorizedAsMechanism": true,
+    "cachedArtifactAvailabilityOrEligibilityMayNotBeAssumed": true,
+    "cachedRollbackRequiresVerifiedEligibilitySettingsCompatibilityAndAuthority": true,
+    "freshFixedTargetReadOnlyVercelVerificationAuthorized": true,
+    "existingProtectedCredentialContextRequired": true
+  },
+  "scope": {
+    "candidateSha": "a4755801ce89868d7791422f3c983363ab76bf30",
+    "nativeDatabaseIdentitySha256": "be9ac8fd3ee1b9dd4389633358971f97a1dac2bf35370ed2e87b5cc814a8e324",
+    "tenantId": 1,
+    "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
+    "sourceComparisonBaselineSha": "1251fb82979e18be53d1d0e7f5c6fab2d0c50a58",
+    "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+    "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY"
+  },
+  "preservedControls": [
+    "Migration55, invalidations, financial history and receive-only/worker/payout/financial holds",
+    "Render-first, exact revisions, protected readiness and member-experience verification",
+    "Stop/reconciliation, replay, CI/security and deployment identity controls",
+    "Normal protected PR/review/CI and merged-main admission validation"
+  ],
+  "genericWaiversUnboundedFallbacksAndCandidateRecoverySelectionAuthorized": false,
+  "deploymentsRollbacksRecoveryRehearsalsOrDatabaseChangesAuthorized": false,
+  "providerSettingOrCredentialChangesAuthorized": false,
+  "commissioningNormalWorkersPayoutsOrFinancialActivationAuthorized": false,
+  "stopAfterAdmissionValidation": true
+}

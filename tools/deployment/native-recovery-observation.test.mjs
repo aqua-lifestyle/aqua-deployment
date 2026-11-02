@@ -1,0 +1,88 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { observeNativeRecoveryBaseline } from './verify-provider-credentials.mjs';
+import { memberRuntimeSettings } from './member-release.mjs';
+import { targets } from './release-control.mjs';
+const pins = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
+const p = pins.heldPair, sha = 'a'.repeat(40), canary = 'private-response-and-secret';
+function fixture() {
+  const env = { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: targets.executor.repository,
+    GITHUB_REPOSITORY_ID: '1423239668', GITHUB_REF: 'refs/heads/main', GITHUB_REF_PROTECTED: 'true', GITHUB_SHA: sha,
+    GITHUB_WORKFLOW_SHA: sha, GITHUB_WORKFLOW_REF: `${targets.executor.repository}/.github/workflows/provider-credential-check.yml@refs/heads/main`,
+    GITHUB_ACTOR: 'Xolani-M', GITHUB_ACTOR_ID: '86495928', GITHUB_TRIGGERING_ACTOR: 'Xolani-M',
+    GITHUB_RUN_ID: '900', GITHUB_RUN_ATTEMPT: '1', RENDER_API_KEY: 'render-' + canary, VERCEL_TOKEN: 'vercel-' + canary };
+  const bodies = new Map(), render = path => 'https://api.render.com/v1' + path,
+    vercel = path => 'https://api.vercel.com' + path + (path.includes('?') ? '&' : '?') + `teamId=${p.vercelTeamId}`;
+  bodies.set(render(`/services/${p.renderServiceId}`), { id: p.renderServiceId, name: targets.render.name, type: 'web_service',
+    repo: 'https://github.com/' + targets.repository, branch: 'main', suspended: 'not_suspended', autoDeploy: 'no', autoDeployTrigger: 'off', rootDir: '',
+    serviceDetails: { runtime: 'docker', plan: 'starter', numInstances: 1, maintenanceMode: { enabled: false }, healthCheckPath: '/api/health',
+      envSpecificDetails: { dockerContext: '.', dockerfilePath: './docker/api/Dockerfile', preDeployCommand: '', dockerCommand: '' } }, secret: canary });
+  for (const [key, values] of Object.entries(memberRuntimeSettings)) bodies.set(render(`/services/${p.renderServiceId}/env-vars/${key}`), { key, value: values[0] });
+  bodies.set(render(`/disks?serviceId=${p.renderServiceId}&limit=100`), []);
+  bodies.set(render(`/services/${p.renderServiceId}/deploys?limit=1`), [{ deploy: { id: p.renderDeployId, status: 'live', commit: { id: p.renderSha } } }]);
+  bodies.set(render(`/services/${p.renderServiceId}/deploys/${p.renderDeployId}`), { id: p.renderDeployId, status: 'live', commit: { id: p.renderSha } });
+  bodies.set(vercel(`/v9/projects/${p.vercelProjectId}`), { id: p.vercelProjectId, accountId: p.vercelTeamId, rootDirectory: p.rootDirectory,
+    targets: { production: { id: p.vercelDeployId } } });
+  bodies.set(vercel(`/v13/deployments/${p.vercelDeployId}`), { id: p.vercelDeployId, projectId: p.vercelProjectId, target: 'production', readyState: 'READY', meta: { secret: canary } });
+  bodies.set(vercel(`/v2/deployments/${p.vercelDeployId}/aliases`), { aliases: [{ alias: p.productionDomain, projectId: p.vercelProjectId }] });
+  bodies.set(vercel(`/v9/projects/${p.vercelProjectId}/domains/${p.productionDomain}`), { name: p.productionDomain, projectId: p.vercelProjectId, verified: true });
+  bodies.set(targets.render.healthUrl, { result: { status: 'Healthy', buildId: p.renderSha, environment: 'Production', databaseStatus: 'Healthy' } });
+  const calls = [], output = [];
+  const fetcher = async (url, options) => {
+    calls.push(url); assert(bodies.has(url)); assert.equal(options.method ?? 'GET', 'GET');
+    assert.equal(options.body, undefined); assert.equal(options.redirect, 'error');
+    assert.equal(options.headers?.Authorization, url === targets.render.healthUrl ? undefined :
+      'Bearer ' + (url.startsWith('https://api.render.com') ? env.RENDER_API_KEY : env.VERCEL_TOKEN));
+    return Response.json(bodies.get(url), { headers: url === targets.render.healthUrl ? { 'x-aqua-yoco-receiver': 'Schema54' } : {} });
+  };
+  return { env, bodies, calls, output, render, vercel, fetcher,
+    run: custom => observeNativeRecoveryBaseline(env, { checkoutSha: sha, fetcher: custom ?? fetcher, emit: x => output.push(x) }) };
+}
+test('protected native recovery observation verifies the exact current pair with GET-only reads and explicit source provenance', async () => {
+  const f = fixture(); assert.equal(await f.run(), true);
+  const r = f.output.at(-1); assert.equal(r.status, 'VERIFIED');
+  assert.equal(r.baseline.renderSha, p.renderSha); assert.equal(r.baseline.vercelDeployId, p.vercelDeployId);
+  assert.equal(r.frontendSource.provenance, 'EXISTING_AUTHENTICATED_MEMBER_QUALIFICATION');
+  assert.equal(r.applicability.cachedArtifactEligibility, 'NOT_VERIFIED');
+  assert.equal(r.applicability.recoveryRehearsalPerformed, false);
+  assert(!JSON.stringify(f.output).includes(canary));
+});
+test('native observation rejects untrusted context, missing run provenance and credentials before any request', async () => {
+  const bad = fixture(); bad.env.GITHUB_REF = 'refs/heads/feature'; await assert.rejects(bad.run()); assert.equal(bad.calls.length, 0);
+  for (const key of ['GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'RENDER_API_KEY', 'VERCEL_TOKEN']) {
+    const f = fixture(); delete f.env[key]; assert.equal(await f.run(), false); assert.equal(f.calls.length, 0);
+  }
+});
+test('native observation denies source, target, health, disk, domain and operational-hold drift without substituting expected values', async () => {
+  const edits = [
+    f => f.bodies.get(f.render(`/services/${p.renderServiceId}`)).serviceDetails.plan = 'another-plan',
+    f => f.bodies.get(f.render(`/services/${p.renderServiceId}/deploys?limit=1`))[0].deploy.status = 'update_in_progress',
+    f => f.bodies.get(f.render(`/services/${p.renderServiceId}/deploys/${p.renderDeployId}`)).commit.id = 'b'.repeat(40),
+    f => f.bodies.set(f.render(`/disks?serviceId=${p.renderServiceId}&limit=100`), [{ disk: { serviceId: p.renderServiceId } }]),
+    f => f.bodies.get(f.vercel(`/v9/projects/${p.vercelProjectId}`)).targets.production.id = 'dpl_Other',
+    f => f.bodies.get(f.vercel(`/v13/deployments/${p.vercelDeployId}`)).readyState = 'ERROR',
+    f => f.bodies.get(f.vercel(`/v2/deployments/${p.vercelDeployId}/aliases`)).aliases = [],
+    f => f.bodies.get(f.vercel(`/v9/projects/${p.vercelProjectId}/domains/${p.productionDomain}`)).verified = false,
+    f => f.bodies.get(targets.render.healthUrl).result.buildId = 'c'.repeat(40),
+    f => f.bodies.get(f.render(`/services/${p.renderServiceId}/env-vars/App__AutomaticPayouts__Enabled`)).value = 'true'
+  ];
+  for (const edit of edits) { const f = fixture(); edit(f); assert.equal(await f.run(), false); assert.equal(f.output.at(-1).status, 'UNVERIFIED'); }
+});
+test('native observation fails closed on permission, redirect, malformed and secret-bearing responses with no retry', async () => {
+  for (const status of [401, 403, 404, 429, 500, 302]) {
+    const f = fixture(); assert.equal(await f.run(async url => { f.calls.push(url); return new Response(canary, { status }); }), false);
+    assert.equal(f.calls.length, 1); assert(!JSON.stringify(f.output).includes(canary));
+  }
+  const f = fixture(); assert.equal(await f.run(async () => Response.json(null)), false);
+  assert.equal(f.output.at(-1).status, 'UNVERIFIED');
+});
+test('native observation rechecks aliases/project and refuses drift during its bounded observation', async () => {
+  const f = fixture(); let n = 0;
+  assert.equal(await f.run(async (url, options) => {
+    if (url === f.vercel(`/v9/projects/${p.vercelProjectId}`) && ++n === 2)
+      return Response.json({ id: p.vercelProjectId, accountId: p.vercelTeamId, rootDirectory: p.rootDirectory, targets: { production: { id: 'dpl_Drift' } } });
+    return f.fetcher(url, options);
+  }), false);
+  assert.equal(f.output.at(-1).status, 'UNVERIFIED');
+});
