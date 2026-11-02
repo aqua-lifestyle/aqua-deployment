@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceSha": "fc955e8aaa466bc836c31e341d12afa3f68ee19c",
+  "sourceSha": "a4755801ce89868d7791422f3c983363ab76bf30",
   "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
   "migrationFiles": [
     {
@@ -68,11 +68,11 @@
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/preflight-checks.sql",
-      "sha256": "1d8845c76fa87843f48fc2e648a57333c94d2417fc018c4b499ff28d25e91651"
+      "sha256": "9566152651d21ff934fa9e335a8483dcf4f13310509bff3050b4b24154db3c67"
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/preflight.sql",
-      "sha256": "b0b495e30d0f3b910980f6d212b75b57de725c35f56c253ff973f681382264dd"
+      "sha256": "3490551fda6c0c7ad08e3ef7924813879737306163230199b4a4deda049bf723"
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.EntityFrameworkCore/Operations/CleanStart/reset.sql",
@@ -96,7 +96,7 @@
     },
     {
       "path": "tools/operations/aqgreen-clean-start-preflight.mjs",
-      "sha256": "abfdf2f08b596575c625f7599050d009135f37086c7a69323a980af74c9bb45e"
+      "sha256": "c3e3375c44f5de6cdadc0553ba7fa50e4be478e51fd0ebc96a817091ca4a4e09"
     },
     {
       "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/Admin/Commissions/WeeklyCommissionCalculator.cs",

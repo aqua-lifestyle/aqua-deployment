@@ -1,6 +1,100 @@
 {
   "contract": "aqua.commission-schema-first-readback",
-  "version": 2,
+  "version": 3,
   "status": "UNVERIFIED",
-  "observation": null
+  "observation": {
+    "candidateSha": "a4755801ce89868d7791422f3c983363ab76bf30",
+    "observedAt": "2026-11-02T09:17:58.363Z",
+    "observer": {
+      "login": "Xolani-M",
+      "id": 86495928
+    },
+    "databaseIdentitySha256": "be9ac8fd3ee1b9dd4389633358971f97a1dac2bf35370ed2e87b5cc814a8e324",
+    "tenantId": 1,
+    "cleanStart": {
+      "mode": "CLEAN_START",
+      "status": "RESET_ACCEPTED",
+      "databaseIdentitySha256": "be9ac8fd3ee1b9dd4389633358971f97a1dac2bf35370ed2e87b5cc814a8e324",
+      "tenantId": 1,
+      "migrationCount": 54,
+      "schemaDigest": null,
+      "classificationDigest": "82b79530ec55b112b4c3bbdf7b321cd4365185b8114f19cab5180ab8e3b41faf",
+      "preflightDigest": "c3ac3714c19cae7b55d1abe33dc75e3f7a99d442ac616684263926757d5068f2",
+      "resetSqlDigest": "f7f82dc9497ac1519b7d6b69785af12682526b9e2a500a949ba273d1b446a2cd",
+      "resetReceiptDigest": "b4af569fc61ecfc7470cd05537167d112c415cbbbc0f5d1e0fade2c0e5e09258",
+      "ownerAuthorizationDigest": "e5c36880959df7c681fbc43490c772667563999bcdd5e62476fd2e5ca8ccc7db",
+      "independentAcceptanceDigest": "4176740775e5597709f274585ccb64fb008a55831a4f4187263854317e989d0d",
+      "independenceRecordDigest": "bff2f55d41ca6a25e6e1249945e4f05115fbee831aaf2d39f67488eb32a66e95",
+      "resetAt": "2026-11-02T08:00:28.601638Z",
+      "acceptedAt": "2026-11-02T08:46:17.574Z",
+      "evidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/5482e89efd96c0070cfbda02d62e1eb972c741de/governance/aqgreen-clean-start-actual-20261102.json",
+      "operator": {
+        "login": "Xolani-M",
+        "id": 86495928
+      },
+      "reviewer": {
+        "login": "aqualifestyleclub",
+        "id": 307076734
+      },
+      "independenceVerified": true,
+      "protectedRecordsPreserved": true,
+      "unclassifiedCount": 0,
+      "activeHistoricalCount": 0,
+      "automaticPayoutsDisabled": true,
+      "recoveryEvidenceDigest": "56da9bf0b1bfc06bfee15ec09f2a961312bbe7f9856f5179d34514bdc47596ae",
+      "noAdditionalChargeConfirmed": true,
+      "paymentAdmissionMode": "OWNER_ATTESTED_TEST_ONLY_V1",
+      "ownerTestOnlyAttestationDigest": "3d28d11560c2916f7ada759dc47a4b711f6afc29fa2bf709c609a607b72dbc68",
+      "ownerAttestsNoGenuineMemberships": true,
+      "providerModeVerification": "NOT_INDEPENDENTLY_VERIFIED",
+      "paymentEvidenceConserved": true,
+      "paymentEvidenceDigest": "6b1202b53abff829b68e5c46fee44047966ff37605e35d6388159d56046ce072",
+      "resetPaymentEvidenceDigest": "6b1202b53abff829b68e5c46fee44047966ff37605e35d6388159d56046ce072",
+      "tenantFinancialRecordsDigest": "bd726ff4d02cfb57b2cd398796575dcd1e0dca02ab9d1d16ff4613831f7614fe",
+      "resetTenantFinancialRecordsDigest": "bd726ff4d02cfb57b2cd398796575dcd1e0dca02ab9d1d16ff4613831f7614fe",
+      "auditHistoryPreserved": true,
+      "historicalCommissionInputsHeld": true
+    },
+    "authorization": {
+      "status": "AUTHORIZED",
+      "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
+      "sourceSha": "a4755801ce89868d7791422f3c983363ab76bf30",
+      "migrationSha256": "09b319ef4c6ce530fc0ac152b27d6a0595605f300620b02e31ede149f23f5441",
+      "authorizedBy": {
+        "login": "Xolani-M",
+        "id": 86495928
+      },
+      "authorizedAt": "2026-11-02T09:17:42.519Z",
+      "evidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/5482e89efd96c0070cfbda02d62e1eb972c741de/governance/aqgreen-clean-start-actual-20261102.json"
+    },
+    "application": {
+      "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
+      "appliedAt": "2026-11-02T09:17:56.41924Z",
+      "beforeCount": 54,
+      "afterCount": 55,
+      "beforeSchemaDigest": null,
+      "beforeHistoryDigest": "64884df1307d040e0ba9cf863e3227a5b507dad364bc78624c58a877b5bf6fa9",
+      "afterHistoryDigest": "94858012ef8a3c97ac167403284ac17a7d56d29da1bd12913aa998cdf639ef9c",
+      "existingHistoryUnchanged": true,
+      "appendOnlyGuardsVerified": true,
+      "evidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/5482e89efd96c0070cfbda02d62e1eb972c741de/governance/aqgreen-clean-start-actual-20261102.json"
+    },
+    "controls": {
+      "financialOperationsHeld": true,
+      "v2CommissioningHeld": true,
+      "workersHeld": true,
+      "startupMigrationsDisabled": true,
+      "evidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/5482e89efd96c0070cfbda02d62e1eb972c741de/governance/aqgreen-clean-start-actual-20261102.json"
+    },
+    "recovery": {
+      "mode": "forward-only-hold-aware",
+      "sourceSha": "a4755801ce89868d7791422f3c983363ab76bf30",
+      "sourceAvailable": true,
+      "schemaPreserved": true,
+      "invalidationsPreserved": true,
+      "payoutGuardsPreserved": true,
+      "legacyFinancialRollbackAllowed": false,
+      "evidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/5482e89efd96c0070cfbda02d62e1eb972c741de/governance/aqgreen-clean-start-actual-20261102.json"
+    }
+  }
 }
