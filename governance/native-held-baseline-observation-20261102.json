@@ -1,0 +1,75 @@
+{
+  "contract": "aqua.native-held-recovery-verified-observation",
+  "version": 1,
+  "observedAt": "2026-11-02T14:08:02.802Z",
+  "protectedObservationSha256": "ef52ec12406bd1c13affe191a236a86035df7ef6cdab9382dace332edcf3e3b5",
+  "producer": {
+    "runId": "41458997824",
+    "runAttempt": 1,
+    "executorSha": "b24661e01dfabdd417222a8f98293dd8b3afdd3c",
+    "actor": "Xolani-M",
+    "actorId": 86495928,
+    "workflow": "provider-credential-check.yml",
+    "mode": "native-recovery-readback",
+    "reference": "https://github.com/aqua-lifestyle/aqua-deployment/actions/runs/41458997824",
+    "logSha256": "a570f73286c29be3677e112862c1c1aa363cf14b90ae56acf534e1921c5be176",
+    "result": "success"
+  },
+  "baseline": {
+    "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+    "renderDeployId": "dep-dbhh7l8m7kps73etljfg",
+    "renderSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+    "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "vercelDeployId": "dpl_7PcajvRJGKp2AzuJGaLPLHy2bqUD",
+    "vercelSha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+    "productionDomain": "www.aqualifestyleclub.co.za",
+    "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend"
+  },
+  "verification": {
+    "allAuthenticatedGetChecksSucceeded": true,
+    "readStatusSha256": "3c4dd9ff6d12ded1733d1edcaaac49bce35a26d9e0951674c2b85fb58bdab7a5",
+    "exactRenderRevisionLiveAndHealthy": true,
+    "exactVercelDeploymentReady": true,
+    "projectTeamRootAndAuthoritativeDomainMappingVerifiedBeforeAndAfter": true,
+    "operationalHoldsVerified": true,
+    "serviceType": "web_service",
+    "runtime": "docker",
+    "plan": "starter",
+    "instances": 1,
+    "attachedPersistentDisk": false,
+    "healthCheckPath": "/api/health",
+    "autoDeploy": "off",
+    "maintenance": false
+  },
+  "frontendSource": {
+    "provenance": "EXISTING_AUTHENTICATED_MEMBER_QUALIFICATION",
+    "sourceSha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+    "qualificationRecordSha256": "c6fdea58908a56f19a70842fa823a31f7c53b202d81af10b6617690ef0929190",
+    "sourceProofSha256": "e250d98a3f31ff86054cf0caa8b8ecdf3e02cb94de1b21e9fd8f119af038b304",
+    "explanation": "The same immutable deployment ID was authenticated as current. Source comes from its previously authenticated upload/create audit and accepted compiled-public-input qualification, not metadata echoes or a newly manufactured source observation."
+  },
+  "schemaCompatibility": {
+    "scope": "Held receiver only; no financial execution or Normal mode",
+    "acceptedSchemaEvidenceSha256": "96139eda2ad461037c60cae87803a795667dfe5434cd018103c44dc4ea61a9c5",
+    "actualMigration55VerificationSha256": "b63e6a933f322c16586687f62af29feab65d93162aec21e83734f198322e0ffd",
+    "sourceBasis": "The pinned compatibility receiver explicitly accepts the exact54 prefix plus55, enforces receive-only/automation/financial holds, and is already the live healthy receiver after the retained verified migration55.",
+    "heldReceiverSchema55Compatible": true,
+    "databaseRollbackAllowed": false,
+    "legacyFinancialRollbackAllowed": false
+  },
+  "nativeMechanism": {
+    "selected": "health-gated-exact-source-held-redeploy-v1",
+    "healthGatedDeploymentAndFailedDeploymentRetention": "DOCUMENTED_APPLICABLE_TO_VERIFIED_PROFILE",
+    "documentation": "https://render.com/docs/deploys#zero-downtime-deploys",
+    "cachedArtifactEligibility": "NOT_VERIFIED",
+    "cachedArtifactRollbackAuthorizedByThisRecord": false,
+    "cachedRollbackRequiresSeparateVerifiedEligibilitySettingsCompatibilityAndAuthority": true,
+    "exactSourceRedeploymentUsesCurrentConfiguration": true,
+    "sourceSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+    "sourceAvailable": true,
+    "recoveryDurationGuaranteed": false,
+    "recoveryRehearsalPerformed": false
+  },
+  "productionDeploymentRollbackOrDatabaseOperationPerformed": false
+}

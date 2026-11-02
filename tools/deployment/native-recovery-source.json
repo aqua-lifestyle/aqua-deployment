@@ -17,5 +17,12 @@
     "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend"
   },
   "frontendSourceEvidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/198b78f7cf72dc1ea34e8788ffe892a34479f221/governance/held-frontend-source-evidence-20261029.json",
-  "ownerAuthorityReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/198b78f7cf72dc1ea34e8788ffe892a34479f221/governance/native-held-recovery-authority-20261102.json"
+  "ownerAuthorityReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/198b78f7cf72dc1ea34e8788ffe892a34479f221/governance/native-held-recovery-authority-20261102.json",
+  "ownerAuthoritySha256": "3e9157c7603217066735203e94082c5adacce21e2b0db019695da9c284d0fef1",
+  "frontendSourceEvidenceSha256": "7195d016e7f881c37a1a25a7a9352aa485083e344061ad8beb4a873b7d960b7c",
+  "observationReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/fcf377d2e3c06f3cabdc4587e5f91b010c54f70a/governance/native-held-baseline-observation-20261102.json",
+  "observationSha256": "66f61838301ee86e8f2dd2fe11b545a40585d6ae0722d69c63193559b28152ec",
+  "policyScopeSha256": "77f06e7c08e0c3204791ab6243f10588a8c48578f868d16eff8faf0346c8b0e1",
+  "targetsSha256": "2b42711b138fa38cd28ee12e6bb4ee07f3802539fb9dc1e4340ab0c0043aed65",
+  "sourceRepositoryId": "1276688422"
 }

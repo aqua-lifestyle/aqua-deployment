@@ -17,6 +17,7 @@ function schemaFixture() {
   const f = fixture();
   f.state.policy = structuredClone(standingPolicy);
   f.state.policy.schemaFirst.kind = 'commission-invalidation-schema-first-v1';
+  f.state.policy.firstReleaseRecovery.kind = 'pinned-legacy-forward-remediation-v1';
   f.state.files = schemaSource.migrationFiles.map(p => ({filename:p.path,status:p.status}));
   for (const p of [...schemaSource.migrationFiles,...schemaSource.holdSources]) f.state.sourceDigests.set(p.path,p.sha256);
   f.state.schemaReadback = {contract:'aqua.commission-schema-first-readback',version:1,status:'VERIFIED',observation:{
