@@ -1,0 +1,83 @@
+{
+  "contract": "aqua.clean-start-actual-operator-evidence",
+  "version": 1,
+  "applicationSha": "a4755801ce89868d7791422f3c983363ab76bf30",
+  "applicationTree": "99b3201cd26c41e791bf8c8f19e52eaf40a78a11",
+  "observedAt": "2026-11-02T09:17:58.363Z",
+  "evidenceScope": "Sanitized existing operator records; no new database observation, provider operation or deployment.",
+  "protectedReleasePacketDigest": "d45d01cc7c549f697a36dc43a4099ef1e78d1f56821d8120e3504ae23081847f",
+  "retirement": {
+    "actualConservationDigest": "752a1b4e90c0ffbdf6ae8b6f1a0487fad50e81f8ee8802968d81875fd26ff81c",
+    "resetAt": "2026-11-02T08:00:28.601638Z",
+    "resetSqlDigest": "f7f82dc9497ac1519b7d6b69785af12682526b9e2a500a949ba273d1b446a2cd",
+    "nativeReceiptDigest": "b4af569fc61ecfc7470cd05537167d112c415cbbbc0f5d1e0fade2c0e5e09258",
+    "ownerAuthorizationDigest": "e5c36880959df7c681fbc43490c772667563999bcdd5e62476fd2e5ca8ccc7db",
+    "classificationDigest": "82b79530ec55b112b4c3bbdf7b321cd4365185b8114f19cab5180ab8e3b41faf",
+    "preflightDigest": "c3ac3714c19cae7b55d1abe33dc75e3f7a99d442ac616684263926757d5068f2",
+    "actualConservationChecksPassed": 22,
+    "unclassifiedUnretiredMemberships": 0,
+    "unretiredHistoricalParticipations": 0,
+    "zeroDerivation": "Successful original locked guards, all scoped participations archived and no remaining legacy AQGreen assignment. Historical source rows/statuses remain retained; this is not a genuine-payment or historical-status zero claim."
+  },
+  "conservationAcceptance": {
+    "recordDigest": "4176740775e5597709f274585ccb64fb008a55831a4f4187263854317e989d0d",
+    "acceptedAt": "2026-11-02T08:46:17.574Z",
+    "provenance": "Explicit current-conversation acceptance of the exact actual conservation digest, in response to the Aqua checkpoint; no GitHub review or separate account authentication is invented.",
+    "scopedReviewerReferenceDigest": "bff2f55d41ca6a25e6e1249945e4f05115fbee831aaf2d39f67488eb32a66e95",
+    "reviewerScope": "Existing owner-authorized/owner-attested engineering and preservation scope; not independently separated human or control-plane custody proof."
+  },
+  "migration": {
+    "actualResultDigest": "b63e6a933f322c16586687f62af29feab65d93162aec21e83734f198322e0ffd",
+    "authorizationDigest": "19c170614620b4ab109abd8df1d40aab57983c077bf2568b2ac20aa2865a7aa9",
+    "authorizedAt": "2026-11-02T09:17:42.519Z",
+    "appliedAt": "2026-11-02T09:17:56.41924Z",
+    "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
+    "reviewedSqlDigest": "1f45ef7b67fa6eae747ca70edfed05679ef63cf4cfe2f2cf308b9d31b8c1faea",
+    "migrationDefinitionDigest": "09b319ef4c6ce530fc0ac152b27d6a0595605f300620b02e31ede149f23f5441",
+    "beforeCount": 54,
+    "afterCount": 55,
+    "beforeHistoryDigest": "64884df1307d040e0ba9cf863e3227a5b507dad364bc78624c58a877b5bf6fa9",
+    "afterHistoryDigest": "94858012ef8a3c97ac167403284ac17a7d56d29da1bd12913aa998cdf639ef9c",
+    "historyDigestProvenance": "Original 54 digest verified in production; actual post-DDL checks established 55 entries, unchanged original 54 and the exact target once. The 55 digest is deterministically derived from those facts and the accepted migration inventory, not a new SQL observation.",
+    "existingHistoryUnchanged": true,
+    "appendOnlyGuardsVerified": true,
+    "actualVerificationChecksPassed": 21,
+    "sourceFinancialParticipationAndAuditFingerprintsConserved": true
+  },
+  "preservedPaymentEvidence": {
+    "paymentAdmissionMode": "OWNER_ATTESTED_TEST_ONLY_V1",
+    "ownerTestOnlyAttestationDigest": "3d28d11560c2916f7ada759dc47a4b711f6afc29fa2bf709c609a607b72dbc68",
+    "ownerAttestsNoGenuineMemberships": true,
+    "providerModeVerification": "NOT_INDEPENDENTLY_VERIFIED",
+    "paymentEvidenceDigest": "6b1202b53abff829b68e5c46fee44047966ff37605e35d6388159d56046ce072",
+    "tenantFinancialRecordsDigest": "bd726ff4d02cfb57b2cd398796575dcd1e0dca02ab9d1d16ff4613831f7614fe",
+    "paymentAndFinancialEvidenceConserved": true,
+    "auditHistoryPreserved": true,
+    "historicalCommissionInputsHeld": true
+  },
+  "controlsAndRecovery": {
+    "financialOperationsHeld": true,
+    "v2CommissioningHeld": true,
+    "workersAndPayoutsHeld": true,
+    "startupMigrationsDisabled": true,
+    "evidenceScope": "Recorded pre-execution operational holds and unchanged accepted receiver/startup source; no fresh runtime readback is claimed.",
+    "recoveryPlanDigest": "56da9bf0b1bfc06bfee15ec09f2a961312bbe7f9856f5179d34514bdc47596ae",
+    "recoveryAcceptanceDigest": "1e60679fef9d3a153355bd10e00660884ecf71491770d2685e8ed584b384c3e8",
+    "postMigrationRecoveryMode": "forward-only-hold-aware",
+    "legacyFinancialRollbackAllowed": false,
+    "costScopeRecordDigest": "b4b39bdc8d293cb5a36884d747744339103f623ae282bbde79eb1a5b5cbc35b9",
+    "noAdditionalChargeScope": "Verified unchanged fixed compute/storage and no selected backup/export/provider restore/new allocation. Ordinary outbound bandwidth remains UNKNOWN and is not asserted zero.",
+    "cleanupDigest": "e744dab01d10492acff23a7b7524cea06b0861b0d6b134368c206463cfd54b60",
+    "cleanupObservedAt": "2026-11-02T09:17:59.896Z",
+    "temporaryAccessRemovedOriginalAllowlistRestored": true,
+    "criticalProviderSettingsUnchanged": true
+  },
+  "unresolvedReadbackEvidence": {
+    "schemaDigest": null,
+    "beforeSchemaDigest": null,
+    "reason": "The inspected retained records do not contain the separately required pre-DDL schema fingerprint. Migration-history digests are separately identified and are not substituted for missing schema evidence.",
+    "readbackMustRemainUnverified": true
+  },
+  "deploymentExecuted": false,
+  "financialActivationExecuted": false
+}
