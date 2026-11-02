@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { objectDigest } from './github-evidence.mjs';
+import { objectDigest, sha256 } from './github-evidence.mjs';
+const nativeSource = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
+const fixedTargets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
+export const nativeRecoveryPolicyKind = 'held-native-first-release-recovery-v1';
 
 // Exact owner-authorized legacy pair. These are deployment identities, not an
 // assertion of frontend source provenance. Never accept pins from dispatch input.
@@ -20,20 +23,82 @@ const check = (ok, code) => { if (!ok) throw new FirstReleaseRecoveryDenied(code
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 
+function validateNativeRecovery(o, candidate, policy, schemaProof) {
+  const p = nativeSource, n = o.nativeRecovery;
+  check(exact(o, ['observedAt', 'expiresAt', 'observer', 'candidateSha', 'baseline', 'nativeRecovery', 'compatibility', 'recovery']) &&
+    candidate.sha === p.candidateSha && o.candidateSha === p.candidateSha && objectDigest(o.baseline) === objectDigest(p.heldPair) &&
+    objectDigest(policy.firstReleaseRecovery.baseline) === objectDigest(legacyRecoveryPair) &&
+    policy.firstReleaseRecovery.baseline.renderSha === p.sourceComparisonBaselineSha &&
+    objectDigest(policy.scope) === p.policyScopeSha256 && objectDigest(fixedTargets) === p.targetsSha256 &&
+    schemaProof?.initialSourceSha === p.candidateSha && schemaProof.evidenceSha256 === p.schemaEvidenceSha256 &&
+    schemaProof.schemaEvidenceKind === 'COMPLETED_ADDITIVE_MIGRATION55_V1', 'NATIVE_RECOVERY_EXACT_SCOPE_REQUIRED');
+  check(exact(n, ['mode', 'receiverSourceSha', 'sourceAvailable', 'usesCurrentConfiguration', 'cachedArtifactEligibility',
+    'cachedRollbackAuthorized', 'databaseRollbackAllowed', 'databaseIdentitySha256', 'tenantId',
+    'ownerAuthoritySha256', 'ownerAuthorityReference', 'observationSha256', 'observationReference',
+    'frontendSourceEvidenceSha256', 'frontendSourceEvidenceReference']) &&
+    n.mode === 'health-gated-exact-source-held-redeploy-v1' && n.receiverSourceSha === p.heldPair.renderSha &&
+    n.sourceAvailable === true && n.usesCurrentConfiguration === true && n.cachedArtifactEligibility === 'NOT_VERIFIED' &&
+    n.cachedRollbackAuthorized === false && n.databaseRollbackAllowed === false && n.databaseIdentitySha256 === p.databaseIdentitySha256 && n.tenantId === p.tenantId &&
+    ['ownerAuthoritySha256', 'ownerAuthorityReference', 'observationSha256', 'observationReference',
+      'frontendSourceEvidenceSha256', 'frontendSourceEvidenceReference'].every(k => n[k] === p[k]), 'NATIVE_RECOVERY_EVIDENCE_REQUIRED');
+  const records = [
+    ['native-held-recovery-authority-20261102.json', p.ownerAuthoritySha256],
+    ['native-held-baseline-observation-20261102.json', p.observationSha256],
+    ['held-frontend-source-evidence-20261029.json', p.frontendSourceEvidenceSha256]
+  ].map(([name, digest]) => { const bytes = readFileSync(new URL('../../governance/' + name, import.meta.url));
+    check(sha256(bytes) === digest, 'NATIVE_RECOVERY_RECORD_CHANGED'); return JSON.parse(bytes); });
+  const [authority, observed, frontend] = records, v = observed.verification, m = observed.nativeMechanism;
+  check(authority.businessDecisionStatus === 'CONFIRMED' && authority.decision.minimumVersionedNativeRecoveryAdmissionAmendmentAuthorized === true &&
+    authority.decision.actualVerifiedHeldProviderBaselineRequired === true && authority.decision.sourceAndMigrationComparisonBaselinesMustRemainUnchanged === true &&
+    authority.decision.cachedArtifactAvailabilityOrEligibilityMayNotBeAssumed === true &&
+    authority.scope.candidateSha === p.candidateSha && authority.scope.nativeDatabaseIdentitySha256 === p.databaseIdentitySha256 && authority.scope.tenantId === p.tenantId &&
+    observed.observedAt === o.observedAt && objectDigest(observed.baseline) === objectDigest(p.heldPair) &&
+    observed.producer.result === 'success' && observed.producer.actor === o.observer.login && observed.producer.actorId === o.observer.id &&
+    observed.producer.workflow === 'provider-credential-check.yml' && observed.producer.mode === 'native-recovery-readback' &&
+    v.allAuthenticatedGetChecksSucceeded === true && v.exactRenderRevisionLiveAndHealthy === true && v.exactVercelDeploymentReady === true &&
+    v.projectTeamRootAndAuthoritativeDomainMappingVerifiedBeforeAndAfter === true && v.operationalHoldsVerified === true &&
+    v.serviceType === 'web_service' && v.runtime === 'docker' && v.plan === 'starter' && v.instances === 1 &&
+    v.attachedPersistentDisk === false && v.healthCheckPath === '/api/health' && v.autoDeploy === 'off' && v.maintenance === false &&
+    m.selected === n.mode && m.sourceSha === n.receiverSourceSha && m.sourceAvailable === true &&
+    m.cachedArtifactEligibility === 'NOT_VERIFIED' && m.cachedArtifactRollbackAuthorizedByThisRecord === false &&
+    observed.schemaCompatibility.heldReceiverSchema55Compatible === true && observed.schemaCompatibility.databaseRollbackAllowed === false &&
+    observed.schemaCompatibility.acceptedSchemaEvidenceSha256 === schemaProof.evidenceSha256 &&
+    frontend.qualificationResult === 'PASS' && frontend.deploymentId === p.heldPair.vercelDeployId && frontend.sourceSha === p.heldPair.vercelSha &&
+    observed.frontendSource.qualificationRecordSha256 === frontend.protectedQualificationRecordSha256 &&
+    observed.frontendSource.sourceProofSha256 === frontend.sourceProofSha256, 'NATIVE_RECOVERY_VERIFIED_OBSERVATION_REQUIRED');
+  check(exact(o.compatibility, ['schemaAndData', 'configuration', 'evidenceReference']) &&
+    o.compatibility.schemaAndData === 'HELD_RECEIVER_SCHEMA55_ONLY' && o.compatibility.configuration === true && o.compatibility.evidenceReference === p.observationReference &&
+    exact(o.recovery, ['mode', 'sourceSha', 'schemaEvidenceSha256', 'legacyFinancialRollbackAllowed']) &&
+    o.recovery.mode === 'forward-only-hold-aware' && o.recovery.sourceSha === candidate.sha &&
+    o.recovery.schemaEvidenceSha256 === schemaProof.evidenceSha256 && o.recovery.legacyFinancialRollbackAllowed === false,
+  'NATIVE_RECOVERY_HOLD_PRESERVING_METHOD_REQUIRED');
+  return { kind: nativeRecoveryPolicyKind, frontendSourceProvenance: 'VERIFIED_MEMBER_SOURCE_AUDIT',
+    nativeRecoveryMode: n.mode, cachedArtifactEligibility: n.cachedArtifactEligibility,
+    cachedRollbackAuthorized: false, databaseRollbackAllowed: false, ...p.heldPair };
+}
+
+export function validNativeHeldFrontend(proof, web) {
+  const p = nativeSource.heldPair;
+  return proof?.kind === nativeRecoveryPolicyKind && proof.vercelDeployId === p.vercelDeployId && proof.vercelSha === p.vercelSha &&
+    web.id === p.vercelDeployId && web.projectId === p.vercelProjectId && (!web.gitSource ||
+      web.gitSource.sha === p.vercelSha && String(web.gitSource.repoId) === nativeSource.sourceRepositoryId);
+}
+
 // Same custody model as the existing administrator ruleset readback: original,
 // non-secret operator evidence is reviewed in a protected executor merge. This
 // is not independent provider attestation, a self-hash, or rollback execution.
 export function validateFirstReleaseRecovery(readback, candidate, policy, now = Date.now, schemaProof = null) {
+  const native = policy.firstReleaseRecovery?.kind === nativeRecoveryPolicyKind;
   check(readback && typeof readback === 'object' && !Array.isArray(readback),
     'FIRST_RELEASE_RECOVERY_EVIDENCE_REQUIRED');
   check(objectDigest(readback) === policy.firstReleaseRecovery.evidenceSha256,
     'FIRST_RELEASE_RECOVERY_EVIDENCE_CHANGED');
   check(exact(readback, ['contract', 'version', 'status', 'observation']) &&
-    readback.contract === 'aqua.first-release-recovery-readback' && readback.version === (schemaProof ? 2 : 1) &&
+    readback.contract === 'aqua.first-release-recovery-readback' && readback.version === (native ? 3 : schemaProof ? 2 : 1) &&
     readback.status === 'VERIFIED', 'FIRST_RELEASE_RECOVERY_EVIDENCE_REQUIRED');
   const o = readback.observation;
   check(exact(o, ['observedAt', 'expiresAt', 'observer', 'candidateSha', 'baseline',
-    'renderArtifact', 'vercelArtifact', 'compatibility', ...(schemaProof ? ['recovery'] : [])]), 'FIRST_RELEASE_RECOVERY_EVIDENCE_INVALID');
+    ...(native ? ['nativeRecovery'] : ['renderArtifact', 'vercelArtifact']), 'compatibility', ...(schemaProof ? ['recovery'] : [])]), 'FIRST_RELEASE_RECOVERY_EVIDENCE_INVALID');
   const time = now(), observed = Date.parse(o.observedAt), expiry = Date.parse(o.expiresAt);
   check(Number.isFinite(time) && Number.isFinite(observed) && Number.isFinite(expiry) &&
     observed <= time + 30_000 && observed >= time - policy.authorization.maxCiAgeSeconds * 1000 &&
@@ -41,6 +106,7 @@ export function validateFirstReleaseRecovery(readback, candidate, policy, now = 
     'FIRST_RELEASE_RECOVERY_EVIDENCE_EXPIRED');
   check(exact(o.observer, ['login', 'id']) && policy.authorization.administrators.some(
     a => a.login === o.observer.login && a.id === o.observer.id), 'FIRST_RELEASE_RECOVERY_OBSERVER_UNAPPROVED');
+  if (native) return { ...validateNativeRecovery(o, candidate, policy, schemaProof), evidenceSha256: objectDigest(readback) };
   check(o.candidateSha === candidate.sha && objectDigest(o.baseline) === objectDigest(legacyRecoveryPair),
     'FIRST_RELEASE_RECOVERY_IDENTITY_MISMATCH');
   // Fixed-origin, immutable supporting records, not arbitrary URLs to retrieve

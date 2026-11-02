@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { approvedRecoveryReadback, legacyRecoveryPair, validateFirstReleaseRecovery,
-  validateLegacyProviderPair, FirstReleaseRecoveryDenied } from './first-release-recovery.mjs';
+  validateLegacyProviderPair, FirstReleaseRecoveryDenied, nativeRecoveryPolicyKind, validNativeHeldFrontend } from './first-release-recovery.mjs';
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
 import { approvedBypassReadback, approvedReadbacks, GovernanceReadbackDenied } from './governance-readback.mjs';
 import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody, validateFileDeployment } from './vercel-source.mjs';
@@ -11,7 +11,7 @@ import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validat
 import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied, memberContinuation,
   validateMemberContinuation, validateMemberIdentity, verifyMemberSource, verifyMemberAuthority, validateMemberReceipt, deployMemberRelease } from './member-release.mjs';
 import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateMigrationDelta,
-  SchemaFirstDenied, isCleanStartSchemaKind } from './commission-schema-first.mjs';
+  SchemaFirstDenied, isCleanStartSchemaKind, completedMigration55PolicyKind } from './commission-schema-first.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   gitSourceDigest, verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission,
   readGitHubArtifact, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
@@ -82,7 +82,8 @@ export function policyDigest(policy) {
     owns(policy, ['version', 'epoch', 'profile', 'baseline', 'authorization', 'scope', 'firstReleaseRecovery',
       ...(schemaFirst ? ['schemaFirst'] : [])]) && (!schemaFirst || validSchemaPolicy(policy.schemaFirst)) &&
     owns(policy.firstReleaseRecovery, ['kind', 'baseline', 'evidenceSha256']) &&
-    policy.firstReleaseRecovery.kind === (schemaFirst ? 'pinned-legacy-forward-remediation-v1' : 'pinned-legacy-retained-artifact-v1') &&
+    (policy.firstReleaseRecovery.kind === (schemaFirst ? 'pinned-legacy-forward-remediation-v1' : 'pinned-legacy-retained-artifact-v1') ||
+      schemaFirst && policy.schemaFirst.kind === completedMigration55PolicyKind && policy.firstReleaseRecovery.kind === nativeRecoveryPolicyKind) &&
     objectDigest(policy.firstReleaseRecovery.baseline) === objectDigest(legacyRecoveryPair) &&
     /^[a-f0-9]{64}$/.test(policy.firstReleaseRecovery.evidenceSha256) &&
     owns(a, ['kind', 'approval', 'administrators', 'inventorySourceCommit', 'inventorySha256', 'maxCiAgeSeconds', 'maxAdmissionAgeSeconds']) &&
@@ -959,6 +960,11 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       baselineProof = { renderDeployId: live[0].id, renderSha: live[0].commit?.id,
         vercelDeployId: webId, vercelSha: web.gitSource?.sha,
         vercelSourceProvenance: web.gitSource?.sha ? 'GIT_SOURCE' : 'UNVERIFIED_LEGACY' };
+      if (firstRecovery.kind === nativeRecoveryPolicyKind) {
+        requireThat(validNativeHeldFrontend(firstRecovery, web), 'NATIVE_RECOVERY_FRONTEND_PROVENANCE_UNVERIFIED');
+        baselineProof.vercelSha = firstRecovery.vercelSha;
+        baselineProof.vercelSourceProvenance = firstRecovery.frontendSourceProvenance;
+      }
     }
     requireThat(baselineProof.renderDeployId === firstRecovery.renderDeployId &&
       baselineProof.renderSha === firstRecovery.renderSha && baselineProof.vercelDeployId === firstRecovery.vercelDeployId,
@@ -987,7 +993,8 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   if (firstRecovery) await checkRecoveryPair(baseline, oldWeb, project);
   requireThat(oldWeb.id === baselineProof.vercelDeployId && oldWeb.projectId === targets.vercel.id &&
     oldWeb.target === 'production' && oldWeb.readyState === 'READY' && !oldWeb.aliasError &&
-    (firstRecovery && baselineProof.vercelSourceProvenance === 'UNVERIFIED_LEGACY' ?
+    (firstRecovery?.kind === nativeRecoveryPolicyKind ? validNativeHeldFrontend(firstRecovery, oldWeb) :
+      firstRecovery && baselineProof.vercelSourceProvenance === 'UNVERIFIED_LEGACY' ?
       oldWeb.gitSource === undefined || oldWeb.gitSource === null : baselineProof.origin?.vercelSourceProof ? true :
       oldWeb.gitSource?.sha === baselineProof.vercelSha && String(oldWeb.gitSource?.repoId) === String(repository.id)),
     'ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED');

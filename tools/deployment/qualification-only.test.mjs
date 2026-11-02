@@ -117,6 +117,7 @@ test('qualification dispatch executes normal candidate/admission, retains a purp
     // contract. The bounded v4 policy correctly rejects any other source SHA.
     const genericPolicy = structuredClone(standingPolicy);
     genericPolicy.schemaFirst.kind = 'commission-invalidation-clean-start-v1';
+    genericPolicy.firstReleaseRecovery.kind = 'pinned-legacy-forward-remediation-v1';
     const dependencies = { api: f.api, readSourceDigest: f.readSourceDigest, now, policy: genericPolicy };
     await main(env, { ...dependencies, mode: 'candidate' });
     assert.match(readFileSync(env.GITHUB_OUTPUT, 'utf8'), /qualification_only=true\n/);

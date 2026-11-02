@@ -40,7 +40,7 @@
     }
   },
   "firstReleaseRecovery": {
-    "kind": "pinned-legacy-forward-remediation-v1",
+    "kind": "held-native-first-release-recovery-v1",
     "baseline": {
       "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
       "renderDeployId": "dep-db8av3dg1s2s739m6sgg",
@@ -51,7 +51,7 @@
       "productionDomain": "www.aqualifestyleclub.co.za",
       "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend"
     },
-    "evidenceSha256": "82af13bdbaafe6f0f1b08341df4ae0c60d06e9d251161070709d479770a44c70"
+    "evidenceSha256": "3e8684d215dfcf00bc63c6d5a2be31d469a5302fc9b628817190eb97784cd311"
   },
   "schemaFirst": {
     "kind": "commission-invalidation-clean-start-completed-m55-v1",

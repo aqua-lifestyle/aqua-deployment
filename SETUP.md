@@ -2,7 +2,10 @@ The owner-authorized completed-migration55 variant retains policy v7 and explici
 selects readback version4; see [the bounded evidence contract](docs/completed-migration55-admission.md).
 Only its pinned completed transition can use the alternative evidence. Historical
 fingerprints remain unavailable; existing versions retain their requirements.
-The separate first-release recovery readback remains UNVERIFIED and is not waived.
+The separately authorized native-held recovery readback uses version3; see
+[native-held-first-release-recovery.md](docs/native-held-first-release-recovery.md).
+It verifies the actual held pair without assuming cached rollback eligibility;
+source/migration baselines and unrelated release gates remain unchanged.
 No deployment is authorized by this contract amendment.
 
 The earlier commission-invalidation correction selects policy v7; see the
