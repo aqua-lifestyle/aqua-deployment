@@ -157,7 +157,7 @@ test('unverified or altered schema evidence denies before any provider read with
 });
 
 test('an UNVERIFIED operational schema record still blocks production',async()=>{
-  const f=schemaFixture();f.state.schemaReadback={...structuredClone(approvedSchemaReadback),status:'UNVERIFIED'};await f.refresh();
+  const f=schemaFixture();f.state.schemaReadback.status='UNVERIFIED';await f.refresh();
   await assert.rejects(f.executeSchema(),/SCHEMA_EVIDENCE_REQUIRED/);
   assert.equal(f.state.providerCalls,0);assert.equal(f.posts.length,0);
 });
