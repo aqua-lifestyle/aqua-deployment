@@ -43,7 +43,16 @@ and [recognition contract](prior-run-pre-mutation-recognition.md) describe scope
 - Final local full run: **219 tests, 218 passed, 0 failed, 1 skipped** on Node
   26.6.0. `git diff --check` passed. This is component/mock and local Git/ZIP
   evidence, not live provider or production evidence.
-- Hosted results and PR link: pending collection.
+- PR: [#22](https://github.com/aqua-lifestyle/aqua-deployment/pull/22).
+- Hosted [safety run 41508318964](https://github.com/aqua-lifestyle/aqua-deployment/actions/runs/41508318964)
+  at implementation commit `7068886b6e2f411a6af6aa5242e78a214e708daf`:
+  **219 passed, 0 failed, 0 skipped**, including the disposable PostgreSQL
+  concurrency case. Completed `2026-11-02T19:16:39Z` on Node 24.
+- This worklog follow-up changes documentation only. Current-head check status is
+  reported on the PR; the run above is exact-commit implementation evidence.
+- Status: **IMPLEMENTED**, **TESTED**. PR is open. Merge and live qualification-only
+  admission are pending a trusted-administrator merge decision. No corrected-main
+  admission or provider-side fix is claimed.
 
 ## Boundaries and handoff
 
