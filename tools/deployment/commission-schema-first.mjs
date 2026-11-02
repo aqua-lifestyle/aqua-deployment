@@ -1,11 +1,18 @@
 import { readFileSync } from 'node:fs';
-import { objectDigest } from './github-evidence.mjs';
+import { objectDigest, sha256 } from './github-evidence.mjs';
 
 // Executor-owned pins from the frozen, CI-qualified application. No candidate
 // manifest, dispatch input or migration command can extend this exception.
 export const schemaSource = JSON.parse(readFileSync(new URL('./commission-schema-source.json', import.meta.url)));
 export const approvedSchemaReadback = JSON.parse(readFileSync(
   new URL('../../governance/commission-schema-readback.json', import.meta.url)));
+const completedMigration55 = JSON.parse(readFileSync(new URL('./completed-migration55-evidence.json', import.meta.url)));
+const fixedTargets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
+const completedAuthorityBytes = readFileSync(new URL('../../governance/completed-m55-amendment-authority-20261102.json', import.meta.url));
+const completedOperationBytes = readFileSync(new URL('../../governance/aqgreen-clean-start-actual-20261102.json', import.meta.url));
+export const completedMigration55PolicyKind = 'commission-invalidation-clean-start-completed-m55-v1';
+export const isCleanStartSchemaKind = kind =>
+  ['commission-invalidation-clean-start-v1', completedMigration55PolicyKind].includes(kind);
 export class SchemaFirstDenied extends Error {}
 const check = (ok, code) => { if (!ok) throw new SchemaFirstDenied(code); };
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) &&
@@ -19,7 +26,7 @@ const utc = v => typeof v === 'string' && /Z$/.test(v) && Number.isFinite(Date.p
 
 export function validSchemaPolicy(p) {
   return exact(p, ['kind', 'sourceManifestSha256', 'evidenceSha256']) &&
-    ['commission-invalidation-schema-first-v1', 'commission-invalidation-clean-start-v1'].includes(p.kind) &&
+    ['commission-invalidation-schema-first-v1', 'commission-invalidation-clean-start-v1', completedMigration55PolicyKind].includes(p.kind) &&
     p.sourceManifestSha256 === objectDigest(schemaSource) && digest(p.evidenceSha256);
 }
 
@@ -40,13 +47,68 @@ export function validateMigrationDelta(compare, schemaEnabled = false, requireAd
       f.status === pin.status && !f.previous_filename).length === 1), 'SCHEMA_MIGRATION_NOT_APPROVED');
 }
 
+function validateCompletedMigration55Scope(q, policy) {
+  const p = completedMigration55;
+  check(q?.sha === p.candidateSha && objectDigest(policy.scope) === p.policyScopeSha256 &&
+    objectDigest(fixedTargets) === p.targetsSha256 && objectDigest(schemaSource) === p.sourceManifestSha256 &&
+    schemaSource.sourceSha === p.candidateSha && schemaSource.migrationId === p.migrationId &&
+    schemaSource.migrationFiles[0]?.sha256 === p.migrationDefinitionSha256 &&
+    schemaSource.cleanStartSources?.some(x => x.path.endsWith('/migration-55.reviewed.sql') && x.sha256 === p.reviewedSqlSha256),
+  'COMPLETED_M55_EXACT_SCOPE_REQUIRED');
+}
+
+function validateCompletedMigration55Evidence(r, q, policy) {
+  validateCompletedMigration55Scope(q, policy);
+  const p = completedMigration55, e = r.alternativeEvidence, o = r.observation;
+  check(exact(e, ['kind', 'historicalEvidenceDisposition', 'bundleSha256', 'ownerAuthorizationSha256',
+    'ownerAuthorizationReference', 'operationEvidenceSha256', 'operationEvidenceReference']) &&
+    e.kind === p.kind && e.historicalEvidenceDisposition === p.historicalEvidenceDisposition &&
+    e.bundleSha256 === objectDigest(p) && e.ownerAuthorizationSha256 === p.ownerAuthorizationSha256 &&
+    e.ownerAuthorizationReference === p.ownerAuthorizationReference && reference(e.ownerAuthorizationReference) &&
+    e.operationEvidenceSha256 === p.operationEvidenceSha256 && e.operationEvidenceReference === p.operationEvidenceReference &&
+    reference(e.operationEvidenceReference), 'COMPLETED_M55_PINNED_EVIDENCE_REQUIRED');
+  const authority = JSON.parse(completedAuthorityBytes), operation = JSON.parse(completedOperationBytes);
+  const d = authority.ownerDecision, s = authority.scope, b = authority.immutableExistingEvidence;
+  check(sha256(completedAuthorityBytes) === p.ownerAuthorizationSha256 && sha256(completedOperationBytes) === p.operationEvidenceSha256 &&
+    authority.businessDecisionStatus === 'CONFIRMED' && d.reducedHistoricalBaselineAssuranceExplicitlyAccepted === true &&
+    d.historicalEvidenceDisposition === p.historicalEvidenceDisposition && d.historicalFingerprintsObservedReconstructedOrVerified === false &&
+    d.minimumVersionedExecutorOwnedAmendmentAuthorized === true && d.onlyHistoricalPreDdlFingerprintPredicatesMayBeReplaced === true &&
+    s.applicationSha === p.candidateSha && s.nativeDatabaseIdentitySha256 === p.databaseIdentitySha256 && s.tenantId === p.tenantId &&
+    s.migrationId === p.migrationId && s.reviewedSqlSha256 === p.reviewedSqlSha256 &&
+    s.renderServiceId === fixedTargets.render.id && s.vercelProjectId === fixedTargets.vercel.id && s.vercelTeamId === fixedTargets.vercel.teamId &&
+    ['retirementConservationSha256', 'retirementAuthoritySha256', 'conservationAcceptanceSha256', 'migrationAuthoritySha256',
+      'migrationVerificationSha256', 'cleanupSha256', 'beforeHistorySha256', 'afterHistorySha256'].every(k => b[k] === p[k]) &&
+    b.operationRecordReference === p.operationEvidenceReference && operation.applicationSha === p.candidateSha &&
+    operation.retirement.actualConservationDigest === p.retirementConservationSha256 && operation.retirement.ownerAuthorizationDigest === p.retirementAuthoritySha256 &&
+    operation.retirement.actualConservationChecksPassed === 22 && operation.conservationAcceptance.recordDigest === p.conservationAcceptanceSha256 &&
+    operation.migration.actualResultDigest === p.migrationVerificationSha256 && operation.migration.authorizationDigest === p.migrationAuthoritySha256 &&
+    operation.migration.reviewedSqlDigest === p.reviewedSqlSha256 && operation.migration.migrationId === p.migrationId &&
+    operation.migration.beforeCount === 54 && operation.migration.afterCount === 55 && operation.migration.existingHistoryUnchanged === true &&
+    operation.migration.beforeHistoryDigest === p.beforeHistorySha256 && operation.migration.afterHistoryDigest === p.afterHistorySha256 &&
+    operation.migration.actualVerificationChecksPassed === 21 && operation.migration.sourceFinancialParticipationAndAuditFingerprintsConserved === true &&
+    operation.controlsAndRecovery.cleanupDigest === p.cleanupSha256 && operation.controlsAndRecovery.temporaryAccessRemovedOriginalAllowlistRestored === true &&
+    operation.controlsAndRecovery.criticalProviderSettingsUnchanged === true && operation.unresolvedReadbackEvidence.schemaDigest === null &&
+    operation.unresolvedReadbackEvidence.beforeSchemaDigest === null, 'COMPLETED_M55_AUTHORITY_OR_BUNDLE_INVALID');
+  // The entire existing observation is pinned, not merely well-formed digests.
+  // Missing historical fingerprints remain explicitly unavailable, never backfilled.
+  check(objectDigest(o) === p.observationSha256 && o.candidateSha === p.candidateSha &&
+    o.databaseIdentitySha256 === p.databaseIdentitySha256 && o.tenantId === p.tenantId &&
+    o.cleanStart?.paymentAdmissionMode === 'OWNER_ATTESTED_TEST_ONLY_V1' &&
+    o.cleanStart.schemaDigest === null && o.application?.beforeSchemaDigest === null &&
+    o.cleanStart.ownerAuthorizationDigest === p.retirementAuthoritySha256 &&
+    o.cleanStart.independentAcceptanceDigest === p.conservationAcceptanceSha256 &&
+    o.application.beforeHistoryDigest === p.beforeHistorySha256 && o.application.afterHistoryDigest === p.afterHistorySha256,
+  'COMPLETED_M55_OBSERVATION_CHANGED');
+}
+
 export function validateSchemaReadback(r, q, policy, hasBaseline, now = Date.now) {
-  const clean = policy.schemaFirst?.kind === 'commission-invalidation-clean-start-v1';
+  const clean = isCleanStartSchemaKind(policy.schemaFirst?.kind);
+  const completed = policy.schemaFirst?.kind === completedMigration55PolicyKind;
   const ownerAttested = clean && r?.observation?.cleanStart?.paymentAdmissionMode === 'OWNER_ATTESTED_TEST_ONLY_V1';
   check(validSchemaPolicy(policy.schemaFirst), 'SCHEMA_POLICY_INVALID');
   check(r && objectDigest(r) === policy.schemaFirst.evidenceSha256, 'SCHEMA_EVIDENCE_CHANGED');
-  check(exact(r, ['contract', 'version', 'status', 'observation']) &&
-    r.contract === 'aqua.commission-schema-first-readback' && r.version === (clean ? ownerAttested ? 3 : 2 : 1) && r.status === 'VERIFIED',
+  check(exact(r, ['contract', 'version', 'status', 'observation', ...(completed ? ['alternativeEvidence'] : [])]) &&
+    r.contract === 'aqua.commission-schema-first-readback' && r.version === (completed ? 4 : clean ? ownerAttested ? 3 : 2 : 1) && r.status === 'VERIFIED',
   'SCHEMA_EVIDENCE_REQUIRED');
   const o = r.observation;
   check(exact(o, ['candidateSha', 'observedAt', 'observer', 'databaseIdentitySha256', 'tenantId',
@@ -55,7 +117,8 @@ export function validateSchemaReadback(r, q, policy, hasBaseline, now = Date.now
     Number.isSafeInteger(o.tenantId) && o.tenantId > 0, 'SCHEMA_SCOPE_MISMATCH');
   check(exact(o.observer, ['login', 'id']) && policy.authorization.administrators.some(
     a => a.login === o.observer.login && a.id === o.observer.id), 'SCHEMA_OBSERVER_UNAPPROVED');
-  if (clean) validateCleanStart(o.cleanStart, o, policy);
+  if (completed) validateCompletedMigration55Evidence(r, q, policy);
+  if (clean) validateCleanStart(o.cleanStart, o, policy, completed);
   else check(exact(o.b6, ['status', 'databaseIdentitySha256', 'tenantId', 'migrationCount',
     'schemaDigest', 'acquisitionDigest', 'acceptedAt', 'evidenceReference']) &&
     o.b6.status === 'ACQUISITION_ACCEPTED' && o.b6.databaseIdentitySha256 === o.databaseIdentitySha256 &&
@@ -99,10 +162,12 @@ export function validateSchemaReadback(r, q, policy, hasBaseline, now = Date.now
     o.recovery.legacyFinancialRollbackAllowed === false && reference(o.recovery.evidenceReference),
   'HOLD_PRESERVING_FORWARD_RECOVERY_REQUIRED');
   return { evidenceSha256: objectDigest(r), migrationId: schemaSource.migrationId,
-    initialSourceSha: o.candidateSha, recoveryMode: o.recovery.mode };
+    initialSourceSha: o.candidateSha, recoveryMode: o.recovery.mode, ...(completed ? {
+      schemaEvidenceKind: completedMigration55.kind,
+      historicalEvidenceDisposition: completedMigration55.historicalEvidenceDisposition } : {}) };
 }
 
-function validateCleanStart(c, o, policy) {
+function validateCleanStart(c, o, policy, completed) {
   const ownerAttested = c?.paymentAdmissionMode === 'OWNER_ATTESTED_TEST_ONLY_V1';
   const classificationFields = ownerAttested ? ['paymentAdmissionMode','ownerTestOnlyAttestationDigest',
     'ownerAttestsNoGenuineMemberships','providerModeVerification','paymentEvidenceConserved',
@@ -118,7 +183,7 @@ function validateCleanStart(c, o, policy) {
     c.migrationCount === 54 && c.protectedRecordsPreserved === true && c.automaticPayoutsDisabled === true &&
     c.noAdditionalChargeConfirmed === true && c.independenceVerified === true &&
     ['unclassifiedCount','activeHistoricalCount'].every(k => c[k] === 0) &&
-    ['schemaDigest','classificationDigest','preflightDigest','resetSqlDigest','resetReceiptDigest','ownerAuthorizationDigest',
+    [...(completed ? [] : ['schemaDigest']),'classificationDigest','preflightDigest','resetSqlDigest','resetReceiptDigest','ownerAuthorizationDigest',
       'independentAcceptanceDigest','independenceRecordDigest','recoveryEvidenceDigest'].every(k => digest(c[k])) &&
     exact(c.operator,['login','id']) && c.operator.login === 'Xolani-M' && c.operator.id === 86495928 &&
     exact(c.reviewer,['login','id']) && c.reviewer.login === 'aqualifestyleclub' && c.reviewer.id === 307076734 &&
@@ -145,7 +210,8 @@ export async function verifySchemaFirst(api, q, policy, readSource, readback = a
   hasBaseline = false, now = Date.now) {
   if (policy.version !== 7) return null; // Explicit historical policy, never an evidence fallback.
   check(validSchemaPolicy(policy.schemaFirst), 'SCHEMA_POLICY_INVALID');
-  const clean = policy.schemaFirst.kind === 'commission-invalidation-clean-start-v1';
+  const clean = isCleanStartSchemaKind(policy.schemaFirst.kind);
+  if (policy.schemaFirst.kind === completedMigration55PolicyKind) validateCompletedMigration55Scope(q, policy);
   check(!clean || schemaSource.cleanStartSources?.length > 0, 'CLEAN_START_SOURCES_NOT_PINNED');
   for (const pin of [...schemaSource.migrationFiles, ...schemaSource.holdSources,
     ...(clean ? schemaSource.cleanStartSources : [])])

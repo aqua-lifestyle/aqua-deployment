@@ -1,4 +1,11 @@
-The commission-invalidation correction selects policy v7; see the
+The owner-authorized completed-migration55 variant retains policy v7 and explicitly
+selects readback version4; see [the bounded evidence contract](docs/completed-migration55-admission.md).
+Only its pinned completed transition can use the alternative evidence. Historical
+fingerprints remain unavailable; existing versions retain their requirements.
+The separate first-release recovery readback remains UNVERIFIED and is not waived.
+No deployment is authorized by this contract amendment.
+
+The earlier commission-invalidation correction selects policy v7; see the
 [schema-first and forward-only operator procedure](docs/first-release-recovery.md#commission-invalidation-schema-first-policy-v7).
 It adds no migration execution, deployment dispatch, credential or activation step.
 Both protected operator readbacks remain UNVERIFIED, so production admission stops

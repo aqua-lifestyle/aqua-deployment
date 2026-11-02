@@ -54,8 +54,8 @@
     "evidenceSha256": "82af13bdbaafe6f0f1b08341df4ae0c60d06e9d251161070709d479770a44c70"
   },
   "schemaFirst": {
-    "kind": "commission-invalidation-clean-start-v1",
+    "kind": "commission-invalidation-clean-start-completed-m55-v1",
     "sourceManifestSha256": "2bd8822e666ad66a21b3ffbe7dd96c02d6d4af84d9b0743010ac2bc5ad3ba459",
-    "evidenceSha256": "3e5c05a4d7814ed91b4879508019948fa66c770747c362b881eba2f5fc2191b0"
+    "evidenceSha256": "96139eda2ad461037c60cae87803a795667dfe5434cd018103c44dc4ea61a9c5"
   }
 }

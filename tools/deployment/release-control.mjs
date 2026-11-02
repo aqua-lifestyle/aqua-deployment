@@ -11,7 +11,7 @@ import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validat
 import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied, memberContinuation,
   validateMemberContinuation, validateMemberIdentity, verifyMemberSource, verifyMemberAuthority, validateMemberReceipt, deployMemberRelease } from './member-release.mjs';
 import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateMigrationDelta,
-  SchemaFirstDenied } from './commission-schema-first.mjs';
+  SchemaFirstDenied, isCleanStartSchemaKind } from './commission-schema-first.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   gitSourceDigest, verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission,
   readGitHubArtifact, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
@@ -903,7 +903,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   };
   const repository = await api.gh('');
   const readRender = async () => {
-    const cleanStart = policy.schemaFirst?.kind === 'commission-invalidation-clean-start-v1';
+    const cleanStart = isCleanStartSchemaKind(policy.schemaFirst?.kind);
     const expected = cleanStart ? cleanStartRuntimeSettings : runtimeSettings;
     const service = await api.render(servicePath);
     const rows = [];

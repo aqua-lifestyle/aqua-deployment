@@ -113,7 +113,11 @@ test('qualification dispatch executes normal candidate/admission, retains a purp
     const transform = value => value === source ? sha : Array.isArray(value) ? value.map(transform) :
       value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k,v]) => [k,transform(v)])) : value;
     const gh = f.api.gh; f.api.gh = async (...args) => transform(await gh(...args));
-    const dependencies = { api: f.api, readSourceDigest: f.readSourceDigest, now };
+    // This generic disposable source exercises the retained legacy qualification
+    // contract. The bounded v4 policy correctly rejects any other source SHA.
+    const genericPolicy = structuredClone(standingPolicy);
+    genericPolicy.schemaFirst.kind = 'commission-invalidation-clean-start-v1';
+    const dependencies = { api: f.api, readSourceDigest: f.readSourceDigest, now, policy: genericPolicy };
     await main(env, { ...dependencies, mode: 'candidate' });
     assert.match(readFileSync(env.GITHUB_OUTPUT, 'utf8'), /qualification_only=true\n/);
     const manifest = JSON.parse(readFileSync(join(candidateDir, 'candidate.json')));
