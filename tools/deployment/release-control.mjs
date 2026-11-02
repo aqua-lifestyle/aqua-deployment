@@ -15,6 +15,8 @@ import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateM
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   gitSourceDigest, verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission,
   readGitHubArtifact, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
+import { HistoricalReconciliationDenied, isReconciledHistoricalRun, validateHistoricalContext,
+  validateHistoricalArtifact, validateHistoricalAudit } from './historical-release-reconciliation.mjs';
 
 export const targets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 // Only the executor's reviewed targets.json selects this mode. Candidate input
@@ -712,10 +714,12 @@ export async function evidencePlan(api, candidate, policy) {
       receiptSha256: sha256(Buffer.from(JSON.stringify(rows))) });
   }
   let continuation;
+  const historicalReconciliations = [];
   for (const run of runs.filter(r => r.id !== current.id &&
     r.run_number > (latestObserved?.run_number ?? 0))) {
     // A failed prior run may have submitted a request whose history is not visible
-    // yet. Only a positively unexecuted provider step is safe to supersede.
+    // yet. Require a positively unexecuted step or the exact owner-authorized
+    // factual recognition below; neither is a successful release or retry receipt.
     for (let attempt = 1; attempt <= run.run_attempt; attempt++) {
       const production = await releaseProductionJob(api, run, attempt);
       if (candidate.memberRelease !== undefined && String(run.id) === memberContinuation.runId) {
@@ -725,6 +729,13 @@ export async function evidencePlan(api, candidate, policy) {
         const metadata = await releaseApi(api)(`/actions/artifacts/${descriptor.artifactId}`);
         requireThat(metadata.digest === memberContinuation.artifactDigest, 'MEMBER_CONTINUATION_ARTIFACT_CHANGED');
         continuation = validateMemberContinuation(await readReleaseAudit(api, descriptor), descriptor);
+        continue;
+      }
+      if (external && candidate.memberRelease === undefined && isReconciledHistoricalRun(run.id)) {
+        const pin = validateHistoricalContext(run, attempt, production, candidate, targets);
+        const descriptor = await auditArtifact(api, run, attempt);
+        validateHistoricalArtifact(pin, descriptor, await releaseApi(api)(`/actions/artifacts/${descriptor.artifactId}`));
+        historicalReconciliations.push(validateHistoricalAudit(await readReleaseAudit(api, descriptor), descriptor, pin, targets));
         continue;
       }
       const deployStep = production?.name === 'Authorized recovery release' ?
@@ -748,6 +759,7 @@ export async function evidencePlan(api, candidate, policy) {
     'MEMBER_RELEASE_ALREADY_DEPLOYED');
   requireThat(candidate.memberRelease === undefined || continuation, 'MEMBER_CONTINUATION_EVIDENCE_REQUIRED');
   return { policySha256: candidate.policySha256, verifiedReleases,
+    ...(historicalReconciliations.length ? { historicalReconciliations } : {}),
     ...(continuation ? { memberContinuation: continuation } : {}),
     ...(memberReleases.length ? { memberReleases } : {}),
     firstReleaseRecoveryEvidenceSha256: latest ? null : policy.firstReleaseRecovery.evidenceSha256,
@@ -1334,7 +1346,7 @@ export async function run(env, options = {}) {
     const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied ||
       error instanceof GovernanceReadbackDenied || error instanceof VercelSourceDenied ||
       error instanceof FirstReleaseRecoveryDenied || error instanceof SchemaFirstDenied ||
-      error instanceof MemberReleaseDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
+      error instanceof MemberReleaseDenied || error instanceof HistoricalReconciliationDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
     if (failureReport) failureReport(code);
     else if (env.RELEASE_REPORT)
       appendFileSync(env.RELEASE_REPORT, JSON.stringify({ phase: 'blocked', code, identityVerified: false }) + '\n');

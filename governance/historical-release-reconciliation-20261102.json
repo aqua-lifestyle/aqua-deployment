@@ -1,0 +1,85 @@
+{
+  "contract": "aqua.exact-historical-release-reconciliation",
+  "version": 1,
+  "recordedAt": "2026-11-02T15:27:13.341Z",
+  "protectedFactualRecordSha256": "3c57f2219a3e0318e74c1d383b8e5c70892fee66b53fe8543f9fa6cce536c7df",
+  "scope": "Known acknowledged effects matched to retained authenticated observations; neither original workflow succeeded. No successful full-release predecessor, replay or deployment authority.",
+  "candidateSha": "a4755801ce89868d7791422f3c983363ab76bf30",
+  "policySha256": "1347eae6196a051311e773ae9c10b86c4491505ec4a5e4f2be055e8fdbf8adca",
+  "executorRepositoryId": 1423239668,
+  "runs": [
+    {
+      "runId": "40850715880",
+      "runNumber": 6,
+      "attempt": 1,
+      "executorSha": "97526c0635b6c96a89bb15603567903725a23cec",
+      "historicalRunConclusion": "failure",
+      "terminalFailureCode": "API_REVISION_OR_RECOVERY_READINESS_FAILED",
+      "artifactId": "12886558488",
+      "archiveSha256": "9218129208489a57f5198b795be9560a216629c675215f81de3698df0b243fbb",
+      "rowsSha256": "d4e7b8a254669ea65d5fe7dfd887cdb2ab10d19a3e07fd1add8557d20b73d70f",
+      "rawReportSha256": "582c1cf9e310e2cb1694fd52c1e177945c3dffae797c9a3320f58c1b4cdd04eb",
+      "outcome": "ACKNOWLEDGED_RENDER_DEPLOY_COMPLETED_NO_VERCEL_OPERATION",
+      "unresolvedEffects": []
+    },
+    {
+      "runId": "40883686654",
+      "runNumber": 7,
+      "attempt": 1,
+      "executorSha": "156d691e03ada60351d3cb90da2cd8ce9d27b2a3",
+      "historicalRunConclusion": "failure",
+      "terminalFailureCode": "VERCEL_EFFECTIVE_BUILD_INPUTS_UNVERIFIABLE",
+      "artifactId": "12901649081",
+      "archiveSha256": "771a509135c2d03f69e357a1fe97988d424c96065ef5fd71455a38ccc248cb97",
+      "rowsSha256": "38b617384e8a3643a9db9508784aab725fabde1c7db9510c3ea9563c2799cf2c",
+      "rawReportSha256": "1cf3863c8d97277dd21adcea9fa4a56fa75aaed4aa33c910df011e4c94719c47",
+      "outcome": "EXISTING_RENDER_RECONCILED_FRONTEND_CREATED_AND_LATER_QUALIFIED",
+      "unresolvedEffects": []
+    }
+  ],
+  "originalIdentity": {
+    "version": 4,
+    "repository": "aqua-lifestyle/aqua-lifestyle",
+    "sha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+    "receiverSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+    "ciRunId": "40830938196",
+    "ciRunAttempt": 1,
+    "memberRelease": "22e3afebecb7f100d36e8ec051e0612844288e0ebeace5cc7b3bd15841905b28",
+    "policySha256": "103a139d99e63e96e282653731d28693af8112b4bc41a875882002b995d7289c",
+    "environment": "production-release",
+    "profile": "normal-integrated",
+    "executorRepository": "aqua-lifestyle/aqua-deployment"
+  },
+  "heldPair": {
+    "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+    "renderDeployId": "dep-dbhh7l8m7kps73etljfg",
+    "renderSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+    "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "vercelDeployId": "dpl_7PcajvRJGKp2AzuJGaLPLHy2bqUD",
+    "vercelSha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+    "productionDomain": "www.aqualifestyleclub.co.za",
+    "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend"
+  },
+  "retainedObservation": {
+    "file": "native-held-baseline-observation-20261102.json",
+    "sha256": "66f61838301ee86e8f2dd2fe11b545a40585d6ae0722d69c63193559b28152ec",
+    "protectedRecordSha256": "ef52ec12406bd1c13affe191a236a86035df7ef6cdab9382dace332edcf3e3b5",
+    "runId": "41458997824",
+    "attempt": 1,
+    "executorSha": "b24661e01dfabdd417222a8f98293dd8b3afdd3c",
+    "observedAt": "2026-11-02T14:08:02.802Z"
+  },
+  "retainedFrontendQualification": {
+    "file": "held-frontend-source-evidence-20261029.json",
+    "sha256": "7195d016e7f881c37a1a25a7a9352aa485083e344061ad8beb4a873b7d960b7c",
+    "protectedRecordSha256": "c6fdea58908a56f19a70842fa823a31f7c53b202d81af10b6617690ef0929190",
+    "sourceProofSha256": "e250d98a3f31ff86054cf0caa8b8ecdf3e02cb94de1b21e9fd8f119af038b304",
+    "observedAt": "2026-10-29T14:43:45.961Z"
+  },
+  "unresolvedMaterialProviderEffectsIdentified": [],
+  "originalFailuresRewritten": false,
+  "successfulFullReleasePredecessor": false,
+  "replayAuthority": false,
+  "deploymentAuthority": false
+}

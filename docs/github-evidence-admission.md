@@ -173,6 +173,12 @@ evidenced reconciliation. Policy changes can invalidate previous receipts and
 require such reconciliation. No production replay database is needed by v3; the
 existing PostgreSQL adapter remains an inactive prototype.
 
+The owner-authorized [exact historical reconciliation recognition](historical-release-reconciliation.md)
+binds only failed runs 40850715880/1 and 40883686654/1 to their original authenticated
+audits and subsequently qualified provider outcomes. Their conclusions and failure
+codes remain failed. Separate frozen-plan recognition supplies no successful
+predecessor, retry, replay or deployment authority; unrelated failures still deny.
+
 The guarantee assumes the same workflow/history namespace and fixed concurrency
 group remain in force. Deliberate changes by the trusted administrators are outside
 the adversary model; a workflow/history reset is not an approved replay-state reset.
