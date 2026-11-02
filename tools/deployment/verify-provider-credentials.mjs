@@ -220,8 +220,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     providerCheckContext(process.env, checkoutSha);
     if (process.argv[2] === 'context') console.log(JSON.stringify({ check: 'trusted-main-context', result: 'PASS' }));
     else if (process.argv[2] === 'verify') {
-      if (!await verifyProviderCredentials(process.env, { checkoutSha,
-        emit: row => console.log(JSON.stringify(row)) })) process.exitCode = 1;
+      const mode = process.env.PROVIDER_CHECK_MODE ?? 'verify';
+      if (!['verify', 'native-recovery-readback'].includes(mode)) throw Error('INVALID_MODE');
+      const operation = mode === 'native-recovery-readback' ? observeNativeRecoveryBaseline : verifyProviderCredentials;
+      if (!await operation(process.env, { checkoutSha, emit: row => console.log(JSON.stringify(row)) })) process.exitCode = 1;
     } else if (process.argv[2] === 'native-recovery-readback') {
       if (!await observeNativeRecoveryBaseline(process.env, { checkoutSha, emit: row => console.log(JSON.stringify(row)) })) process.exitCode = 1;
     } else throw Error('INVALID_MODE');
