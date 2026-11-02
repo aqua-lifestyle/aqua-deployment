@@ -1,0 +1,31 @@
+{
+  "contract": "aqua.historical-release-reconciliation-authority",
+  "version": 1,
+  "recordedOn": "2026-11-02",
+  "businessDecisionStatus": "CONFIRMED",
+  "authorityOrigin": "Explicit owner authorization in the current authenticated conversation: AQGreen V2 — Owner Authorization: Historical Release Reconciliation Recognition. This records conversation authority, not a separately attributed GitHub review.",
+  "decision": {
+    "smallestExecutorOwnedRecognitionAmendmentAuthorized": true,
+    "exactRunAttemptsOnly": [
+      { "runId": "40850715880", "attempt": 1 },
+      { "runId": "40883686654", "attempt": 1 }
+    ],
+    "originalFailedConclusionsAndTerminalCodesMustRemain": true,
+    "immutableAuditsProviderIdentitiesSourceAndQualifiedObservationsRequired": true,
+    "generalFailedDeploymentExceptionAuthorized": false,
+    "successfulFullReleasePredecessorStatusGranted": false,
+    "replayOrDeploymentAuthorityGranted": false,
+    "normalProtectedPrAndRequiredCiRequired": true,
+    "postMergeQualificationOnlyAdmissionAuthorized": true
+  },
+  "preservedControls": [
+    "Release history, source, security, targets, freshness, anti-replay, recovery and financial controls",
+    "Receive-only, worker, payout and Normal-mode holds"
+  ],
+  "productionDeploymentOrRollbackAuthorized": false,
+  "databaseOperationsAuthorized": false,
+  "providerConfigurationOrCredentialChangesAuthorized": false,
+  "financialWorkerPayoutOrNormalActivationAuthorized": false,
+  "newInfrastructureOrPaidServicesAuthorized": false,
+  "stopAfterQualificationOnlyValidation": true
+}
