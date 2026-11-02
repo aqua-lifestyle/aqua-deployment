@@ -1,8 +1,13 @@
 // One-off GET capability check. Not release admission, readiness or write proof.
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { clients, targets, standingPolicy } from './release-control.mjs';
+import { clients, targets, standingPolicy, validateRender } from './release-control.mjs';
 import { runtimeSettings } from './runtime-readiness.mjs';
+import { memberRuntimeSettings } from './member-release.mjs';
+const nativeSource = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
+const heldFrontend = JSON.parse(readFileSync(new URL('../../governance/held-frontend-source-evidence-20261029.json', import.meta.url)));
 
 const approvedRenderUser = 'usr-d9f04o3tqb8s73bbhjbg';
 const executor = targets.executor.repository;
@@ -116,6 +121,99 @@ export async function verifyProviderCredentials(env, { checkoutSha, fetcher = fe
   return passed;
 }
 
+// A separate fixed-target GET purpose in the existing protected workflow. It
+// observes the current held pair; it never deploys, rolls back or reads a secret.
+export async function observeNativeRecoveryBaseline(env, { checkoutSha, fetcher = fetch, emit = () => {} }) {
+  providerCheckContext(env, checkoutSha);
+  if (!/^[1-9]\d*$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9]\d*$/.test(env.GITHUB_RUN_ATTEMPT ?? '')) {
+    emit({ contract: 'aqua.native-recovery-baseline-observation', version: 1, status: 'UNVERIFIED', code: 'RUN_PROVENANCE_REQUIRED' }); return false;
+  }
+  for (const name of ['RENDER_API_KEY', 'VERCEL_TOKEN']) if (!env[name]?.trim()) {
+    emit({ contract: 'aqua.native-recovery-baseline-observation', version: 1, status: 'UNVERIFIED', code: 'CREDENTIAL_MISSING' }); return false;
+  }
+  const p = nativeSource.heldPair, evidence = [];
+  let active;
+  const check = (ok, code) => { if (!ok) throw Error(code); };
+  const transport = async (url, options) => {
+    check(active && url === active.url && (options.method ?? 'GET') === 'GET' && options.body === undefined && options.redirect === 'error', 'FIXED_GET_ONLY_REQUIRED');
+    check(active.provider !== 'health' || options.headers?.Authorization === undefined, 'HEALTH_CREDENTIAL_FORBIDDEN');
+    const response = await fetcher(url, options);
+    evidence.push({ provider: active.provider, check: active.check, httpStatus: response.status });
+    return response;
+  };
+  const api = clients(env, transport);
+  const read = async (provider, name, path) => {
+    active = { provider, check: name, url: (provider === 'render' ? 'https://api.render.com/v1' : 'https://api.vercel.com') + path +
+      (provider === 'vercel' ? (path.includes('?') ? '&' : '?') + `teamId=${p.vercelTeamId}` : '') };
+    return api[provider](path);
+  };
+  try {
+    check(p.renderServiceId === targets.render.id && p.vercelProjectId === targets.vercel.id && p.vercelTeamId === targets.vercel.teamId &&
+      p.rootDirectory === targets.vercel.rootDirectory, 'NATIVE_TARGET_DEFINITION_MISMATCH');
+    const service = await read('render', 'service', `/services/${p.renderServiceId}`), rows = [];
+    for (const name of Object.keys(memberRuntimeSettings)) rows.push({ envVar: await read('render', 'hold-' + name, `/services/${p.renderServiceId}/env-vars/${name}`) });
+    validateRender(service, rows, false, memberRuntimeSettings);
+    const d = service.serviceDetails;
+    check(service.type === 'web_service' && d.runtime === 'docker' && d.plan === 'starter' && d.numInstances === 1 &&
+      d.healthCheckPath === '/api/health' && d.maintenanceMode?.enabled === false && !d.disk && !service.disk, 'NATIVE_SERVICE_PROFILE_UNVERIFIED');
+    const disks = await read('render', 'disks', `/disks?serviceId=${p.renderServiceId}&limit=100`);
+    check(Array.isArray(disks) && disks.length === 0, 'NATIVE_NO_DISK_PROFILE_UNVERIFIED');
+    const latest = await read('render', 'latest-deploy', `/services/${p.renderServiceId}/deploys?limit=1`);
+    check(Array.isArray(latest) && latest.length === 1 && latest[0].deploy?.id === p.renderDeployId &&
+      latest[0].deploy.status === 'live' && latest[0].deploy.commit?.id === p.renderSha, 'NATIVE_RENDER_BASELINE_CHANGED');
+    const render = await read('render', 'held-deploy', `/services/${p.renderServiceId}/deploys/${p.renderDeployId}`);
+    check(render.id === p.renderDeployId && render.status === 'live' && render.commit?.id === p.renderSha, 'NATIVE_RENDER_BASELINE_CHANGED');
+    const project = await read('vercel', 'project', `/v9/projects/${p.vercelProjectId}`);
+    check(project.id === p.vercelProjectId && project.accountId === p.vercelTeamId && project.rootDirectory === p.rootDirectory &&
+      project.targets?.production?.id === p.vercelDeployId, 'NATIVE_FRONTEND_BASELINE_CHANGED');
+    const web = await read('vercel', 'held-deploy', `/v13/deployments/${p.vercelDeployId}`);
+    check(web.id === p.vercelDeployId && web.projectId === p.vercelProjectId && web.target === 'production' && web.readyState === 'READY' &&
+      !web.aliasError && (!web.gitSource || web.gitSource.sha === p.vercelSha), 'NATIVE_FRONTEND_DEPLOY_UNVERIFIED');
+    check(heldFrontend.qualificationResult === 'PASS' && heldFrontend.deploymentId === web.id && heldFrontend.sourceSha === p.vercelSha &&
+      heldFrontend.renderReceiverSha === p.renderSha, 'NATIVE_FRONTEND_SOURCE_AUDIT_MISMATCH');
+    const readMapping = async () => {
+      const aliases = await read('vercel', 'aliases', `/v2/deployments/${p.vercelDeployId}/aliases`);
+      const domain = await read('vercel', 'domain', `/v9/projects/${p.vercelProjectId}/domains/${p.productionDomain}`);
+      const matches = aliases.aliases?.filter(x => x.alias === p.productionDomain);
+      check(Array.isArray(matches) && matches.length === 1 && !matches[0].redirect &&
+        (matches[0].deploymentId === undefined || matches[0].deploymentId === p.vercelDeployId) &&
+        (matches[0].projectId === undefined || matches[0].projectId === p.vercelProjectId) &&
+        domain.name === p.productionDomain && domain.projectId === p.vercelProjectId && domain.verified === true && !domain.redirect,
+      'NATIVE_DOMAIN_MAPPING_UNVERIFIED');
+    };
+    await readMapping();
+    active = { provider: 'health', check: 'held-receiver-health', url: targets.render.healthUrl };
+    const health = await api.health(), body = health.body?.result ?? health.body;
+    check(health.status === 200 && body?.status === 'Healthy' && body.buildId === p.renderSha && health.receiver === 'Schema54' &&
+      body.environment === 'Production' && body.databaseStatus === 'Healthy', 'NATIVE_RECEIVER_HEALTH_UNVERIFIED');
+    const finalProject = await read('vercel', 'project-recheck', `/v9/projects/${p.vercelProjectId}`);
+    check(finalProject.id === project.id && finalProject.accountId === project.accountId && finalProject.targets?.production?.id === web.id &&
+      finalProject.rootDirectory === p.rootDirectory, 'NATIVE_FRONTEND_CHANGED_DURING_OBSERVATION');
+    await readMapping();
+    const finalRender = await read('render', 'held-deploy-recheck', `/services/${p.renderServiceId}/deploys/${p.renderDeployId}`);
+    check(finalRender.status === 'live' && finalRender.commit?.id === p.renderSha, 'NATIVE_RENDER_CHANGED_DURING_OBSERVATION');
+    emit({ contract: 'aqua.native-recovery-baseline-observation', version: 1, status: 'VERIFIED', observedAt: new Date().toISOString(),
+      producer: { executorSha: checkoutSha, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
+        actor: env.GITHUB_ACTOR, actorId: env.GITHUB_ACTOR_ID, workflow: 'provider-credential-check.yml', mode: 'native-recovery-readback' },
+      baseline: { renderServiceId: service.id, renderDeployId: render.id, renderSha: render.commit.id,
+        vercelTeamId: project.accountId, vercelProjectId: project.id, vercelDeployId: web.id,
+        productionDomain: p.productionDomain, rootDirectory: project.rootDirectory },
+      frontendSource: { sha: heldFrontend.sourceSha, provenance: 'EXISTING_AUTHENTICATED_MEMBER_QUALIFICATION',
+        qualificationRecordSha256: heldFrontend.protectedQualificationRecordSha256, sourceProofSha256: heldFrontend.sourceProofSha256 },
+      serviceProfile: { type: 'web_service', runtime: 'docker', plan: 'starter', instances: 1, attachedPersistentDisk: false,
+        healthCheckPath: '/api/health', autoDeploy: 'off', maintenance: false, operationalHoldsVerified: true },
+      applicability: { nativeHealthGatedDeploy: 'DOCUMENTED_APPLICABLE_TO_VERIFIED_PROFILE',
+        cachedArtifactEligibility: 'NOT_VERIFIED', recoveryRehearsalPerformed: false },
+      authenticatedReads: evidence,
+      readStatusSha256: createHash('sha256').update(JSON.stringify(evidence)).digest('hex') });
+    return true;
+  } catch {
+    emit({ contract: 'aqua.native-recovery-baseline-observation', version: 1, status: 'UNVERIFIED',
+      code: 'NATIVE_RECOVERY_READ_OR_IDENTITY_UNVERIFIED', provider: active?.provider ?? 'context', check: active?.check ?? 'definition',
+      authenticatedReads: evidence }); return false;
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const checkoutSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
@@ -124,6 +222,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     else if (process.argv[2] === 'verify') {
       if (!await verifyProviderCredentials(process.env, { checkoutSha,
         emit: row => console.log(JSON.stringify(row)) })) process.exitCode = 1;
+    } else if (process.argv[2] === 'native-recovery-readback') {
+      if (!await observeNativeRecoveryBaseline(process.env, { checkoutSha, emit: row => console.log(JSON.stringify(row)) })) process.exitCode = 1;
     } else throw Error('INVALID_MODE');
   } catch {
     console.log(JSON.stringify({ check: 'provider-credentials', result: 'FAIL', code: 'CHECK_CONTEXT_OR_EXECUTION_FAILED' }));

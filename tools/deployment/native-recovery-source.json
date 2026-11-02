@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "candidateSha": "a4755801ce89868d7791422f3c983363ab76bf30",
+  "databaseIdentitySha256": "be9ac8fd3ee1b9dd4389633358971f97a1dac2bf35370ed2e87b5cc814a8e324",
+  "tenantId": 1,
+  "sourceComparisonBaselineSha": "1251fb82979e18be53d1d0e7f5c6fab2d0c50a58",
+  "schemaEvidenceSha256": "96139eda2ad461037c60cae87803a795667dfe5434cd018103c44dc4ea61a9c5",
+  "heldPair": {
+    "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+    "renderDeployId": "dep-dbhh7l8m7kps73etljfg",
+    "renderSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+    "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "vercelDeployId": "dpl_7PcajvRJGKp2AzuJGaLPLHy2bqUD",
+    "vercelSha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+    "productionDomain": "www.aqualifestyleclub.co.za",
+    "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend"
+  },
+  "frontendSourceEvidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/198b78f7cf72dc1ea34e8788ffe892a34479f221/governance/held-frontend-source-evidence-20261029.json",
+  "ownerAuthorityReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/198b78f7cf72dc1ea34e8788ffe892a34479f221/governance/native-held-recovery-authority-20261102.json"
+}
