@@ -1,0 +1,34 @@
+{
+  "contract": "aqua.general-pre-mutation-release-history-authorization",
+  "version": 1,
+  "businessDecisionStatus": "CONFIRMED",
+  "owner": { "login": "Xolani-M", "id": 86495928 },
+  "decidedAt": "2026-11-02",
+  "directive": "AQGreen V2 — Owner Direction: Break the Deployment Failure Cycle",
+  "scope": {
+    "repository": "aqua-lifestyle/aqua-deployment",
+    "area": "Release history recognition for prior failed release runs",
+    "applicationRevisionQualified": "a4755801ce89868d7791422f3c983363ab76bf30"
+  },
+  "decision": {
+    "generalAuthenticatedPreMutationRecognitionAuthorized": true,
+    "onlyCompleteAuthenticatedNoMutationEvidenceRecognizes": true,
+    "uncertainOrConfirmedMutationsRequireReconciliation": true,
+    "historicalRunRecognitionPreserved": true,
+    "memberContinuationRouteUnchanged": true,
+    "noFailedRunPromotedToSuccessfulRelease": true,
+    "successfulFullReleasePredecessorStatusGranted": false,
+    "replayAuthorityGranted": false,
+    "deploymentAuthorityGranted": false,
+    "providerEffectReconciliationRequiredForRecognizedPreMutationRuns": false,
+    "productionDeploymentAuthorizedByThisDecision": false,
+    "automaticDbRollbackAuthorized": false
+  },
+  "categoryDefinitions": {
+    "verifiedPreMutationFailure": "Authenticated complete execution evidence (workload-run identity, artifact provenance and digest, audit identity and terminal row) proves that every mutation-capable provider stage was never entered or initiated; recognition is factual and grants nothing further.",
+    "uncertainOperation": "A write may have been attempted or its outcome is unknown; reconciliation is required and automatic recognition is denied.",
+    "confirmedMutation": "An operation was attempted or completed; reconciliation is required and automatic recognition is denied."
+  },
+  "failClosedRule": "Incomplete, contradictory, missing, forged, truncated or substituted evidence must deny recognition and retain the existing reconciliation requirement. An empty mutation log alone is insufficient.",
+  "recordedFrom": "Owner directive in the coordination thread; durable agent-drafted record of that business decision. Not itself new deployment, replay, financial or provider-credential authority."
+}
