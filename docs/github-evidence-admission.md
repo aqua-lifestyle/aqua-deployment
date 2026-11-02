@@ -177,7 +177,15 @@ The owner-authorized [exact historical reconciliation recognition](historical-re
 binds only failed runs 40850715880/1 and 40883686654/1 to their original authenticated
 audits and subsequently qualified provider outcomes. Their conclusions and failure
 codes remain failed. Separate frozen-plan recognition supplies no successful
-predecessor, retry, replay or deployment authority; unrelated failures still deny.
+predecessor, retry, replay or deployment authority.
+
+The separately authorized [general pre-mutation recognition rule](prior-run-pre-mutation-recognition.md)
+records supported, authenticated read-only failed attempts in `priorFailedRuns`.
+It requires positive job evidence of a skipped mutation stage or complete audit
+evidence from a supported administrator-approved producer. Unknown, unsupported,
+mutating or uncertain outcomes still require reconciliation. Successful
+qualification-only runs remain successful checks without deployment. This new
+recognition supplies no production-dispatch authority.
 
 The guarantee assumes the same workflow/history namespace and fixed concurrency
 group remain in force. Deliberate changes by the trusted administrators are outside

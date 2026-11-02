@@ -283,7 +283,7 @@ function fixture() {
     return deploy(api, state.candidate, state.policy,
       createAuditWriter(state.candidate, r => reports.push(r)), { ...immediate, env: state.env,
         admissionReceipt,readSourceDigest,now:()=>fixtureNow,frontendArchive:state.frontendArchive,
-        evidencePlan: state.plan ?? {policySha256:state.candidate.policySha256,verifiedReleases:[],baseline:null,resume:null,resumeChain:[],firstReleaseRecoveryEvidenceSha256:state.policy.firstReleaseRecovery.evidenceSha256},
+        evidencePlan: state.plan ?? {policySha256:state.candidate.policySha256,verifiedReleases:[],priorFailedRuns:[],baseline:null,resume:null,resumeChain:[],firstReleaseRecoveryEvidenceSha256:state.policy.firstReleaseRecovery.evidenceSha256},
         recoveryReadback:state.recoveryReadback,
         schemaReadback:state.schemaReadback,
         receiptRows: state.receiptRows, baselineRows: state.baselineRows });

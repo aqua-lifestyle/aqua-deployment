@@ -209,6 +209,11 @@ test('missing history, expired audits and unresolved previous provider operation
   f.api.executor=async route=>{const p=await read(route);if(route.includes('/workflows/deploy.yml/runs?')){p.workflow_runs=p.workflow_runs.slice(0,1);p.total_count=1;}return p;};
   await assert.rejects(evidencePlan(f.api,f.state.candidate,f.state.policy),/HISTORY_GAP/);
   const failed=historyFixture({conclusion:'failure'});
+  const failedRead=failed.api.executor;
+  failed.api.executor=async route=>route.startsWith('/contents/') ? {
+    type:'file',path:route.slice('/contents/'.length).split('?')[0],encoding:'base64',
+    size:18,content:Buffer.from('unsupported source').toString('base64')
+  }:failedRead(route);
   await assert.rejects(evidencePlan(failed.api,failed.state.candidate,failed.state.policy),/REQUIRES_RECONCILIATION/);
   assert.equal(failed.state.providerCalls,0);
 });

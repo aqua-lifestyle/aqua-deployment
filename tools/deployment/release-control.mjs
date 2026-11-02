@@ -17,6 +17,8 @@ import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   readGitHubArtifact, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
 import { HistoricalReconciliationDenied, isReconciledHistoricalRun, validateHistoricalContext,
   validateHistoricalArtifact, validateHistoricalAudit } from './historical-release-reconciliation.mjs';
+import { authenticatePreMutationProducer, classifyPriorFailedRun, PriorRunNotRecognized,
+  productionDeployStep, providerReadScopes } from './release-prior-run-classification.mjs';
 
 export const targets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 // Only the executor's reviewed targets.json selects this mode. Candidate input
@@ -572,8 +574,10 @@ export function validateResumeReceipt(rows, frozen) {
     'RESUME_RECEIPT_IDENTITY_MISMATCH');
     attempt = row.releaseRunAttempt;
     requireThat(['evidence-selected', 'baseline-selected', 'admitted', 'render-requesting', 'render-requested',
-      'render-ready', 'vercel-files-requesting', 'vercel-files-uploaded', 'vercel-requesting', 'vercel-requested', 'verified', 'failed'].includes(row.phase),
+      'render-ready', 'vercel-files-requesting', 'vercel-files-uploaded', 'vercel-requesting', 'vercel-requested', 'verified', 'failed',
+      'provider-read'].includes(row.phase),
       'RESUME_RECEIPT_UNVERIFIABLE');
+    requireThat(row.phase !== 'provider-read' || providerReadScopes.has(row.scope), 'RESUME_RECEIPT_UNVERIFIABLE');
     requireThat(row.phase !== 'verified', 'RELEASE_ALREADY_VERIFIED');
     requireThat(!['AMBIGUOUS_PROVIDER_POST_INSPECT_BEFORE_RETRY', 'INVALID_PROVIDER_RESPONSE',
       'RENDER_DEPLOYMENT_ID_UNAVAILABLE', 'VERCEL_DEPLOYMENT_ID_UNAVAILABLE',
@@ -672,6 +676,7 @@ export async function evidencePlan(api, candidate, policy) {
     new Set(era.map(r => r.run_number)).size === era.length &&
     era.some(r => r.id === current.id && r.run_attempt === current.run_attempt), 'RELEASE_HISTORY_GAP_RECONCILE');
   const successful = [];
+  const attemptsByRun = new Map();
   for (const run of runs.filter(r => r.id !== current.id)) {
     requireThat(run.status === 'completed', 'CONCURRENT_RELEASE_RUN');
     requireThat(run.run_attempt <= 20, 'RELEASE_ATTEMPT_HISTORY_TOO_LARGE');
@@ -680,6 +685,7 @@ export async function evidencePlan(api, candidate, policy) {
       validateReleaseRun(past);
       requireThat(past.id === run.id && past.run_attempt === attempt && past.head_sha === run.head_sha &&
         past.run_number === run.run_number && past.status === 'completed', 'RELEASE_ATTEMPT_HISTORY_UNVERIFIABLE');
+      attemptsByRun.set(`${run.id}:${attempt}`, past);
       if (past.conclusion === 'success') {
         const production = await releaseProductionJob(api, run, attempt);
         // GitHub can conclude an entirely skipped workflow successfully. It is
@@ -715,13 +721,19 @@ export async function evidencePlan(api, candidate, policy) {
   }
   let continuation;
   const historicalReconciliations = [];
+  const priorFailedRuns = [];
   for (const run of runs.filter(r => r.id !== current.id &&
     r.run_number > (latestObserved?.run_number ?? 0))) {
     // A failed prior run may have submitted a request whose history is not visible
-    // yet. Require a positively unexecuted step or the exact owner-authorized
-    // factual recognition below; neither is a successful release or retry receipt.
+    // yet. Classify it from authenticated execution evidence only: a positively
+    // unexecuted mutation stage or a complete audit proving no mutation-capable
+    // call was initiated. Neither is a successful release or retry receipt.
     for (let attempt = 1; attempt <= run.run_attempt; attempt++) {
       const production = await releaseProductionJob(api, run, attempt);
+      const past = attemptsByRun.get(`${run.id}:${attempt}`);
+      // Qualification-only success is already authenticated above. Preserve it
+      // as a successful check with no deployment, not as a failed run/predecessor.
+      if (past?.conclusion === 'success' && production.conclusion === 'skipped') continue;
       if (candidate.memberRelease !== undefined && String(run.id) === memberContinuation.runId) {
         requireThat(run.run_attempt === 1 && attempt === 1 && run.conclusion === 'failure' &&
           production.conclusion === 'failure', 'MEMBER_CONTINUATION_RUN_CHANGED');
@@ -738,12 +750,30 @@ export async function evidencePlan(api, candidate, policy) {
         historicalReconciliations.push(validateHistoricalAudit(await readReleaseAudit(api, descriptor), descriptor, pin, targets));
         continue;
       }
-      const deployStep = production?.name === 'Authorized recovery release' ?
-        'Revalidate authority, providers, source and recovery before deployment' :
-        'Revalidate policy, provenance, providers and recovery before automatic deployment';
-      requireThat(production && (production.conclusion === 'skipped' ||
-        production.steps?.some(s => s.name === deployStep && s.conclusion === 'skipped')),
-      'UNVERIFIED_PRIOR_RELEASE_REQUIRES_RECONCILIATION');
+      try {
+        let audit;
+        if (production.conclusion === 'failure' && !production.steps?.some(step =>
+          step?.name === productionDeployStep(production.name) && step?.conclusion === 'skipped')) {
+          // Only a reviewed producer with the write-ahead mutation invariant can
+          // turn a complete authenticated audit into evidence of a read-only stop.
+          requireThat(external && candidate.memberRelease === undefined,
+            'UNVERIFIED_PRIOR_RELEASE_REQUIRES_RECONCILIATION');
+          const producer = await authenticatePreMutationProducer(releaseApi(api), run.head_sha);
+          await validateExecutorApproval(api, { executorSha: run.head_sha, policySha256: candidate.policySha256 }, policy);
+          const descriptor = await auditArtifact(api, run, attempt);
+          audit = { descriptor, producer, rows: await readReleaseAudit(api, descriptor) };
+        }
+        priorFailedRuns.push(classifyPriorFailedRun({
+          run: { id: run.id, runNumber: run.run_number, runAttempt: run.run_attempt,
+            headSha: run.head_sha, status: past?.status, conclusion: past?.conclusion,
+            repository: run.repository?.full_name, headRepository: run.head_repository?.full_name },
+          attempt, production, audit }));
+      } catch (error) {
+        if (error instanceof PriorRunNotRecognized) {
+          throw new ReleaseFailure('UNVERIFIED_PRIOR_RELEASE_REQUIRES_RECONCILIATION');
+        }
+        throw error;
+      }
     }
   }
   requireThat(candidate.releaseRunAttempt <= 20, 'RELEASE_ATTEMPT_HISTORY_TOO_LARGE');
@@ -758,7 +788,7 @@ export async function evidencePlan(api, candidate, policy) {
   requireThat(candidate.memberRelease === undefined || memberReleases.length === 0,
     'MEMBER_RELEASE_ALREADY_DEPLOYED');
   requireThat(candidate.memberRelease === undefined || continuation, 'MEMBER_CONTINUATION_EVIDENCE_REQUIRED');
-  return { policySha256: candidate.policySha256, verifiedReleases,
+  return { policySha256: candidate.policySha256, verifiedReleases, priorFailedRuns,
     ...(historicalReconciliations.length ? { historicalReconciliations } : {}),
     ...(continuation ? { memberContinuation: continuation } : {}),
     ...(memberReleases.length ? { memberReleases } : {}),
@@ -910,16 +940,23 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     const replacement = prior.vercelDeployId;
     const aliasId = replacement && project.targets?.production?.id === replacement ?
       replacement : firstRecovery.vercelDeployId;
+    readScope('vercel-aliases');
     const mapping = await api.vercel(`/v2/deployments/${aliasId}/aliases`);
     validateLegacyProviderPair(firstRecovery, baseline, web, project,
       await api.vercel(legacyDomainPath), replacement, { deploymentId: aliasId, aliases: mapping?.aliases });
   };
+  // Record direct deployment read families using fixed, non-sensitive scopes.
+  // Admission/guard evidence reads retain their existing error contract.
+  const readScope = scope => report({ phase: 'provider-read', scope });
+  readScope('github-repository');
   const repository = await api.gh('');
   const readRender = async () => {
     const cleanStart = isCleanStartSchemaKind(policy.schemaFirst?.kind);
     const expected = cleanStart ? cleanStartRuntimeSettings : runtimeSettings;
+    readScope('render-service');
     const service = await api.render(servicePath);
     const rows = [];
+    readScope('render-env');
     for (const key of Object.keys(expected)) {
       const envVar = await api.render(`${servicePath}/env-vars/${key}`);
       requireThat(envVar?.key === key, 'NORMAL_RUNTIME_CONFIGURATION_UNVERIFIED');
@@ -928,9 +965,11 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     validateRender(service, rows, cleanStart);
   };
   await readRender();
+  readScope('vercel-project');
   let project = await api.vercel(projectPath);
   validateVercel(project, repository.id);
   const readVercelVariables = async () => {
+    readScope('vercel-env');
     const rows = (await api.vercel(`/v10/projects/${targets.vercel.id}/env?decrypt=false`)).envs;
     requireThat(Array.isArray(rows) && !rows.some(row =>
       /(?:BIRDAPIKEY|YOCOSECRETKEY|YOCOWEBHOOKSECRET)$/.test(String(row.key).replace(/[^A-Za-z0-9]/g, '').toUpperCase())),
@@ -945,7 +984,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     }
   };
   const readProtectedReadiness = async sha => {
-    try { validateReadiness(await api.readiness(sha), sha); }
+    try { readScope('readiness'); validateReadiness(await api.readiness(sha), sha); }
     catch { throw new ReleaseFailure('PROTECTED_RUNTIME_READINESS_FAILED'); }
   };
   await readVercelVariables();
@@ -964,10 +1003,12 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       requireThat(baselineRow.firstReleaseRecoveryEvidenceSha256 === firstRecovery.evidenceSha256,
         'FIRST_RELEASE_RECOVERY_RESUME_MISMATCH');
     } else {
+      readScope('render-deploy-history');
       const live = (await deploymentHistory(api, 'render')).filter(row => row.status === 'live');
       requireThat(live.length === 1, 'AUTOMATIC_RENDER_BASELINE_UNVERIFIABLE');
       const webId = project.targets?.production?.id;
       requireThat(/^dpl_[A-Za-z0-9]+$/.test(webId), 'AUTOMATIC_VERCEL_BASELINE_UNVERIFIABLE');
+      readScope('vercel-deployment');
       const web = await api.vercel(`/v13/deployments/${webId}`);
       baselineProof = { renderDeployId: live[0].id, renderSha: live[0].commit?.id,
         vercelDeployId: webId, vercelSha: web.gitSource?.sha,
@@ -998,9 +1039,11 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   for (const key of Object.keys(baselineFields))
     requireThat(!options.receiptRows || options.receiptRows.every(row => row[key] === undefined ||
       row[key] === baselineFields[key]), 'RESUME_BASELINE_MISMATCH');
+  readScope('render-deploy');
   const baseline = await api.render(`${servicePath}/deploys/${baselineProof.renderDeployId}`);
   requireThat(baseline.id === baselineProof.renderDeployId && baseline.commit?.id === baselineProof.renderSha &&
     ['live', 'deactivated'].includes(baseline.status), 'ROLLBACK_BASELINE_REVISION_UNAVAILABLE');
+  readScope('vercel-deployment');
   const oldWeb = await api.vercel(`/v13/deployments/${baselineProof.vercelDeployId}`);
   if (firstRecovery) await checkRecoveryPair(baseline, oldWeb, project);
   requireThat(oldWeb.id === baselineProof.vercelDeployId && oldWeb.projectId === targets.vercel.id &&
@@ -1019,13 +1062,16 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       oldWeb.meta?.aquaCiRunId === origin.ciRunId && oldWeb.meta?.aquaCiRunAttempt === String(origin.ciRunAttempt),
     'ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED');
   }
+  readScope('github-compare');
   const compare = await api.gh(`/compare/${baseline.commit.id}...${qualified.sha}`);
   requireThat(compare.status === 'ahead' || compare.status === 'identical', 'SOURCE_NOT_BASELINE_DESCENDANT');
   validateMigrationDelta(compare, !!schemaProof);
+  readScope('render-deploy-history');
   const renderDeploys = await deploymentHistory(api, 'render');
   const live = renderDeploys.filter(x => x.status === 'live');
   requireThat(live.length === 1 && (live[0].id === baselineProof.renderDeployId ||
     (live[0].id === prior.renderDeployId && live[0].commit?.id === qualified.sha)), 'RENDER_BASELINE_DRIFT');
+  readScope('health');
   validateHealth(await api.health(), live[0].commit.id);
   // First release: the legacy baseline has no readiness route. Its exact healthy
   // revision, normal configuration and verified rollback pair are still required.
@@ -1039,6 +1085,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     'RENDER_RECEIPT_DEPLOYMENT_MISMATCH');
   requireThat(renderDeploys.every(x => x.commit?.id !== qualified.sha || x.id === prior.renderDeployId),
     'RENDER_PROVENANCE_RECEIPT_REQUIRED');
+  readScope('vercel-deploy-history');
   const vercelDeploys = await deploymentHistory(api, 'vercel');
   requireThat(vercelDeploys.every(x => !activeVercel.has(x.state ?? x.readyState) ||
     x.uid === prior.vercelDeployId), 'CONCURRENT_VERCEL_DEPLOYMENT');
@@ -1056,6 +1103,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   let existingVercel;
   for (const d of vercelDeploys.filter(x => x.uid === prior.vercelDeployId)) {
     requireThat(/^dpl_[A-Za-z0-9]+$/.test(d.uid), 'VERCEL_DEPLOYMENT_ID_UNAVAILABLE');
+    readScope('vercel-deployment');
     const full = await api.vercel(`/v13/deployments/${d.uid}`);
     requireThat(isOurs(full), 'VERCEL_SOURCE_PROVENANCE_MISMATCH');
     requireThat(full.readyState === 'READY' || activeVercel.has(full.readyState), 'PRIOR_VERCEL_FAILURE_REQUIRES_OPERATOR');
@@ -1073,44 +1121,58 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     // Recheck freshness immediately before the irreversible provider request.
     await guard();
     await readRender();
+    readScope('render-deploy-history');
     const latestRender = await deploymentHistory(api, 'render');
     requireThat(latestRender.filter(x => x.status === 'live').length === 1 &&
       latestRender.some(x => x.id === baselineProof.renderDeployId && x.status === 'live' &&
         x.commit?.id === baselineProof.renderSha) && latestRender.every(x => !activeRender.has(x.status)) &&
       latestRender.every(x => x.commit?.id !== qualified.sha), 'RENDER_CHANGED_BEFORE_REQUEST');
-    if (firstRecovery) await checkRecoveryPair(
-      await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`),
-      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project);
+    if (firstRecovery) {
+      readScope('render-deploy');
+      const baseline = await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`);
+      readScope('vercel-deployment');
+      const web = await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`);
+      await checkRecoveryPair(baseline, web, project);
+    }
     report({ phase: 'render-requesting' });
     render = await api.render(`${servicePath}/deploys`, { commitId: qualified.sha, clearCache: 'do_not_clear' });
   }
   requireThat(/^dep-[a-z0-9]+$/.test(render.id), 'RENDER_DEPLOYMENT_ID_UNAVAILABLE');
   report({ phase: 'render-requested', renderDeployId: render.id,
     renderReleaseRunAttempt: prior.renderReleaseRunAttempt ?? qualified.releaseRunAttempt });
+  readScope('render-deploy');
   render = await waitFor(() => api.render(`${servicePath}/deploys/${render.id}`),
     x => x.status, 'live', activeRender, options);
   requireThat(render.commit?.id === qualified.sha, 'RENDER_SOURCE_PROVENANCE_MISMATCH');
   await readRender();
+  readScope('health');
   validateHealth(await api.health(), qualified.sha);
   await readProtectedReadiness(qualified.sha);
   report({ phase: 'render-ready', renderDeployId: render.id, sha: render.commit.id });
 
   await guard();
+  readScope('render-deploy-history');
   const currentRender = await deploymentHistory(api, 'render');
   requireThat(currentRender.filter(x => x.status === 'live').length === 1 &&
     currentRender.some(x => x.status === 'live' && x.id === render.id && x.commit?.id === qualified.sha) &&
     currentRender.every(x => !activeRender.has(x.status) || x.id === render.id), 'RENDER_CHANGED_AFTER_READINESS');
+  readScope('vercel-project');
   project = await api.vercel(projectPath);
   validateVercel(project, repository.id);
   await readVercelVariables();
   requireThat(project.targets?.production?.id === baselineProof.vercelDeployId ||
     (existingVercel && project.targets?.production?.id === existingVercel.id), 'VERCEL_BASELINE_DRIFT');
   if (!existingVercel) {
-    if (firstRecovery) await checkRecoveryPair(
-      await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`),
-      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project);
+    if (firstRecovery) {
+      readScope('render-deploy');
+      const baseline = await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`);
+      readScope('vercel-deployment');
+      const web = await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`);
+      await checkRecoveryPair(baseline, web, project);
+    }
     await guard();
     await readRender();
+    readScope('vercel-deploy-history');
     const latestVercel = await deploymentHistory(api, 'vercel');
     requireThat(latestVercel.every(x => !activeVercel.has(x.state ?? x.readyState) &&
       x.meta?.aquaCiRunId !== qualified.ciRunId && x.meta?.aquaSourceSha !== qualified.sha),
@@ -1132,20 +1194,27 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     report({ phase: 'vercel-files-uploaded' });
     // Uploads are provider operations: recheck admission and live identities again.
     await guard();
+    readScope('vercel-deploy-history');
     const afterUploads = await deploymentHistory(api, 'vercel');
     requireThat(afterUploads.every(x => !activeVercel.has(x.state ?? x.readyState) &&
       x.meta?.aquaCiRunId !== qualified.ciRunId && x.meta?.aquaSourceSha !== qualified.sha),
       'VERCEL_CHANGED_BEFORE_REQUEST');
+    readScope('render-deploy-history');
     const afterUploadRender = await deploymentHistory(api, 'render');
     requireThat(afterUploadRender.filter(x => x.status === 'live').length === 1 &&
       afterUploadRender.some(x => x.id === render.id && x.status === 'live' && x.commit?.id === qualified.sha) &&
       afterUploadRender.every(x => !activeRender.has(x.status)), 'RENDER_CHANGED_AFTER_READINESS');
+    readScope('vercel-project');
     project = await api.vercel(projectPath);
     validateVercel(project, repository.id);
     requireThat(project.targets?.production?.id === baselineProof.vercelDeployId, 'VERCEL_BASELINE_DRIFT');
-    if (firstRecovery) await checkRecoveryPair(
-      await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`),
-      await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`), project);
+    if (firstRecovery) {
+      readScope('render-deploy');
+      const baseline = await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`);
+      readScope('vercel-deployment');
+      const web = await api.vercel(`/v13/deployments/${firstRecovery.vercelDeployId}`);
+      await checkRecoveryPair(baseline, web, project);
+    }
     await readVercelVariables();
     await readProtectedReadiness(qualified.sha);
     await guard();
@@ -1157,26 +1226,35 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   requireThat(/^dpl_[A-Za-z0-9]+$/.test(existingVercel.id), 'VERCEL_DEPLOYMENT_ID_UNAVAILABLE');
   report({ phase: 'vercel-requested', vercelDeployId: existingVercel.id,
     vercelReleaseRunAttempt: prior.vercelReleaseRunAttempt ?? qualified.releaseRunAttempt });
+  readScope('vercel-deployment');
   const vercel = await waitFor(() => api.vercel(`/v13/deployments/${existingVercel.id}`),
     x => x.readyState, 'READY', activeVercel, options);
   requireThat(isOurs(vercel) && vercel.projectId === targets.vercel.id && !vercel.aliasError,
     'VERCEL_SOURCE_PROVENANCE_MISMATCH');
+  readScope('vercel-project');
   project = await api.vercel(projectPath);
   requireThat(project.targets?.production?.id === vercel.id, 'VERCEL_PRODUCTION_ALIAS_NOT_ASSIGNED');
+  readScope('web-readiness');
   await api.web();
   await guard();
   await readRender();
+  readScope('health');
   validateHealth(await api.health(), qualified.sha);
   await readProtectedReadiness(qualified.sha);
+  readScope('render-deploy-history');
   const finalRender = await deploymentHistory(api, 'render');
   requireThat(finalRender.filter(x => x.status === 'live').length === 1 &&
     finalRender.some(x => x.id === render.id && x.status === 'live' && x.commit?.id === qualified.sha) &&
     finalRender.every(x => !activeRender.has(x.status)), 'RENDER_CHANGED_BEFORE_VERIFICATION');
-  validateVercel(project = await api.vercel(projectPath), repository.id);
+  readScope('vercel-project');
+  project = await api.vercel(projectPath);
+  validateVercel(project, repository.id);
   await readVercelVariables();
+  readScope('vercel-deployment');
   const finalWeb = await api.vercel(`/v13/deployments/${vercel.id}`);
   requireThat(project.targets?.production?.id === vercel.id && finalWeb.readyState === 'READY' &&
     isOurs(finalWeb) && !finalWeb.aliasError, 'VERCEL_CHANGED_BEFORE_VERIFICATION');
+  readScope('vercel-deploy-history');
   const finalVercel = await deploymentHistory(api, 'vercel');
   requireThat(finalVercel.every(x => !activeVercel.has(x.state ?? x.readyState) || x.uid === vercel.id),
     'CONCURRENT_VERCEL_BEFORE_VERIFICATION');
@@ -1346,7 +1424,8 @@ export async function run(env, options = {}) {
     const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied ||
       error instanceof GovernanceReadbackDenied || error instanceof VercelSourceDenied ||
       error instanceof FirstReleaseRecoveryDenied || error instanceof SchemaFirstDenied ||
-      error instanceof MemberReleaseDenied || error instanceof HistoricalReconciliationDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
+      error instanceof MemberReleaseDenied || error instanceof HistoricalReconciliationDenied ||
+      error instanceof PriorRunNotRecognized) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
     if (failureReport) failureReport(code);
     else if (env.RELEASE_REPORT)
       appendFileSync(env.RELEASE_REPORT, JSON.stringify({ phase: 'blocked', code, identityVerified: false }) + '\n');

@@ -199,7 +199,10 @@ test('unrelated failed provider runs still deny even after both exact reconcilia
   const f = historyFixture(), unrelated = { ...prior(record.runs[0]), id: 999, run_number: 8 };
   f.history[0].run_number = 9; f.history.push(unrelated);
   const read = f.api.executor;
-  f.api.executor = async path => path === '/actions/runs/999/attempts/1/jobs?per_page=100' ? { total_count: 3, jobs: [
+  f.api.executor = async path => path.startsWith('/contents/') ? {
+    type: 'file', path: path.slice('/contents/'.length).split('?')[0], encoding: 'base64',
+    size: 18, content: Buffer.from('unsupported source').toString('base64')
+  } : path === '/actions/runs/999/attempts/1/jobs?per_page=100' ? { total_count: 3, jobs: [
     { name: 'Qualify immutable source candidate', conclusion: 'success' },
     { name: admissionJobName, conclusion: 'success' }, production(unrelated)
   ].map(j => ({ ...j, run_id: 999, run_attempt: 1, status: 'completed' })) } : read(path);
