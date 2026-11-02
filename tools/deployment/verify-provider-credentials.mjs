@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { clients, targets, standingPolicy, validateRender } from './release-control.mjs';
-import { runtimeSettings } from './runtime-readiness.mjs';
+import { runtimeSettings, cleanStartRuntimeSettings } from './runtime-readiness.mjs';
 import { memberRuntimeSettings } from './member-release.mjs';
 const nativeSource = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
 const heldFrontend = JSON.parse(readFileSync(new URL('../../governance/held-frontend-source-evidence-20261029.json', import.meta.url)));
@@ -23,6 +23,72 @@ export function providerCheckContext(env, checkoutSha) {
     !standingPolicy.authorization.administrators.some(a =>
       a.login === env.GITHUB_ACTOR && String(a.id) === env.GITHUB_ACTOR_ID) ||
     !standingPolicy.authorization.administrators.some(a => a.login === env.GITHUB_TRIGGERING_ACTOR)) denied();
+}
+
+export function providerCheckMode(env) {
+  const mode = env.PROVIDER_CHECK_MODE ?? 'verify';
+  if (!['verify', 'native-recovery-readback', 'render-env-diagnostic'].includes(mode)) denied();
+  if (mode === 'render-env-diagnostic' &&
+    (!/^[1-9]\d*$/.test(env.GITHUB_RUN_ID ?? '') || env.GITHUB_RUN_ATTEMPT !== '1')) denied();
+  return mode;
+}
+
+// One bounded, fixed-service diagnostic. No group/environment enumeration, secret
+// value output, redirects, retries or provider operations other than these GETs.
+export async function diagnoseRenderEnvironment(env, { checkoutSha, fetcher = fetch, emit = () => {} }) {
+  providerCheckContext(env, checkoutSha);
+  if (providerCheckMode(env) !== 'render-env-diagnostic') denied();
+  const report = row => emit({ contract: 'aqua.render-environment-read-diagnostic', version: 1,
+    executorSha: checkoutSha, runId: env.GITHUB_RUN_ID, runAttempt: 1,
+    renderServiceId: targets.render.id, ...row });
+  if (typeof env.RENDER_API_KEY !== 'string' || !env.RENDER_API_KEY.trim()) {
+    report({ result: 'FAIL', classification: 'CREDENTIAL_MISSING' }); return false;
+  }
+  let active;
+  const transport = async (url, options) => {
+    if (!active || url !== active.url || options.method !== 'GET' || options.body !== undefined ||
+      options.redirect !== 'error') throw Error('FIXED_GET_ONLY_REQUIRED');
+    const response = await fetcher(url, options);
+    active.httpStatus = response.status;
+    return response;
+  };
+  const api = clients({ RENDER_API_KEY: env.RENDER_API_KEY }, transport);
+  const read = async (check, key) => {
+    const path = `/services/${targets.render.id}` + (key ? `/env-vars/${key}` : '');
+    active = { check, ...(key ? { key } : {}), url: 'https://api.render.com/v1' + path };
+    return api.render(path);
+  };
+  let valuesMatch = true;
+  try {
+    const service = await read('service-identity');
+    if (active.httpStatus !== 200 || service?.id !== targets.render.id || service.name !== targets.render.name)
+      throw Error('RESPONSE_IDENTITY_OR_SHAPE_UNVERIFIED');
+    report({ check: active.check, httpStatus: active.httpStatus, result: 'PASS' });
+    // Preserve the production validator's exact order, including CLEAN_START's
+    // thirteenth setting. These identifiers are executor-owned, never inputs.
+    for (const [key, allowed] of Object.entries(cleanStartRuntimeSettings)) {
+      const variable = await read('environment-variable', key);
+      if (active.httpStatus !== 200 || variable?.key !== key || typeof variable.value !== 'string')
+        throw Error('RESPONSE_IDENTITY_OR_SHAPE_UNVERIFIED');
+      const matches = allowed.includes(variable.value);
+      valuesMatch &&= matches;
+      report({ check: active.check, key, httpStatus: active.httpStatus,
+        configurationSource: 'SERVICE_LEVEL', result: matches ? 'PASS' : 'FAIL',
+        classification: matches ? 'ALLOWLISTED_CONFIGURATION_MATCH' : 'ALLOWLISTED_CONFIGURATION_MISMATCH' });
+    }
+    report({ check: 'complete', result: valuesMatch ? 'PASS' : 'FAIL' });
+    return valuesMatch;
+  } catch {
+    const status = active?.httpStatus;
+    const classification = status === undefined ? 'TRANSPORT_UNAVAILABLE' : status === 200 ?
+      'RESPONSE_IDENTITY_OR_SHAPE_UNVERIFIED' : ({ 400: 'REQUEST_REJECTED', 401: 'AUTHENTICATION_REJECTED',
+        403: 'PERMISSION_OR_POLICY_DENIED', 404: 'RESOURCE_OR_VARIABLE_UNAVAILABLE',
+        429: 'RATE_LIMITED' })[status] ?? (status >= 500 ? 'PROVIDER_UNAVAILABLE' : 'HTTP_REJECTED');
+    report({ check: active?.check ?? 'context', ...(active?.key ? { key: active.key,
+      configurationSource: 'NOT_ESTABLISHED', inheritedConfiguration: 'NOT_DETERMINED' } : {}),
+      ...(status === undefined ? {} : { httpStatus: status }), result: 'FAIL', classification });
+    return false;
+  }
 }
 
 export async function verifyProviderCredentials(env, { checkoutSha, fetcher = fetch, emit = () => {} }) {
@@ -218,11 +284,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const checkoutSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     providerCheckContext(process.env, checkoutSha);
+    const mode = providerCheckMode(process.env);
     if (process.argv[2] === 'context') console.log(JSON.stringify({ check: 'trusted-main-context', result: 'PASS' }));
     else if (process.argv[2] === 'verify') {
-      const mode = process.env.PROVIDER_CHECK_MODE ?? 'verify';
-      if (!['verify', 'native-recovery-readback'].includes(mode)) throw Error('INVALID_MODE');
-      const operation = mode === 'native-recovery-readback' ? observeNativeRecoveryBaseline : verifyProviderCredentials;
+      const operation = mode === 'render-env-diagnostic' ? diagnoseRenderEnvironment :
+        mode === 'native-recovery-readback' ? observeNativeRecoveryBaseline : verifyProviderCredentials;
       if (!await operation(process.env, { checkoutSha, emit: row => console.log(JSON.stringify(row)) })) process.exitCode = 1;
     } else if (process.argv[2] === 'native-recovery-readback') {
       if (!await observeNativeRecoveryBaseline(process.env, { checkoutSha, emit: row => console.log(JSON.stringify(row)) })) process.exitCode = 1;
