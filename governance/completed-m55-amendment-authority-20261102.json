@@ -1,0 +1,47 @@
+{
+  "contract": "aqua.completed-migration55-historical-evidence-authority",
+  "version": 1,
+  "recordedOn": "2026-11-02",
+  "businessDecisionStatus": "CONFIRMED",
+  "authorityOrigin": "Explicit owner authorization in the current authenticated conversation: AQGreen V2 — Owner Authorization: Bounded Admission Amendment.",
+  "ownerDecision": {
+    "reducedHistoricalBaselineAssuranceExplicitlyAccepted": true,
+    "historicalEvidenceDisposition": "HISTORICAL_EVIDENCE_UNAVAILABLE",
+    "historicalFingerprintsObservedReconstructedOrVerified": false,
+    "minimumVersionedExecutorOwnedAmendmentAuthorized": true,
+    "onlyHistoricalPreDdlFingerprintPredicatesMayBeReplaced": true
+  },
+  "scope": {
+    "applicationSha": "a4755801ce89868d7791422f3c983363ab76bf30",
+    "nativeDatabaseIdentitySha256": "be9ac8fd3ee1b9dd4389633358971f97a1dac2bf35370ed2e87b5cc814a8e324",
+    "tenantId": 1,
+    "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
+    "reviewedSqlSha256": "1f45ef7b67fa6eae747ca70edfed05679ef63cf4cfe2f2cf308b9d31b8c1faea",
+    "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+    "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY"
+  },
+  "immutableExistingEvidence": {
+    "operationRecordReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/5482e89efd96c0070cfbda02d62e1eb972c741de/governance/aqgreen-clean-start-actual-20261102.json",
+    "retirementConservationSha256": "752a1b4e90c0ffbdf6ae8b6f1a0487fad50e81f8ee8802968d81875fd26ff81c",
+    "retirementAuthoritySha256": "e5c36880959df7c681fbc43490c772667563999bcdd5e62476fd2e5ca8ccc7db",
+    "conservationAcceptanceSha256": "4176740775e5597709f274585ccb64fb008a55831a4f4187263854317e989d0d",
+    "migrationAuthoritySha256": "19c170614620b4ab109abd8df1d40aab57983c077bf2568b2ac20aa2865a7aa9",
+    "migrationVerificationSha256": "b63e6a933f322c16586687f62af29feab65d93162aec21e83734f198322e0ffd",
+    "cleanupSha256": "e744dab01d10492acff23a7b7524cea06b0861b0d6b134368c206463cfd54b60",
+    "beforeHistorySha256": "64884df1307d040e0ba9cf863e3227a5b507dad364bc78624c58a877b5bf6fa9",
+    "afterHistorySha256": "94858012ef8a3c97ac167403284ac17a7d56d29da1bd12913aa998cdf639ef9c"
+  },
+  "preservedControls": [
+    "Exact application/source/CI/security-definition and existing target pins",
+    "Complete immutable alternative evidence, authorization ordering and freshness",
+    "Anti-substitution, replay, protected review/merge and required safety checks",
+    "Existing recovery, Render-first, Normal/replay and financial-activation gates"
+  ],
+  "genericWaiversCandidateSelectionAndSilentFallbacksAuthorized": false,
+  "otherMigrationsDatabasesPopulationsOrApplicationRevisionsAuthorized": false,
+  "repeatingMigrationOrChangingProductionAuthorized": false,
+  "providerOrCredentialChangesAuthorized": false,
+  "deploymentOrFinancialActivationAuthorized": false,
+  "stopAfterMergedMainAdmissionValidation": true
+}
