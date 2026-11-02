@@ -1,7 +1,7 @@
 {
   "contract": "aqua.commission-schema-first-readback",
-  "version": 3,
-  "status": "UNVERIFIED",
+  "version": 4,
+  "status": "VERIFIED",
   "observation": {
     "candidateSha": "a4755801ce89868d7791422f3c983363ab76bf30",
     "observedAt": "2026-11-02T09:17:58.363Z",
@@ -96,5 +96,14 @@
       "legacyFinancialRollbackAllowed": false,
       "evidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/5482e89efd96c0070cfbda02d62e1eb972c741de/governance/aqgreen-clean-start-actual-20261102.json"
     }
+  },
+  "alternativeEvidence": {
+    "kind": "COMPLETED_ADDITIVE_MIGRATION55_V1",
+    "historicalEvidenceDisposition": "HISTORICAL_EVIDENCE_UNAVAILABLE",
+    "bundleSha256": "d1d656089dc187fa9d9cb25b3581494e70d5e9544e9961dd119026112dbc209e",
+    "ownerAuthorizationSha256": "4e89d81ad62f0e86308e29a64c9ede24ee92fd9f3b1edc273cbb9dfed77193aa",
+    "ownerAuthorizationReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/e503ab059d2a87348d549754e77d4a431b2c1ef0/governance/completed-m55-amendment-authority-20261102.json",
+    "operationEvidenceSha256": "e1f7da29d1ae54e87d6058531befa1ac324aafae74bd6c0ecf0d83f3c546042a",
+    "operationEvidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/5482e89efd96c0070cfbda02d62e1eb972c741de/governance/aqgreen-clean-start-actual-20261102.json"
   }
 }

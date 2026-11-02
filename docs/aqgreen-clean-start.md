@@ -1,5 +1,13 @@
 # Explicit AQGreen CLEAN_START schema-first admission
 
+## Completed migration55 alternative evidence
+
+The separately owner-authorized bounded version4 contract is described in
+[completed-migration55-admission.md](completed-migration55-admission.md). It selects
+only the pinned completed transition and preserves the final historical-evidence
+unavailability declaration. Earlier UNVERIFIED/source-policy descriptions below
+are historical; unrelated release/recovery/provider gates remain enforced.
+
 ## Prospective-boundary source pin refresh
 
 The owner authorized a prospective CLEAN_START effective time ("boundry can happen
