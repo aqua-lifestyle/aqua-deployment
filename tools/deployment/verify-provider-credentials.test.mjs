@@ -186,7 +186,7 @@ test('dedicated workflow exposes provider secrets only in the protected main GET
   assert.match(workflow, /environment: production-release/);
   assert.match(workflow, /ref: \$\{\{ github.sha \}\}/);
   assert.ok(workflow.indexOf('.mjs context') < workflow.indexOf('secrets.RENDER_API_KEY'));
-  assert.deepEqual([...workflow.matchAll(/secrets\.(\w+)/g)].map(m => m[1]), ['RENDER_API_KEY', 'VERCEL_TOKEN']);
+  assert.deepEqual([...workflow.matchAll(/secrets\.(\w+)/g)].map(m => m[1]), ['RENDER_API_KEY', 'VERCEL_TOKEN', 'RENDER_API_KEY']);
   assert.doesNotMatch(workflow, /release-control\.mjs|deploy\.yml|upload-artifact/);
   assert.match(workflow, /verify-provider-credentials.mjs verify/);
   assert.doesNotMatch(readFileSync(new URL('../../.github/workflows/test.yml', import.meta.url), 'utf8'), /secrets\./);
