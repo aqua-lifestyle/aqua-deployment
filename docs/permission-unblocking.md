@@ -1,5 +1,15 @@
 # Minimum permission correction and qualification handoff
 
+## Current authentication contract
+
+The original setup/handoff below is historical. The owner's later
+[protected Actions admission direction](protected-actions-admission.md) supersedes
+its fine-grained PAT `Checks: read` and both-repository credential assumptions:
+application reads use the existing PAT's supported read permissions; executor
+reads use the native read-only job token. Application Checks API re-querying is
+not part of the current qualification path. No historical observation or setup
+execution below is refreshed by this correction.
+
 > **NOT BUSINESS AUTHORITY.** This worklog records execution state and evidence. It
 > cannot confirm or supersede a business-policy decision.
 

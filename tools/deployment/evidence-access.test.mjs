@@ -5,7 +5,7 @@ import { clients, targets, validateInfrastructure } from './release-control.mjs'
 import { approvedBypassReadback, approvedReadbacks } from './governance-readback.mjs';
 import { fixture } from './fixtures/provider.mjs';
 
-test('GitHub evidence uses only the explicit read credential, with fixed repositories and GET operations', async () => {
+test('GitHub evidence uses the source read token and executor job token on their fixed repositories with GET only', async () => {
   const calls = [];
   const api = clients({ GH_TOKEN: 'job-token', AQGREEN_EVIDENCE_READ_TOKEN: 'read-canary' }, async (url, options) => {
     calls.push({ url, options }); return Response.json({});
@@ -14,7 +14,8 @@ test('GitHub evidence uses only the explicit read credential, with fixed reposit
   assert.deepEqual(calls.map(x => x.url), [
     `https://api.github.com/repos/${targets.repository}/actions/runs/123`,
     `https://api.github.com/repos/${targets.executor.repository}/actions/runs/456`]);
-  assert.ok(calls.every(x => x.options.method === 'GET' && x.options.headers.Authorization === 'Bearer read-canary'));
+  assert.ok(calls.every(x => x.options.method === 'GET' && x.options.headers['X-GitHub-Api-Version'] === '2022-11-28'));
+  assert.deepEqual(calls.map(x => x.options.headers.Authorization), ['Bearer read-canary', 'Bearer job-token']);
   assert.throws(() => api.gh('/actions/runs', {}), /GITHUB_EVIDENCE_WRITE_FORBIDDEN/);
   assert.throws(() => api.executor('/actions/runs', {}), /GITHUB_EVIDENCE_WRITE_FORBIDDEN/);
   assert.equal(calls.length, 2);
@@ -25,8 +26,16 @@ test('missing read credential never falls back to job/provider credentials or an
   const api = clients({ GH_TOKEN: 'job-token', RENDER_API_KEY: 'render', VERCEL_TOKEN: 'vercel' },
     async () => { calls++; throw Error('must not fetch'); });
   assert.throws(() => api.gh('/actions/runs/123'), /GITHUB_EVIDENCE_READ_CREDENTIAL_REQUIRED/);
-  assert.throws(() => api.executor('/actions/runs/456'), /GITHUB_EVIDENCE_READ_CREDENTIAL_REQUIRED/);
   await assert.rejects(api.artifact('source', '7890'), /GITHUB_EVIDENCE_READ_CREDENTIAL_REQUIRED/);
+  assert.equal(calls, 0);
+});
+
+test('missing executor job credential never falls back to the source PAT or provider credentials', async () => {
+  let calls = 0;
+  const api = clients({ AQGREEN_EVIDENCE_READ_TOKEN: 'read-canary', RENDER_API_KEY: 'render', VERCEL_TOKEN: 'vercel' },
+    async () => { calls++; throw Error('must not fetch'); });
+  assert.throws(() => api.executor('/actions/runs/456'), /GITHUB_EXECUTOR_JOB_CREDENTIAL_REQUIRED/);
+  await assert.rejects(api.artifact('executor', '7890'), /GITHUB_EXECUTOR_JOB_CREDENTIAL_REQUIRED/);
   assert.equal(calls, 0);
 });
 
@@ -34,7 +43,7 @@ test('read authentication rejection fails closed and does not retry with another
   for (const status of [401, 403, 404, 503]) {
     let calls = 0;
     const api = clients({ AQGREEN_EVIDENCE_READ_TOKEN: 'read-canary', GH_TOKEN: 'job-token' },
-      async () => { calls++; return new Response(null, { status }); });
+      async () => { calls++; return new Response(null, { status }); }, () => {});
     await assert.rejects(api.gh('/actions/runs/123'), /READ_REJECTED/);
     await assert.rejects(api.artifact('source', '7890'), /DOWNLOAD_UNAVAILABLE/);
     assert.equal(calls, 2);
@@ -104,7 +113,8 @@ test('administrator merge approval precedes use of any governance readback', asy
 test('read secret is scoped to fixed executor steps and never added to untrusted PR test execution', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   assert.equal([...workflow.matchAll(/AQGREEN_EVIDENCE_READ_TOKEN: \$\{\{ secrets\.AQGREEN_EVIDENCE_READ_TOKEN \}\}/g)].length, 5);
-  assert.doesNotMatch(workflow, /GH_TOKEN:|secrets\.(?!AQGREEN_EVIDENCE_READ_TOKEN|RENDER_API_KEY|VERCEL_TOKEN)/);
+  assert.equal([...workflow.matchAll(/GH_TOKEN: \$\{\{ github.token \}\}/g)].length, 3);
+  assert.doesNotMatch(workflow, /secrets\.(?!AQGREEN_EVIDENCE_READ_TOKEN|RENDER_API_KEY|VERCEL_TOKEN)/);
   const beforeProduction = workflow.split('\n  production:\n')[0];
   assert.doesNotMatch(beforeProduction, /secrets\.(RENDER_API_KEY|VERCEL_TOKEN)|environment:/);
   assert.doesNotMatch(readFileSync(new URL('../../.github/workflows/test.yml', import.meta.url), 'utf8'), /secrets\./);

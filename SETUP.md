@@ -24,6 +24,12 @@ sanitized HTTP/object-match verdict. It does not fetch source, dispatch release
 admission, change credentials or grant permissions. Execute it only under the
 owner's bounded authorization; its result is not production authorization.
 
+The current [trusted-administrator Actions admission](docs/protected-actions-admission.md)
+uses GitHub's authenticated run/attempt/job results plus the protected App-15368
+required contexts, rather than a duplicate application Checks API lookup. Source
+reads use the existing application read PAT; executor-local reads use the native
+read-only job token. No additional App or diagnostic workflow is required.
+
 The earlier commission-invalidation correction selects policy v7; see the
 [schema-first and forward-only operator procedure](docs/first-release-recovery.md#commission-invalidation-schema-first-policy-v7).
 It adds no migration execution, deployment dispatch, credential or activation step.
@@ -159,14 +165,18 @@ Each mutation needs separate owner authorization and authoritative readback.
    Provider secrets belong only to that environment, never application workflows,
    candidate/admission jobs, repository-wide or shared organization exposure.
 3. Preserve the owner-created expiring fine-grained GitHub PAT scoped to only these
-   two repositories, with Actions, Checks, Contents, Pull requests and Metadata
+   application repository, with Actions, Contents, Pull requests and Metadata
    **read** permissions; no other permissions, including Administration or Secrets.
+   Existing wider repository selection is not changed by this code correction.
+   Fine-grained PATs cannot call the Checks API; no such permission is required.
+   Executor-local reads and artifact downloads explicitly use `GH_TOKEN` mapped
+   to `github.token` under the existing read-only workflow permissions.
    It is stored only as executor repository secret `AQGREEN_EVIDENCE_READ_TOKEN`.
    This GitHub evidence credential is available to fixed controller steps and the
    explicitly approved credential-check step, not ordinary PR tests or application
    code. It is not a provider key.
-   The controller never falls back to `github.token`, anonymous retrieval or
-   another credential. Verify actual access before qualification; scope/expiration
+    Neither source nor executor requests fall back to the other credential or
+    anonymous retrieval. Verify actual access before qualification; scope/expiration
    and renewal are owner setup, not recurring release approval.
    Hidden bypass metadata uses the executor-owned administrator readbacks described
    below, not runtime ruleset-write access.

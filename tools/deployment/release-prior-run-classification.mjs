@@ -43,9 +43,15 @@ const positiveAttempt = value => Number.isSafeInteger(value) && value > 0;
 // Recognition relies on the producer's write-ahead mutation rows, not merely
 // their absence. Authenticate the controller and workflow bytes at the exact
 // producing revision. These are code fingerprints, never run-ID exceptions.
-const workflowDigest = sha256(readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url)));
+const workflowDigests = new Set([
+  sha256(readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url))),
+  // Preserve the reviewed pre-routing producer; only credential-step env changes.
+  '018d52b64d1acbeabef5d60704fbc200d4fd0036632489a228559c68f4610f8d'
+]);
 const controllerDigests = new Set([
   sha256(readFileSync(new URL('./release-control.mjs', import.meta.url))),
+  // Reviewed 11f8fd0 producer retains the same write-ahead mutation ordering.
+  '7e174fe8c165f869156cdc2759717bc72ca116264bd1a5da6d7b7a3693cd6ecf',
   // Reviewed pre-instrumentation controller, with the same write-ahead invariant.
   'e4b76c1a5ca22d047675e5f1d7964bd20f9c413d3bc540cd29f7406834c585ab'
 ]);
@@ -62,7 +68,7 @@ export async function authenticatePreMutationProducer(read, executorSha) {
     check(bytes.length === file.size, 'PRIOR_PRODUCER_SOURCE_INCOMPLETE');
     digests.push(sha256(bytes));
   }
-  check(digests[0] === workflowDigest && controllerDigests.has(digests[1]),
+  check(workflowDigests.has(digests[0]) && controllerDigests.has(digests[1]),
     'PRIOR_PRODUCER_WRITE_AHEAD_CONTRACT_UNSUPPORTED');
   return { executorSha, workflowSha256: digests[0], controllerSha256: digests[1] };
 }
@@ -174,7 +180,7 @@ export function classifyPriorFailedRun({ run, attempt, production, audit } = {})
     'PRIOR_PRODUCTION_STEP_UNVERIFIABLE');
   check(audit && typeof audit === 'object' && audit.descriptor && Array.isArray(audit.rows),
     'PRIOR_AUDIT_AUTHENTICATED_EVIDENCE_REQUIRED');
-  check(audit.producer?.executorSha === run.headSha && audit.producer.workflowSha256 === workflowDigest &&
+  check(audit.producer?.executorSha === run.headSha && workflowDigests.has(audit.producer.workflowSha256) &&
     controllerDigests.has(audit.producer.controllerSha256), 'PRIOR_PRODUCER_WRITE_AHEAD_CONTRACT_UNSUPPORTED');
   check(audit.descriptor.runId === String(run.id) && audit.descriptor.runAttempt === attempt &&
     audit.descriptor.sha === run.headSha, 'PRIOR_AUDIT_DESCRIPTOR_BINDING_FAILED');
