@@ -3,6 +3,11 @@
 Version: 1. Base executor: `da5ad09008a42524abe298e31009bf5bef1c06d7`.
 Branch: `fix/completed-m55-candidate-binding-20261103`.
 
+The later [CLEAN_START completion-lifetime correction](clean-start-completion-lifetime.md)
+removes the obsolete rolling expiry on this immutable completed operation. It does
+not change the original facts/times, source compatibility or current recovery/live
+safety requirements. Validation results below record the original implementation.
+
 ## Owner direction and preserved facts
 
 The owner's **“Resolve Final Migration Evidence Binding”** direction authorizes one

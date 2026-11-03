@@ -2,6 +2,12 @@
 
 ## Current exact-candidate carry-forward
 
+The later [completion-lifetime correction](clean-start-completion-lifetime.md)
+removes the shared legacy 24-hour age gate from the pinned completed operation.
+Original chronology and evidence integrity remain; current CI/recovery/live-safety
+checks retain their independent requirements. CLEAN_START does not select B6
+acquisition or B6 evidence.
+
 The [owner-authorized carry-forward](completed-m55-candidate-carry-forward.md)
 extends this existing completed-operation prerequisite to accepted source
 `1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503` only. It preserves all original evidence
@@ -43,7 +49,7 @@ operation record bytes are checked locally against their pinned immutable hashes
 and all selected evidence anchors. No provider credential is sent to evidence URLs.
 
 All existing source/CI/security-definition, migration-delta, approval ordering,
-freshness, financial/custody/recovery, anti-replay, provider and Render-first checks
+current CI/recovery freshness, financial/custody/recovery, anti-replay, provider and Render-first checks
 still run. This does not attest a full historical schema snapshot or prove absence
 of every prior unmanaged column change. History digests remain history digests.
 
