@@ -10,6 +10,8 @@ const completedMigration55 = JSON.parse(readFileSync(new URL('./completed-migrat
 const fixedTargets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 const completedAuthorityBytes = readFileSync(new URL('../../governance/completed-m55-amendment-authority-20261102.json', import.meta.url));
 const completedOperationBytes = readFileSync(new URL('../../governance/aqgreen-clean-start-actual-20261102.json', import.meta.url));
+const carryCandidateSha = '1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503';
+const carryRecordSha256 = '086721f085a7ac99396481aae80c2bb4416a648938b33e338de7722ec0ac2f60';
 export const completedMigration55PolicyKind = 'commission-invalidation-clean-start-completed-m55-v1';
 export const isCleanStartSchemaKind = kind =>
   ['commission-invalidation-clean-start-v1', completedMigration55PolicyKind].includes(kind);
@@ -47,14 +49,40 @@ export function validateMigrationDelta(compare, schemaEnabled = false, requireAd
       f.status === pin.status && !f.previous_filename).length === 1), 'SCHEMA_MIGRATION_NOT_APPROVED');
 }
 
+export function validateCompletedCandidateCarryForward(bytes = readFileSync(
+  new URL('../../governance/completed-m55-candidate-carry-forward-20261103.json', import.meta.url))) {
+  check(Buffer.isBuffer(bytes) && sha256(bytes) === carryRecordSha256, 'COMPLETED_M55_CARRY_FORWARD_CHANGED');
+  const c = JSON.parse(bytes), p = completedMigration55;
+  const guard = schemaSource.cleanStartSources.find(pin => pin.path.endsWith('/ApplicationRecoveryMiddleware.cs'));
+  check(c.contract === 'aqua.completed-m55-exact-candidate-carry-forward' && c.version === 1 &&
+    c.candidateSha === carryCandidateSha && c.operationSourceSha === p.candidateSha &&
+    c.completedEvidenceSha256 === objectDigest(p) && c.sourceManifestSha256 === p.sourceManifestSha256 &&
+    c.policyScopeSha256 === p.policyScopeSha256 && c.targetsSha256 === p.targetsSha256 &&
+    c.databaseIdentitySha256 === p.databaseIdentitySha256 && c.tenantId === p.tenantId && c.migrationId === p.migrationId &&
+    c.migrationDefinitionSha256 === p.migrationDefinitionSha256 && c.reviewedSqlSha256 === p.reviewedSqlSha256 &&
+    guard && c.guardOverride.path === guard.path && c.guardOverride.operationSourceSha256 === guard.sha256 &&
+    digest(c.guardOverride.candidateSha256) &&
+    sha256(completedAuthorityBytes) === p.ownerAuthorizationSha256 && sha256(completedOperationBytes) === p.operationEvidenceSha256 &&
+    ['originalOperationEvidenceModified', 'historicalObservationTimesRefreshed', 'databaseOperationAuthorized',
+      'financialActivationAuthorized', 'productionDeploymentAuthorized'].every(key => c[key] === false),
+  'COMPLETED_M55_CARRY_FORWARD_SCOPE_REQUIRED');
+  return c;
+}
+
 function validateCompletedMigration55Scope(q, policy) {
   const p = completedMigration55;
-  check(q?.sha === p.candidateSha && objectDigest(policy.scope) === p.policyScopeSha256 &&
+  let compatibility = null;
+  if (q?.sha !== p.candidateSha) {
+    check(q?.sha === carryCandidateSha, 'COMPLETED_M55_EXACT_SCOPE_REQUIRED');
+    compatibility = validateCompletedCandidateCarryForward();
+  }
+  check(objectDigest(policy.scope) === p.policyScopeSha256 &&
     objectDigest(fixedTargets) === p.targetsSha256 && objectDigest(schemaSource) === p.sourceManifestSha256 &&
     schemaSource.sourceSha === p.candidateSha && schemaSource.migrationId === p.migrationId &&
     schemaSource.migrationFiles[0]?.sha256 === p.migrationDefinitionSha256 &&
     schemaSource.cleanStartSources?.some(x => x.path.endsWith('/migration-55.reviewed.sql') && x.sha256 === p.reviewedSqlSha256),
   'COMPLETED_M55_EXACT_SCOPE_REQUIRED');
+  return compatibility;
 }
 
 function validateCompletedMigration55Evidence(r, q, policy) {
@@ -111,9 +139,10 @@ export function validateSchemaReadback(r, q, policy, hasBaseline, now = Date.now
     r.contract === 'aqua.commission-schema-first-readback' && r.version === (completed ? 4 : clean ? ownerAttested ? 3 : 2 : 1) && r.status === 'VERIFIED',
   'SCHEMA_EVIDENCE_REQUIRED');
   const o = r.observation;
+  const compatibility = completed ? validateCompletedMigration55Scope(q, policy) : null;
   check(exact(o, ['candidateSha', 'observedAt', 'observer', 'databaseIdentitySha256', 'tenantId',
     clean ? 'cleanStart' : 'b6', 'authorization', 'application', 'controls', 'recovery']) && sha(o.candidateSha) &&
-    (hasBaseline || o.candidateSha === q.sha) && digest(o.databaseIdentitySha256) &&
+    (hasBaseline || o.candidateSha === q.sha || compatibility?.operationSourceSha === o.candidateSha) && digest(o.databaseIdentitySha256) &&
     Number.isSafeInteger(o.tenantId) && o.tenantId > 0, 'SCHEMA_SCOPE_MISMATCH');
   check(exact(o.observer, ['login', 'id']) && policy.authorization.administrators.some(
     a => a.login === o.observer.login && a.id === o.observer.id), 'SCHEMA_OBSERVER_UNAPPROVED');
@@ -211,17 +240,27 @@ export async function verifySchemaFirst(api, q, policy, readSource, readback = a
   if (policy.version !== 7) return null; // Explicit historical policy, never an evidence fallback.
   check(validSchemaPolicy(policy.schemaFirst), 'SCHEMA_POLICY_INVALID');
   const clean = isCleanStartSchemaKind(policy.schemaFirst.kind);
-  if (policy.schemaFirst.kind === completedMigration55PolicyKind) validateCompletedMigration55Scope(q, policy);
+  const compatibility = policy.schemaFirst.kind === completedMigration55PolicyKind ? validateCompletedMigration55Scope(q, policy) : null;
   check(!clean || schemaSource.cleanStartSources?.length > 0, 'CLEAN_START_SOURCES_NOT_PINNED');
   for (const pin of [...schemaSource.migrationFiles, ...schemaSource.holdSources,
     ...(clean ? schemaSource.cleanStartSources : [])])
-    check(await readSource(pin.path) === pin.sha256, 'SCHEMA_OR_PAYOUT_GUARD_SOURCE_CHANGED');
+    check(await readSource(pin.path) === (compatibility?.guardOverride.path === pin.path ?
+      compatibility.guardOverride.candidateSha256 : pin.sha256), 'SCHEMA_OR_PAYOUT_GUARD_SOURCE_CHANGED');
   // The legacy-to-candidate diff must contain exactly the three pinned schema
   // files, including on later code-only releases. No further DDL is authorized.
   validateMigrationDelta(await api.gh(`/compare/${policy.firstReleaseRecovery.baseline.renderSha}...${q.sha}`), true, true);
+  if (compatibility) {
+    const ancestry = await api.gh(`/compare/${compatibility.operationSourceSha}...${q.sha}`);
+    check(ancestry && ancestry.status === 'ahead', 'COMPLETED_M55_CANDIDATE_ANCESTRY_REQUIRED');
+    validateMigrationDelta(ancestry, false);
+  }
   if (q.qualificationOnly) return null; // Purpose-bound receipts cannot deploy.
   const proof = validateSchemaReadback(readback, q, policy, hasBaseline, now);
   if (proof.initialSourceSha !== q.sha) {
+    if (compatibility) {
+      check(proof.initialSourceSha === compatibility.operationSourceSha, 'COMPLETED_M55_OPERATION_SOURCE_CHANGED');
+      return proof;
+    }
     const ancestry = await api.gh(`/compare/${proof.initialSourceSha}...${q.sha}`);
     check(hasBaseline && ancestry.status === 'ahead', 'SCHEMA_SOURCE_NOT_AUTHORIZED_DESCENDANT');
   }

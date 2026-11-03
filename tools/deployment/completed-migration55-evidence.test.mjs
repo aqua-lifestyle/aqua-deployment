@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { standingPolicy } from './release-control.mjs';
 import { objectDigest } from './github-evidence.mjs';
 import { approvedRecoveryReadback, validateFirstReleaseRecovery } from './first-release-recovery.mjs';
 import { approvedSchemaReadback, schemaSource, completedMigration55PolicyKind,
-  isCleanStartSchemaKind, validateSchemaReadback, verifySchemaFirst } from './commission-schema-first.mjs';
+  isCleanStartSchemaKind, validateSchemaReadback, verifySchemaFirst,
+  validateCompletedCandidateCarryForward } from './commission-schema-first.mjs';
 
 // Actual redacted, executor-pinned operation records with a controlled clock and
 // source-comparison substitute. This is component evidence, not a live release.
@@ -130,4 +132,91 @@ test('bounded v4 does not waive the separate first-release recovery evidence gat
   const missingRecovery = { ...structuredClone(approvedRecoveryReadback), status: 'UNVERIFIED' };
   p.firstReleaseRecovery.evidenceSha256 = objectDigest(missingRecovery);
   assert.throws(() => validateFirstReleaseRecovery(missingRecovery, q, p, at, proof), /FIRST_RELEASE_RECOVERY_EVIDENCE_REQUIRED/);
+});
+
+function compatibleFixture() {
+  const f = fresh(), c = validateCompletedCandidateCarryForward();
+  f.q.sha = c.candidateSha;
+  const pins = [...schemaSource.migrationFiles, ...schemaSource.holdSources, ...schemaSource.cleanStartSources];
+  const digests = new Map(pins.map(pin => [pin.path, pin.path === c.guardOverride.path ? c.guardOverride.candidateSha256 : pin.sha256]));
+  const calls = [], api = { gh: async path => {
+    calls.push(path);
+    if (path === `/compare/${c.operationSourceSha}...${c.candidateSha}`)
+      return { status: 'ahead', files: [{ filename: c.guardOverride.path, status: 'modified' }] };
+    assert.equal(path, `/compare/${f.p.firstReleaseRecovery.baseline.renderSha}...${c.candidateSha}`);
+    return { status: 'ahead', files: schemaSource.migrationFiles.map(pin => ({ filename: pin.path, status: pin.status })) };
+  } };
+  return { ...f, c, pins, digests, calls, api, read: async path => digests.get(path) };
+}
+
+test('exact candidate carry-forward preserves the historical operation SHA, observation, authority and database scope', async () => {
+  const f = compatibleFixture(), before = objectDigest(f.r);
+  const proof = await verifySchemaFirst(f.api, f.q, f.p, f.read, f.r, false, at);
+  assert.equal(proof.initialSourceSha, f.c.operationSourceSha);
+  assert.notEqual(proof.initialSourceSha, f.q.sha);
+  assert.equal(f.r.observation.candidateSha, f.c.operationSourceSha);
+  assert.equal(f.r.observation.authorization.sourceSha, f.c.operationSourceSha);
+  assert.equal(f.r.observation.recovery.sourceSha, f.c.operationSourceSha);
+  assert.equal(f.r.observation.databaseIdentitySha256, f.c.databaseIdentitySha256);
+  assert.equal(f.r.observation.tenantId, f.c.tenantId);
+  assert.equal(objectDigest(f.r), before);
+  assert.equal(proof.historicalEvidenceDisposition, 'HISTORICAL_EVIDENCE_UNAVAILABLE');
+  assert.equal(f.r.observation.cleanStart.schemaDigest, null);
+  assert.equal(f.r.observation.application.beforeSchemaDigest, null);
+  assert.equal(f.calls.length, 2);
+});
+
+test('qualification-only checks the same SQL, source guards and ancestry without creating production migration proof', async () => {
+  const f = compatibleFixture(); f.q.qualificationOnly = true;
+  const read = [];
+  assert.equal(await verifySchemaFirst(f.api, f.q, f.p, async path => { read.push(path); return f.read(path); }, f.r, false, at), null);
+  assert.equal(read.length, f.pins.length); assert.equal(read.length, 25);
+  assert.deepEqual(f.calls, [`/compare/${f.p.firstReleaseRecovery.baseline.renderSha}...${f.q.sha}`,
+    `/compare/${f.c.operationSourceSha}...${f.q.sha}`]);
+});
+
+test('carry-forward admits only the single reviewed stricter middleware digest; every SQL and safeguard pin still denies tampering', async () => {
+  const f = compatibleFixture();
+  for (const pin of f.pins) await assert.rejects(verifySchemaFirst(f.api, f.q, f.p,
+    async path => path === pin.path ? '0'.repeat(64) : f.read(path), f.r, false, at), /SCHEMA_OR_PAYOUT_GUARD_SOURCE_CHANGED/);
+  await assert.rejects(verifySchemaFirst(f.api, f.q, f.p,
+    async path => path === f.c.guardOverride.path ? f.c.guardOverride.operationSourceSha256 : f.read(path), f.r, false, at),
+  /SCHEMA_OR_PAYOUT_GUARD_SOURCE_CHANGED/);
+});
+
+test('carry-forward rejects unavailable/foreign ancestry and any new migration even for qualification-only', async () => {
+  for (const result of [null, {}, { status: 'behind', files: [] }, { status: 'identical', files: [] },
+    { status: 'ahead' }, { status: 'ahead', files: [{ filename: 'EF/Migrations/Unapproved.cs', status: 'added' }] }]) {
+    const f = compatibleFixture(); f.q.qualificationOnly = true;
+    const api = { gh: path => path === `/compare/${f.c.operationSourceSha}...${f.q.sha}` ? result : f.api.gh(path) };
+    await assert.rejects(verifySchemaFirst(api, f.q, f.p, f.read, f.r, false, at),
+      /COMPLETED_M55_CANDIDATE_ANCESTRY_REQUIRED|SCHEMA_COMPARISON_UNVERIFIABLE|SCHEMA_CHANGE_REQUIRES_SEPARATE_AUTHORIZATION/);
+  }
+});
+
+test('carry-forward cannot broaden candidate, database, tenant, targets or policy, or refresh original evidence time', async () => {
+  const f = compatibleFixture();
+  for (const key of ['renderServiceId', 'vercelProjectId', 'vercelTeamId', 'environment']) {
+    const p = structuredClone(f.p); p.scope[key] = 'foreign';
+    await assert.rejects(verifySchemaFirst(f.api, f.q, p, f.read, f.r, false, at), /COMPLETED_M55_EXACT_SCOPE_REQUIRED/);
+  }
+  for (const change of [r => r.observation.databaseIdentitySha256 = 'a'.repeat(64), r => r.observation.tenantId = 2,
+    r => r.observation.candidateSha = f.q.sha, r => r.observation.observedAt = new Date(at()).toISOString()]) {
+    const r = structuredClone(f.r); change(r); const p = structuredClone(f.p); refresh(r, p);
+    assert.throws(() => validateSchemaReadback(r, f.q, p, false, at), /COMPLETED_M55_OBSERVATION_CHANGED/);
+  }
+  assert.throws(() => validateSchemaReadback(f.r, f.q, f.p, false,
+    () => Date.parse(f.r.observation.observedAt) + f.p.authorization.maxCiAgeSeconds * 1000 + 1),
+  /B6_AUTHORIZATION_DDL_ORDER_OR_FRESHNESS_INVALID/);
+});
+
+test('the new carry-forward record is immutable and cannot authorize data changes, source substitution or activation', () => {
+  const original = readFileSync(new URL('../../governance/completed-m55-candidate-carry-forward-20261103.json', import.meta.url));
+  for (const change of [c => c.candidateSha = 'b'.repeat(40), c => c.operationSourceSha = c.candidateSha,
+    c => c.databaseIdentitySha256 = '0'.repeat(64), c => c.guardOverride.candidateSha256 = c.guardOverride.operationSourceSha256,
+    c => c.originalOperationEvidenceModified = true, c => c.databaseOperationAuthorized = true,
+    c => c.financialActivationAuthorized = true, c => c.productionDeploymentAuthorized = true]) {
+    const c = JSON.parse(original); change(c);
+    assert.throws(() => validateCompletedCandidateCarryForward(Buffer.from(JSON.stringify(c))), /COMPLETED_M55_CARRY_FORWARD_CHANGED/);
+  }
 });

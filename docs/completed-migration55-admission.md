@@ -1,5 +1,16 @@
 # Bounded completed-migration55 evidence variant
 
+## Current exact-candidate carry-forward
+
+The [owner-authorized carry-forward](completed-m55-candidate-carry-forward.md)
+extends this existing completed-operation prerequisite to accepted source
+`1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503` only. It preserves all original evidence
+below, including its execution SHA and unavailable historical fingerprints, and
+verifies unchanged SQL/scope plus the one explicitly pinned stricter middleware.
+It does not rerun the operation, refresh observations or authorize production.
+
+## Original completed-operation evidence
+
 The owner explicitly accepted reduced historical-baseline assurance for the
 completed2November2026 transition. Authority is recorded in
 `governance/completed-m55-amendment-authority-20261102.json`. This is not a claim
@@ -11,11 +22,11 @@ and `COMPLETED_ADDITIVE_MIGRATION55_V1` evidence. Versions1/2/3 and their histor
 fingerprint requirements remain unchanged. No dispatch/candidate flag selects the
 variant; unknown/mixed variants deny.
 
-`tools/deployment/completed-migration55-evidence.json` pins the sole application
+`tools/deployment/completed-migration55-evidence.json` pins the original application
 SHA, native database/Tenant, existing targets/policy scope, reviewed migration and
 SQL, unchanged source manifest, complete original observation, owner amendment,
-and original operation/evidence digests. Initial or later candidates with another
-SHA deny even when a baseline or qualification-only mode is supplied. Protected
+and original operation/evidence digests. Other than the exact reviewed carry-forward
+above, candidates with another SHA deny even in qualification-only mode. Protected
 executor review/merge remains the existing trust boundary.
 
 The readback declares `HISTORICAL_EVIDENCE_UNAVAILABLE`; both historical schema
