@@ -1,0 +1,36 @@
+{
+  "contract": "aqua.completed-m55-exact-candidate-carry-forward",
+  "version": 1,
+  "ownerDirection": "Resolve Final Migration Evidence Binding — preserve the original completed operation; admit only the accepted compatible candidate without rerunning migration55",
+  "operationSourceSha": "a4755801ce89868d7791422f3c983363ab76bf30",
+  "candidateSha": "1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503",
+  "completedEvidenceSha256": "d1d656089dc187fa9d9cb25b3581494e70d5e9544e9961dd119026112dbc209e",
+  "sourceManifestSha256": "2bd8822e666ad66a21b3ffbe7dd96c02d6d4af84d9b0743010ac2bc5ad3ba459",
+  "policyScopeSha256": "77f06e7c08e0c3204791ab6243f10588a8c48578f868d16eff8faf0346c8b0e1",
+  "targetsSha256": "2b42711b138fa38cd28ee12e6bb4ee07f3802539fb9dc1e4340ab0c0043aed65",
+  "databaseIdentitySha256": "be9ac8fd3ee1b9dd4389633358971f97a1dac2bf35370ed2e87b5cc814a8e324",
+  "tenantId": 1,
+  "migrationId": "20261021051549_AddAQGreenSalesEvidenceInvalidation",
+  "migrationDefinitionSha256": "09b319ef4c6ce530fc0ac152b27d6a0595605f300620b02e31ede149f23f5441",
+  "reviewedSqlSha256": "1f45ef7b67fa6eae747ca70edfed05679ef63cf4cfe2f2cf308b9d31b8c1faea",
+  "sourceComparison": {
+    "status": "ahead",
+    "aheadBy": 3,
+    "changedFiles": 9,
+    "migrationFilesChanged": false,
+    "pinnedSourcesChecked": 25,
+    "pinnedSourcesUnchanged": 24,
+    "basis": "Authenticated comparison and commit-specific GitHub blob hashes; no database operation"
+  },
+  "guardOverride": {
+    "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/ApplicationRecoveryMiddleware.cs",
+    "operationSourceSha256": "0ebc961ae83640ad00a3e368ed6eb40fde413bf22c4623665f18967552b32322",
+    "candidateSha256": "e39cacea3bec6fe765d794d053cb9d21019a8164302cf3a9a987bc3253e8b00f",
+    "approvedDifference": "The already-approved middleware additionally fences business writes when cutover.HasOperator is false; no migration SQL, database target or financial guard is weakened"
+  },
+  "originalOperationEvidenceModified": false,
+  "historicalObservationTimesRefreshed": false,
+  "databaseOperationAuthorized": false,
+  "financialActivationAuthorized": false,
+  "productionDeploymentAuthorized": false
+}

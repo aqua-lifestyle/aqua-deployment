@@ -8,6 +8,12 @@ It verifies the actual held pair without assuming cached rollback eligibility;
 source/migration baselines and unrelated release gates remain unchanged.
 No deployment is authorized by this contract amendment.
 
+The later [exact migration55 candidate carry-forward](docs/completed-m55-candidate-carry-forward.md)
+allows the accepted code revision to use the already-completed operation only
+after the same SQL, database/tenant/target scope and safeguard pins are verified.
+Original execution evidence, SHA, results and times are not changed; no migration
+rerun or production operation is authorized.
+
 Private application Git-object fetching uses the same existing read-only
 `AQGREEN_EVIDENCE_READ_TOKEN` as GitHub evidence, including in the standalone
 admission/production fetch steps. Authentication is process-only and scoped to the
