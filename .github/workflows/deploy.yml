@@ -108,6 +108,7 @@ jobs:
           merge-multiple: true
       - name: Fetch exact source as inert Git objects
         env:
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
           SOURCE_DIR: ${{ runner.temp }}/source-git
         run: node tools/deployment/fetch-source.mjs
       - name: Authenticate exact GitHub execution evidence and release history
@@ -166,6 +167,7 @@ jobs:
         run: cp "${{ runner.temp }}/admission/evidence-plan.json" "${{ runner.temp }}/candidate/evidence-plan.json"
       - name: Fetch exact source as inert Git objects
         env:
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
           SOURCE_DIR: ${{ runner.temp }}/source-git
         run: node tools/deployment/fetch-source.mjs
       - name: Read verified predecessor audit from its exact producing release run

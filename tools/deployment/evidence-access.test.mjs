@@ -103,7 +103,7 @@ test('administrator merge approval precedes use of any governance readback', asy
 
 test('read secret is scoped to fixed executor steps and never added to untrusted PR test execution', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8');
-  assert.equal([...workflow.matchAll(/AQGREEN_EVIDENCE_READ_TOKEN: \$\{\{ secrets\.AQGREEN_EVIDENCE_READ_TOKEN \}\}/g)].length, 3);
+  assert.equal([...workflow.matchAll(/AQGREEN_EVIDENCE_READ_TOKEN: \$\{\{ secrets\.AQGREEN_EVIDENCE_READ_TOKEN \}\}/g)].length, 5);
   assert.doesNotMatch(workflow, /GH_TOKEN:|secrets\.(?!AQGREEN_EVIDENCE_READ_TOKEN|RENDER_API_KEY|VERCEL_TOKEN)/);
   const beforeProduction = workflow.split('\n  production:\n')[0];
   assert.doesNotMatch(beforeProduction, /secrets\.(RENDER_API_KEY|VERCEL_TOKEN)|environment:/);

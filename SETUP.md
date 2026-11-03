@@ -8,6 +8,15 @@ It verifies the actual held pair without assuming cached rollback eligibility;
 source/migration baselines and unrelated release gates remain unchanged.
 No deployment is authorized by this contract amendment.
 
+Private application Git-object fetching uses the same existing read-only
+`AQGREEN_EVIDENCE_READ_TOKEN` as GitHub evidence, including in the standalone
+admission/production fetch steps. Authentication is process-only and scoped to the
+fixed source URL, with no credential fallback, redirects or persistent credential
+configuration. See [private-source-fetch.md](docs/private-source-fetch.md) for safe
+failure categories, exact application/CI binding and bounded validation evidence.
+Provider credentials remain isolated from fetching; ordinary PR tests remain
+secret-free. This correction authorizes no production operation.
+
 The earlier commission-invalidation correction selects policy v7; see the
 [schema-first and forward-only operator procedure](docs/first-release-recovery.md#commission-invalidation-schema-first-policy-v7).
 It adds no migration execution, deployment dispatch, credential or activation step.
