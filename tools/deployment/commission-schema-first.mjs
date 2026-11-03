@@ -175,9 +175,14 @@ export function validateSchemaReadback(r, q, policy, hasBaseline, now = Date.now
     Date.parse(population.acceptedAt) <= Date.parse(o.authorization.authorizedAt) &&
     Date.parse(o.authorization.authorizedAt) < Date.parse(a.appliedAt) &&
     Date.parse(a.appliedAt) <= Date.parse(o.observedAt) && Number.isFinite(time) &&
-    Date.parse(o.observedAt) <= time && (hasBaseline ||
-      Date.parse(o.observedAt) >= time - policy.authorization.maxCiAgeSeconds * 1000),
-  'B6_AUTHORIZATION_DDL_ORDER_OR_FRESHNESS_INVALID');
+    Date.parse(o.observedAt) <= time,
+  completed ? 'COMPLETED_M55_CHRONOLOGY_INVALID' : clean ? 'CLEAN_START_MIGRATION_ORDER_INVALID' :
+    'B6_AUTHORIZATION_DDL_ORDER_OR_FRESHNESS_INVALID');
+  // The exact completed operation is immutable history, not a current B6 readback
+  // or a fresh production-state observation. Never re-date it to renew eligibility.
+  // Current CI, live holds/readiness and first-release recovery retain their gates.
+  if (!completed) check(hasBaseline || Date.parse(o.observedAt) >= time - policy.authorization.maxCiAgeSeconds * 1000,
+    clean ? 'CLEAN_START_SCHEMA_EVIDENCE_EXPIRED' : 'B6_AUTHORIZATION_DDL_ORDER_OR_FRESHNESS_INVALID');
   check(exact(o.controls, ['financialOperationsHeld', 'v2CommissioningHeld', 'workersHeld',
     'startupMigrationsDisabled', 'evidenceReference']) && o.controls.financialOperationsHeld === true &&
     o.controls.v2CommissioningHeld === true && o.controls.workersHeld === true &&

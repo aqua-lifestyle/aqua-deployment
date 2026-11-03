@@ -104,12 +104,32 @@ test('bounded v4 preserves unavailable meaning and cannot backfill either histor
   }
 });
 
-test('bounded v4 remains subject to original observation freshness and cannot refresh historical time', () => {
+test('bounded completed CLEAN_START evidence does not expire and cannot refresh historical time', () => {
   const { r, p, q } = fresh();
-  assert.throws(() => validateSchemaReadback(r, q, p, false,
-    () => Date.parse(r.observation.observedAt) + p.authorization.maxCiAgeSeconds * 1000 + 1), /B6_AUTHORIZATION_DDL_ORDER_OR_FRESHNESS_INVALID/);
+  const before = objectDigest(r);
+  const proof = validateSchemaReadback(r, q, p, false,
+    () => Date.parse(r.observation.observedAt) + 30 * p.authorization.maxCiAgeSeconds * 1000);
+  assert.equal(proof.initialSourceSha, q.sha); assert.equal(objectDigest(r), before);
   r.status = 'UNVERIFIED'; refresh(r, p);
   assert.throws(() => validateSchemaReadback(r, q, p, false, at), /SCHEMA_EVIDENCE_REQUIRED/);
+});
+
+test('completed CLEAN_START never accesses a historical B6 acquisition and still requires valid completion chronology', () => {
+  const { r, p, q } = fresh();
+  r.observation = new Proxy(r.observation, { get(target, key, receiver) {
+    if (key === 'b6') assert.fail('CLEAN_START must not read B6 acquisition evidence');
+    return Reflect.get(target, key, receiver);
+  } });
+  assert.equal(Object.hasOwn(r.observation, 'b6'), false);
+  assert.equal(validateSchemaReadback(r, q, p, false, at).schemaEvidenceKind, 'COMPLETED_ADDITIVE_MIGRATION55_V1');
+  for (const time of [NaN, Infinity, Date.parse(r.observation.observedAt) - 1])
+    assert.throws(() => validateSchemaReadback(r, q, p, false, () => time), /COMPLETED_M55_CHRONOLOGY_INVALID/);
+});
+
+test('non-expiring migration completion does not waive current recovery evidence expiry', () => {
+  const { r, p, q } = fresh(), later = () => Date.parse(r.observation.observedAt) + 30 * p.authorization.maxCiAgeSeconds * 1000;
+  const proof = validateSchemaReadback(r, q, p, false, later);
+  assert.throws(() => validateFirstReleaseRecovery(approvedRecoveryReadback, q, p, later, proof), /FIRST_RELEASE_RECOVERY_EVIDENCE_EXPIRED/);
 });
 
 test('bounded v4 requires explicit executor selection and never falls back to older evidence versions', () => {
@@ -205,9 +225,9 @@ test('carry-forward cannot broaden candidate, database, tenant, targets or polic
     const r = structuredClone(f.r); change(r); const p = structuredClone(f.p); refresh(r, p);
     assert.throws(() => validateSchemaReadback(r, f.q, p, false, at), /COMPLETED_M55_OBSERVATION_CHANGED/);
   }
-  assert.throws(() => validateSchemaReadback(f.r, f.q, f.p, false,
-    () => Date.parse(f.r.observation.observedAt) + f.p.authorization.maxCiAgeSeconds * 1000 + 1),
-  /B6_AUTHORIZATION_DDL_ORDER_OR_FRESHNESS_INVALID/);
+  const proof = validateSchemaReadback(f.r, f.q, f.p, false,
+    () => Date.parse(f.r.observation.observedAt) + 30 * f.p.authorization.maxCiAgeSeconds * 1000);
+  assert.equal(proof.initialSourceSha, f.c.operationSourceSha);
 });
 
 test('the new carry-forward record is immutable and cannot authorize data changes, source substitution or activation', () => {

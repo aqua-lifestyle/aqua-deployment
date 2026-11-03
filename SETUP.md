@@ -8,6 +8,12 @@ It verifies the actual held pair without assuming cached rollback eligibility;
 source/migration baselines and unrelated release gates remain unchanged.
 No deployment is authorized by this contract amendment.
 
+The current [CLEAN_START completion lifetime](docs/clean-start-completion-lifetime.md)
+separates immutable completed-migration facts from current production evidence.
+The pinned completed operation has no rolling CI-age expiry and CLEAN_START does
+not read B6 acquisition evidence. Current CI, live financial/worker/payout holds,
+readiness and release-specific recovery checks remain required.
+
 The later [exact migration55 candidate carry-forward](docs/completed-m55-candidate-carry-forward.md)
 allows the accepted code revision to use the already-completed operation only
 after the same SQL, database/tenant/target scope and safeguard pins are verified.
