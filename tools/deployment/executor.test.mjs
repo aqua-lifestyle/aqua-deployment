@@ -53,7 +53,7 @@ for(const [label,mutate] of [
   ['missing credentials',f=>{delete f.state.env.RENDER_API_KEY;}],
   ['wrong main',f=>{f.state.main=previous;}],
   ['missing CI check',f=>{f.state.jobCount=16;}],
-  ['missing environment',f=>{f.state.environment={};}],
+  ['unprotected executor branch',f=>{f.state.env.GITHUB_REF_PROTECTED='false';}],
   ['restricted operation enabled',f=>{f.state.vars.find(x=>x.envVar.key==='App__FinancialOperations__Enabled').envVar.value='true';}],
   ['redirected provider target',f=>{f.state.service.id='srv-untrusted';}],
   ['unexpected frontend Git link',f=>{f.state.project.link={type:'github',repoId:'foreign'};}],
@@ -70,10 +70,11 @@ test('Render failure and incorrect backend health prevent frontend deployment',a
     await assert.rejects(f.execute());assert.deepEqual(f.posts.map(x=>x.provider),['render']);
   }
 });
-test('wrong protected CI App, source revision, job result or check URL is rejected',async()=>{
+test('untrusted executor approver, source revision, job result or check URL is rejected',async()=>{
   for(const mutate of [f=>{
-    for(const rows of [f.state.rules,f.state.ruleset.rules])
-      rows.find(r=>r.type==='required_status_checks').parameters.required_status_checks[0].integration_id=1;
+    const read=f.api.executor;f.api.executor=async route=>{
+      const result=await read(route);if(route.startsWith('/pulls/'))result.merged_by={id:1,login:'contributor'};return result;
+    };
   },f=>f.state.main=previous]){
     const f=fixture();mutate(f);
     await assert.rejects(f.execute());assert.equal(f.posts.length,0);

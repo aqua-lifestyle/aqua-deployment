@@ -41,7 +41,7 @@ concurrency:
 jobs:
   candidate:
     name: Qualify immutable source candidate
-    if: github.ref == 'refs/heads/main' && github.repository == 'aqua-lifestyle/aqua-deployment'
+    if: github.ref == 'refs/heads/main' && github.ref_protected && github.repository == 'aqua-lifestyle/aqua-deployment'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

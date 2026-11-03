@@ -75,29 +75,20 @@ test('hidden bypass metadata requires the exact administrator readback and live 
     assert.equal(approvedBypassReadback({ ...live, bypass_actors: value }, record.repository).bypass_actors, value);
 });
 
-test('both hidden rulesets pass only with approved source-bound readbacks, before any provider operation', async () => {
-  const f = fixture(), app = structuredClone(approvedReadbacks.rulesets[0]);
-  const executor = { repository: targets.executor.repository, observedAt: app.observedAt,
-    ruleset: { ...structuredClone(app.ruleset), id: 99, name: 'Fixture executor history',
-      source: targets.executor.repository, rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }] } };
-  const approvals = { ...approvedReadbacks, rulesets: [app, executor] };
-  f.state.ruleset = structuredClone(app.ruleset); delete f.state.ruleset.bypass_actors;
-  const read = f.api.executor;
-  f.api.executor = async route => {
-    if (route === '/rulesets/99') { const live = structuredClone(executor.ruleset); delete live.bypass_actors; return live; }
-    return read(route);
-  };
-  await validateInfrastructure(f.api, f.state.candidate, f.state.policy, approvals);
-  await assert.rejects(validateInfrastructure(f.api, f.state.candidate, f.state.policy,
-    { ...approvals, rulesets: [app] }), /READBACK_REQUIRED/);
-  for (const value of [null, [{ actor_type: 'RepositoryRole', actor_id: 5 }]]) {
-    f.state.ruleset.bypass_actors = value;
-    await assert.rejects(validateInfrastructure(f.api, f.state.candidate, f.state.policy, approvals), /CUSTODY_UNVERIFIABLE|BYPASS_FORBIDDEN/);
+test('trusted executor and historical execution validation require no branch-governance or environment-administration reads', async () => {
+  const f = fixture();
+  for (const owner of ['gh', 'executor']) {
+    const read = f.api[owner];
+    f.api[owner] = route => {
+      assert.doesNotMatch(route, /^\/(rules|rulesets|environments|actions\/permissions)/);
+      return read(route);
+    };
   }
+  await validateInfrastructure(f.api, f.state.candidate, f.state.policy);
   assert.equal(f.state.providerCalls, 0);
 });
 
-test('administrator merge approval precedes use of any governance readback', async () => {
+test('untrusted administrator merge denies before source history or provider reads', async () => {
   const f = fixture(), read = f.api.executor;
   let governanceReads = 0;
   f.api.gh = async () => { governanceReads++; throw Error('must not read governance'); };

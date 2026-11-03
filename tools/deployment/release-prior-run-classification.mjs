@@ -46,12 +46,15 @@ const positiveAttempt = value => Number.isSafeInteger(value) && value > 0;
 const workflowDigests = new Set([
   sha256(readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url))),
   // Preserve the reviewed pre-routing producer; only credential-step env changes.
-  '018d52b64d1acbeabef5d60704fbc200d4fd0036632489a228559c68f4610f8d'
+  '018d52b64d1acbeabef5d60704fbc200d4fd0036632489a228559c68f4610f8d',
+  '01d3e74bbdcee105c159a321c52d1016d4e7c0157ab8d873f280bb6b52f5b92e'
 ]);
 const controllerDigests = new Set([
   sha256(readFileSync(new URL('./release-control.mjs', import.meta.url))),
   // Reviewed 11f8fd0 producer retains the same write-ahead mutation ordering.
   '7e174fe8c165f869156cdc2759717bc72ca116264bd1a5da6d7b7a3693cd6ecf',
+  // Reviewed protected-Actions producer before administrative-read removal.
+  '3aecfe84b31c417276f198fbd00f6ce3df6436faa54f818c040b637da4d161c9',
   // Reviewed pre-instrumentation controller, with the same write-ahead invariant.
   'e4b76c1a5ca22d047675e5f1d7964bd20f9c413d3bc540cd29f7406834c585ab'
 ]);

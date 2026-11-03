@@ -30,6 +30,13 @@ required contexts, rather than a duplicate application Checks API lookup. Source
 reads use the existing application read PAT; executor-local reads use the native
 read-only job token. No additional App or diagnostic workflow is required.
 
+The later [protected-merge admission correction](docs/protected-merge-admission.md)
+removes release-time ruleset, branch-governance and environment-configuration API
+reads. Existing GitHub protections enforce those settings; the controller checks
+GitHub's protected-main context, exact trusted executor merge/current run, approved
+source/CI evidence and provider-operation history. The historical administrative
+readback/setup instructions below are not release-time credential requirements.
+
 The earlier commission-invalidation correction selects policy v7; see the
 [schema-first and forward-only operator procedure](docs/first-release-recovery.md#commission-invalidation-schema-first-policy-v7).
 It adds no migration execution, deployment dispatch, credential or activation step.
@@ -178,8 +185,8 @@ Each mutation needs separate owner authorization and authoritative readback.
     Neither source nor executor requests fall back to the other credential or
     anonymous retrieval. Verify actual access before qualification; scope/expiration
    and renewal are owner setup, not recurring release approval.
-   Hidden bypass metadata uses the executor-owned administrator readbacks described
-   below, not runtime ruleset-write access.
+    The release path does not request ruleset/bypass or environment-administration
+    metadata. Historical setup readbacks below remain records, not runtime gates.
    Before merging, run the one-off trusted credential check described below.
 4. Install the existing application PR106 automatic trigger only through its
    separately authorized merge/setup. Its trigger-only App needs Actions:write and
