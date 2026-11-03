@@ -1,0 +1,86 @@
+{
+  "contract": "aqua.exact-failed-render-operation-reconciliation",
+  "version": 1,
+  "ownerDirection": "Resolve Existing Deployment Reconciliation — preserve the failed operation and use existing provider evidence; no production deployment authorized",
+  "acceptedCandidateSha": "1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503",
+  "policySha256": "1347eae6196a051311e773ae9c10b86c4491505ec4a5e4f2be055e8fdbf8adca",
+  "carryForwardExactHistoricalRuns": ["40850715880", "40883686654"],
+  "run": {
+    "runId": "41527223264",
+    "attempt": 1,
+    "runNumber": 16,
+    "executorSha": "dcaaabe578b14355699ecc715a7aef6d30e38740",
+    "artifactId": "13180373119",
+    "archiveSha256": "be5586f2f54401d9bc699b1f7c2df7f0699917769249292d36578d5c79860794",
+    "reportSha256": "59213a58d1a7a98f0449831ce424bff76b59889f2f0bb07b717db0a68c5be14d",
+    "rowsSha256": "d2622c37878d06cc87dbf8c4a8fae71198d96da3704c98358c5919abdf9e440e",
+    "rowCount": 27,
+    "originalConclusion": "failure",
+    "terminalFailureCode": "PROVIDER_DEPLOYMENT_FAILED_INSPECT_RELEASE_REPORT"
+  },
+  "originalIdentity": {
+    "version": 4,
+    "repository": "aqua-lifestyle/aqua-lifestyle",
+    "sha": "a4755801ce89868d7791422f3c983363ab76bf30",
+    "ciRunId": "41322531293",
+    "ciRunAttempt": 2,
+    "environment": "production-release",
+    "profile": "normal-integrated",
+    "executorRepository": "aqua-lifestyle/aqua-deployment",
+    "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+    "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY"
+  },
+  "baselineRecordedBeforeAttempt": {
+    "renderDeployId": "dep-dbhh7l8m7kps73etljfg",
+    "renderSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+    "vercelDeployId": "dpl_7PcajvRJGKp2AzuJGaLPLHy2bqUD",
+    "vercelSha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+    "retainedObservationPath": "governance/native-held-baseline-observation-20261102.json",
+    "retainedObservationSha256": "66f61838301ee86e8f2dd2fe11b545a40585d6ae0722d69c63193559b28152ec"
+  },
+  "renderOperation": {
+    "deployId": "dep-dbkftrcipgvc73asn0lg",
+    "effect": "REQUEST_ACKNOWLEDGED_AND_FAILURE_REPORTED",
+    "outcomeSource": "AUTHENTICATED_RENDER_GITHUB_APP_DEPLOYMENT_STATUSES",
+    "githubDeploymentId": "7503709845",
+    "githubDeploymentCreatedAt": "2026-11-02T21:21:49Z",
+    "environment": "main - aqualifestyle-api",
+    "appId": 14658,
+    "appSlug": "render",
+    "creatorLogin": "aqualifestyleclub",
+    "creatorId": 307076734,
+    "statuses": [
+      { "id": "21203919981", "state": "in_progress", "createdAt": "2026-11-02T21:21:50Z", "exactRenderDeployLinked": true },
+      { "id": "21204067912", "state": "failure", "createdAt": "2026-11-02T21:24:05Z", "exactRenderDeployLinked": true }
+    ],
+    "renderSpecificState": "NOT_OBSERVED",
+    "failureReason": "UNKNOWN"
+  },
+  "vercelOperation": {
+    "effect": "NO_MUTATION_INITIATED_BY_THIS_ATTEMPT",
+    "basis": "Complete digest-authenticated audit contains no Vercel upload/request/acknowledgement phase or Vercel deployment ID"
+  },
+  "postFailurePublicObservation": {
+    "observedAt": "2026-11-03T19:04:08.659Z",
+    "apiHttpStatus": 200,
+    "apiStatus": "Healthy",
+    "buildId": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+    "receiver": "Schema54",
+    "databaseHealth": "Healthy",
+    "redisHealth": "Healthy",
+    "dataProtectionHealth": "Healthy",
+    "frontendHttpStatus": 200,
+    "frontendContentType": "text/html; charset=utf-8",
+    "authenticatedCurrentVercelDeploymentIdentity": "NOT_OBSERVED"
+  },
+  "limitations": {
+    "databaseWriteAbsence": "NOT_ESTABLISHED_BY_DEPLOYMENT_FAILURE_OR_HEALTH",
+    "financialEligibility": "NOT_DETERMINED_BY_THIS_RECONCILIATION",
+    "observationTimesRefreshed": false
+  },
+  "originalFailureRewritten": false,
+  "successfulReleasePredecessor": false,
+  "retryOrContinuationAuthority": false,
+  "deploymentAuthority": false
+}

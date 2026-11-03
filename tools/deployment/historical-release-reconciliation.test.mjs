@@ -9,7 +9,7 @@ import { evidencePlan, targets, standingPolicy, policyDigest, admissionJobName,
 import { validateMemberReceipt } from './member-release.mjs';
 import { objectDigest, sha256 } from './github-evidence.mjs';
 import { isReconciledHistoricalRun, validateReconciliationRecords, validateHistoricalContext,
-  validateHistoricalArtifact, validateHistoricalAudit } from './historical-release-reconciliation.mjs';
+  validateHistoricalArtifact, validateHistoricalAudit, validateFailedRenderReconciliation } from './historical-release-reconciliation.mjs';
 
 const record = validateReconciliationRecords();
 const archives = ['member-interrupted-audit.zip', 'member-frontend-failed-audit.zip'].map(name =>
@@ -22,6 +22,10 @@ const reports = archives.map(archive => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 const audits = reports.map(bytes => bytes.toString('utf8').trim().split('\n').map(JSON.parse));
+const failedRender = validateFailedRenderReconciliation();
+const failedArchive = Buffer.from(readFileSync(new URL('./fixtures/failed-render-41527223264-1.zip.b64', import.meta.url), 'utf8'), 'base64');
+const failedReport = execFileSync('funzip', [], { input: failedArchive, maxBuffer: 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
+const failedAudit = failedReport.toString('utf8').trim().split('\n').map(JSON.parse);
 const candidate = () => ({ version: 4, repository: targets.repository, sha: record.candidateSha,
   ciRunId: '41322531293', ciRunAttempt: 1, executorRepository: targets.executor.repository, executorSha: 'd'.repeat(40),
   releaseRunId: '456', releaseRunAttempt: 1, policySha256: policyDigest(standingPolicy),
@@ -41,13 +45,19 @@ const metadata = (pin, index) => ({ id: Number(pin.artifactId), name: `productio
   workflow_run: { id: Number(pin.runId), head_sha: pin.executorSha, head_branch: 'main',
     repository_id: record.executorRepositoryId, head_repository_id: record.executorRepositoryId } });
 
-function historyFixture() {
-  const q = candidate(), runs = record.runs.map(prior), metas = record.runs.map(metadata), downloads = [];
+function historyFixture(includeFailedRender = false) {
+  const q = candidate(), selected = includeFailedRender ? [...record.runs, failedRender.run] : record.runs;
+  if (includeFailedRender) Object.assign(q, { sha: failedRender.acceptedCandidateSha, ciRunId: '41601901625', ciRunAttempt: 1 });
+  const bytes = includeFailedRender ? [...archives, failedArchive] : [...archives];
+  const runs = selected.map(prior), metas = selected.map((pin, index) => index < 2 ? metadata(pin, index) : {
+    ...metadata(pin, 0), size_in_bytes: failedArchive.length }), downloads = [];
   // The historical runs really were numbers 6 and 7. Keep the complete namespace
   // in this substitute rather than weakening the guard's contiguous-history rule.
-  const skipped = Array.from({ length: 5 }, (_, i) => ({ ...runs[0], id: 100 + i, run_number: i + 1, head_sha: 'e'.repeat(40) }));
-  const current = { ...runs[0], id: 456, run_number: 8, head_sha: q.executorSha, status: 'in_progress', conclusion: null };
-  const history = [current, ...runs.toReversed(), ...skipped], bytes = [...archives];
+  const last = includeFailedRender ? 16 : 7;
+  const skipped = Array.from({ length: last }, (_, i) => ({ ...runs[0], id: 100 + i, run_number: i + 1, head_sha: 'e'.repeat(40) }))
+    .filter(run => !runs.some(prior => prior.run_number === run.run_number));
+  const current = { ...runs[0], id: 456, run_number: last + 1, head_sha: q.executorSha, status: 'in_progress', conclusion: null };
+  const history = [current, ...runs.toReversed(), ...skipped];
   const jobs = run => [
     { name: 'Qualify immutable source candidate', conclusion: 'success' },
     { name: admissionJobName, conclusion: 'success' },
@@ -66,7 +76,7 @@ function historyFixture() {
     assert.fail('Unexpected GitHub route: ' + path);
   }, artifact: async (owner, id) => {
     assert.equal(owner, 'executor'); downloads.push(id);
-    const index = record.runs.findIndex(r => r.artifactId === id); assert.notEqual(index, -1);
+    const index = selected.findIndex(r => r.artifactId === id); assert.notEqual(index, -1);
     return bytes[index];
   }, render: () => assert.fail('Provider access forbidden'), vercel: () => assert.fail('Provider access forbidden') };
   return { q, runs, metas, history, bytes, downloads, api };
@@ -84,6 +94,80 @@ test('both authentic failed audits recognize only the exact historical acknowled
     assert.equal(result.originalConclusion, 'failure'); assert.equal(result.terminalFailureCode, pin.terminalFailureCode);
     assert.equal(result.outcome, pin.outcome);
     for (const key of ['successfulFullReleasePredecessor', 'replayAuthority', 'deploymentAuthority']) assert.equal(result[key], false);
+  }
+});
+
+test('the authentic acknowledged Render failure remains failed, with its original digest and no Vercel request or replay authority', () => {
+  const pin = failedRender.run, run = prior(pin), q = { ...candidate(), sha: failedRender.acceptedCandidateSha };
+  assert.equal(sha256(failedArchive), pin.archiveSha256); assert.equal(sha256(failedReport), pin.reportSha256);
+  assert.equal(objectDigest(failedAudit), pin.rowsSha256); assert.equal(failedAudit.length, 27);
+  assert.equal(failedRender.policySha256, policyDigest(standingPolicy));
+  assert.deepEqual(validateHistoricalContext(run, 1, production(run), q, targets), pin);
+  const f = historyFixture(true); validateHistoricalArtifact(pin, descriptor(pin), f.metas[2]);
+  const proof = validateHistoricalAudit(failedAudit, descriptor(pin), pin, targets);
+  assert.equal(proof.originalConclusion, 'failure'); assert.equal(proof.terminalFailureCode, pin.terminalFailureCode);
+  assert.equal(proof.outcome, 'ACKNOWLEDGED_RENDER_FAILURE_NO_VERCEL_REQUEST');
+  assert.equal(proof.renderDeployId, 'dep-dbkftrcipgvc73asn0lg');
+  for (const key of ['successfulFullReleasePredecessor', 'replayAuthority', 'deploymentAuthority']) assert.equal(proof[key], false);
+  assert.throws(() => validateBaselineReceipt(failedAudit, descriptor(pin), q));
+  assert.throws(() => validateMemberReceipt(failedAudit, descriptor(pin), targets));
+  assert.throws(() => validateResumeReceipt(failedAudit, { ...q, releaseRunAttempt: 2 }));
+});
+
+test('full history consumes the three exact factual reconciliations for the accepted candidate without creating a successful predecessor', async () => {
+  const f = historyFixture(true), plan = await evidencePlan(f.api, f.q, standingPolicy);
+  assert.equal(plan.historicalReconciliations.length, 3);
+  assert.equal(plan.historicalReconciliations.find(r => r.runId === failedRender.run.runId).originalConclusion, 'failure');
+  assert.deepEqual(f.downloads.toSorted(), [...record.runs, failedRender.run].map(r => r.artifactId).toSorted());
+  assert.deepEqual(plan.verifiedReleases, []); assert.equal(plan.baseline, null); assert.equal(plan.resume, null);
+  assert.equal(plan.memberContinuation, undefined); assert.equal(plan.memberReleases, undefined);
+  assert.equal(plan.priorFailedRuns.some(r => r.runId === failedRender.run.runId), false);
+});
+
+test('Render failure recognition denies another run, attempt, outcome, producer, source, policy or target', () => {
+  const pin = failedRender.run;
+  const unrelated = prior(pin); unrelated.id++;
+  assert.equal(isReconciledHistoricalRun(unrelated.id), false);
+  assert.throws(() => validateHistoricalContext(unrelated, 1, production(unrelated), historyFixture(true).q, targets), /FAILED_RUN_OR_EXECUTION_CHANGED/);
+  for (const change of [r => r.run_attempt = 2, r => r.run_number++, r => r.head_sha = 'a'.repeat(40),
+    r => r.conclusion = 'success', r => r.status = 'in_progress', r => r.actor.id = 1,
+    r => r.repository.full_name = 'foreign/repo', r => r.head_repository.full_name = 'foreign/repo',
+    r => r.path = '.github/workflows/other.yml', r => r.event = 'push']) {
+    const run = prior(pin); change(run);
+    assert.throws(() => validateHistoricalContext(run, 1, production(run), historyFixture(true).q, targets), /FAILED_RENDER_EXECUTION_CHANGED/);
+  }
+  for (const change of [q => q.sha = record.candidateSha, q => q.sha = 'a'.repeat(40), q => q.policySha256 = '0'.repeat(64),
+    q => q.memberRelease = 'foreign', q => q.renderServiceId = 'srv-other', q => q.vercelProjectId = 'prj_other']) {
+    const q = historyFixture(true).q; change(q); const run = prior(pin);
+    assert.throws(() => validateHistoricalContext(run, 1, production(run), q, targets), /FAILED_RENDER_CANDIDATE_OR_TARGETS_CHANGED/);
+  }
+  for (const value of ['success', 'skipped']) {
+    const run = prior(pin), job = production(run); job.conclusion = value;
+    assert.throws(() => validateHistoricalContext(run, 1, job, historyFixture(true).q, targets), /FAILED_RENDER_EXECUTION_CHANGED/);
+  }
+});
+
+test('failed Render reconciliation cannot be altered into effectlessness, a refreshed observation or permission to deploy', () => {
+  for (const change of [r => r.renderOperation.effect = 'NO_EFFECTS', r => r.renderOperation.statuses.at(-1).state = 'success',
+    r => r.postFailurePublicObservation.observedAt = '2030-01-01T00:00:00Z', r => r.deploymentAuthority = true,
+    r => r.originalFailureRewritten = true, r => r.limitations.databaseWriteAbsence = 'PROVEN_ZERO']) {
+    const next = structuredClone(failedRender); change(next);
+    assert.throws(() => validateFailedRenderReconciliation(Buffer.from(JSON.stringify(next))), /FAILED_RENDER_RECORD_CHANGED/);
+  }
+});
+
+test('the acknowledged failure requires the original available artifact and rejects forged or mutating audit evidence', async () => {
+  for (const change of [f => f.metas[2].expired = true, f => f.metas[2].digest = 'sha256:' + '0'.repeat(64),
+    f => f.metas[2].workflow_run.repository_id = 1, f => f.bytes[2] = archives[0]]) {
+    const f = historyFixture(true); change(f);
+    await assert.rejects(evidencePlan(f.api, f.q, standingPolicy), /ORIGINAL_ARTIFACT_REQUIRED|AUDIT_ARTIFACT_REQUIRED|ARTIFACT_PROVENANCE_INVALID|ARTIFACT_DIGEST_MISMATCH/);
+  }
+  for (const change of [rows => rows.pop(), rows => rows.at(-1).code = 'UNEXPECTED_RELEASE_ERROR',
+    rows => rows.find(r => r.phase === 'render-requested').renderDeployId = 'dep-other',
+    rows => rows.push({ ...rows.at(-1), phase: 'vercel-requesting' }),
+    rows => rows.push({ ...rows.at(-1), phase: 'verified' })]) {
+    const rows = structuredClone(failedAudit); change(rows);
+    assert.throws(() => validateHistoricalAudit(rows, descriptor(failedRender.run), failedRender.run, targets), /FAILED_RENDER_ORIGINAL_AUDIT_REQUIRED/);
   }
 });
 
@@ -195,20 +279,22 @@ test('actual history path rejects substituted metadata, expired archives and cha
   }
 });
 
-test('unrelated failed provider runs still deny even after both exact reconciliations pass', async () => {
-  const f = historyFixture(), unrelated = { ...prior(record.runs[0]), id: 999, run_number: 8 };
-  f.history[0].run_number = 9; f.history.push(unrelated);
-  const read = f.api.executor;
-  f.api.executor = async path => path.startsWith('/contents/') ? {
-    type: 'file', path: path.slice('/contents/'.length).split('?')[0], encoding: 'base64',
-    size: 18, content: Buffer.from('unsupported source').toString('base64')
-  } : path === '/actions/runs/999/attempts/1/jobs?per_page=100' ? { total_count: 3, jobs: [
-    { name: 'Qualify immutable source candidate', conclusion: 'success' },
-    { name: admissionJobName, conclusion: 'success' }, production(unrelated)
-  ].map(j => ({ ...j, run_id: 999, run_attempt: 1, status: 'completed' })) } : read(path);
-  assert.equal(isReconciledHistoricalRun(999), false);
-  await assert.rejects(evidencePlan(f.api, f.q, standingPolicy), /^Error: UNVERIFIED_PRIOR_RELEASE_REQUIRES_RECONCILIATION$/);
-  assert.equal(f.downloads.length, 2);
+test('unrelated failed provider runs still deny after all selected exact reconciliations pass', async () => {
+  for (const includeFailedRender of [false, true]) {
+    const f = historyFixture(includeFailedRender), unrelated = { ...prior(record.runs[0]), id: 999, run_number: f.history[0].run_number };
+    f.history[0].run_number++; f.history.push(unrelated);
+    const read = f.api.executor;
+    f.api.executor = async path => path.startsWith('/contents/') ? {
+      type: 'file', path: path.slice('/contents/'.length).split('?')[0], encoding: 'base64',
+      size: 18, content: Buffer.from('unsupported source').toString('base64')
+    } : path === '/actions/runs/999/attempts/1/jobs?per_page=100' ? { total_count: 3, jobs: [
+      { name: 'Qualify immutable source candidate', conclusion: 'success' },
+      { name: admissionJobName, conclusion: 'success' }, production(unrelated)
+    ].map(j => ({ ...j, run_id: 999, run_attempt: 1, status: 'completed' })) } : read(path);
+    assert.equal(isReconciledHistoricalRun(999), false);
+    await assert.rejects(evidencePlan(f.api, f.q, standingPolicy), /^Error: UNVERIFIED_PRIOR_RELEASE_REQUIRES_RECONCILIATION$/);
+    assert.equal(f.downloads.length, includeFailedRender ? 3 : 2);
+  }
 });
 
 test('a second attempt on either historical run is not recognized as the settled first attempt', async () => {

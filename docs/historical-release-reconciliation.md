@@ -1,5 +1,10 @@
 # Exact historical release reconciliation recognition
 
+The later [failed-Render reconciliation](failed-render-reconciliation.md) accounts
+for exact failed attempt `41527223264/1` and carries the two immutable facts below
+forward to accepted source `1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503` under the same
+policy and targets. Original records, failures and observation times remain unchanged.
+
 ## Owner authority and execution plan — 2026-11-02
 
 The owner explicitly authorized the minimum executor-owned history correction for

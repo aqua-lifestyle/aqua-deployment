@@ -37,6 +37,11 @@ GitHub's protected-main context, exact trusted executor merge/current run, appro
 source/CI evidence and provider-operation history. The historical administrative
 readback/setup instructions below are not release-time credential requirements.
 
+[Exact failed-Render reconciliation](docs/failed-render-reconciliation.md) records
+the acknowledged failed operation `41527223264/1` without manufacturing success,
+effectlessness, a predecessor or retry authority. It reuses original authenticated
+audit/provider evidence and preserves all later admission and production guards.
+
 The earlier commission-invalidation correction selects policy v7; see the
 [schema-first and forward-only operator procedure](docs/first-release-recovery.md#commission-invalidation-schema-first-policy-v7).
 It adds no migration execution, deployment dispatch, credential or activation step.

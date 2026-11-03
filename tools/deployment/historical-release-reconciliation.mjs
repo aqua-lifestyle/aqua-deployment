@@ -1,4 +1,4 @@
-// Owner-authorized factual recognition of two FAILED attempts only. This is not
+// Owner-authorized factual recognition of exact FAILED attempts only. This is not
 // a successful release receipt, retry continuation, or provider-operation permit.
 import { readFileSync } from 'node:fs';
 import { objectDigest, sha256 } from './github-evidence.mjs';
@@ -14,6 +14,91 @@ const pins = Object.freeze({
   'native-held-baseline-observation-20261102.json': '66f61838301ee86e8f2dd2fe11b545a40585d6ae0722d69c63193559b28152ec',
   'held-frontend-source-evidence-20261029.json': '7195d016e7f881c37a1a25a7a9352aa485083e344061ad8beb4a873b7d960b7c'
 });
+const failedRenderDigest = 'da3ab4875cc0c608c675f8588565318d2cf922e4056f4e93c867154c90f8b5f6';
+
+export function validateFailedRenderReconciliation(bytes = readFileSync(
+  new URL('../../governance/render-failure-reconciliation-20261103.json', import.meta.url))) {
+  check(Buffer.isBuffer(bytes) && sha256(bytes) === failedRenderDigest, 'FAILED_RENDER_RECORD_CHANGED');
+  const record = JSON.parse(bytes);
+  check(record.contract === 'aqua.exact-failed-render-operation-reconciliation' && record.version === 1 &&
+    record.run.runId === '41527223264' && record.run.attempt === 1 && record.run.originalConclusion === 'failure' &&
+    record.renderOperation.effect === 'REQUEST_ACKNOWLEDGED_AND_FAILURE_REPORTED' &&
+    record.renderOperation.statuses.at(-1).state === 'failure' &&
+    record.vercelOperation.effect === 'NO_MUTATION_INITIATED_BY_THIS_ATTEMPT' &&
+    record.limitations.databaseWriteAbsence === 'NOT_ESTABLISHED_BY_DEPLOYMENT_FAILURE_OR_HEALTH' &&
+    ['originalFailureRewritten', 'successfulReleasePredecessor', 'retryOrContinuationAuthority', 'deploymentAuthority']
+      .every(key => record[key] === false), 'FAILED_RENDER_RECONCILIATION_REQUIRED');
+  const prior = validateReconciliationRecords(), baseline = record.baselineRecordedBeforeAttempt;
+  check(baseline.retainedObservationSha256 === pins['native-held-baseline-observation-20261102.json'] &&
+    ['renderDeployId', 'renderSha', 'vercelDeployId', 'vercelSha'].every(key => baseline[key] === prior.heldPair[key]) &&
+    record.postFailurePublicObservation.buildId === baseline.renderSha &&
+    record.postFailurePublicObservation.apiHttpStatus === 200 && record.postFailurePublicObservation.apiStatus === 'Healthy' &&
+    record.renderOperation.appId === 14658 && record.renderOperation.appSlug === 'render' &&
+    record.renderOperation.statuses.every(status => status.exactRenderDeployLinked === true),
+  'FAILED_RENDER_PROVIDER_EVIDENCE_REQUIRED');
+  return record;
+}
+
+function validateFailedRenderContext(run, attempt, production, candidate, targets) {
+  const record = validateFailedRenderReconciliation(), pin = record.run, identity = record.originalIdentity;
+  check(String(run.id) === pin.runId && run.run_attempt === pin.attempt && attempt === pin.attempt &&
+    run.run_number === pin.runNumber && run.head_sha === pin.executorSha && run.status === 'completed' &&
+    run.conclusion === 'failure' && run.actor?.login === 'Xolani-M' && run.actor?.id === 86495928 &&
+    run.repository?.full_name === identity.executorRepository && run.head_repository?.full_name === identity.executorRepository &&
+    run.head_branch === 'main' && run.event === 'workflow_dispatch' && run.path === '.github/workflows/deploy.yml' &&
+    run.name === 'Qualified production executor' && production.run_id === run.id && production.run_attempt === attempt &&
+    production.status === 'completed' && production.conclusion === 'failure' && production.name === 'Unattended recovery release' &&
+    production.steps?.filter(step => step.name === 'Revalidate policy, provenance, providers and recovery before automatic deployment' &&
+      step.conclusion === 'failure').length === 1, 'FAILED_RENDER_EXECUTION_CHANGED');
+  check(candidate.memberRelease === undefined && candidate.sha === record.acceptedCandidateSha &&
+    candidate.policySha256 === record.policySha256 && candidate.executorRepository === identity.executorRepository &&
+    candidate.repository === identity.repository && candidate.environment === identity.environment && candidate.profile === identity.profile &&
+    candidate.renderServiceId === identity.renderServiceId && candidate.vercelProjectId === identity.vercelProjectId &&
+    candidate.vercelTeamId === identity.vercelTeamId && targets.repository === identity.repository &&
+    targets.executor?.repository === identity.executorRepository && targets.render.id === identity.renderServiceId &&
+    targets.vercel.id === identity.vercelProjectId && targets.vercel.teamId === identity.vercelTeamId &&
+    targets.vercel.productionUrl === 'https://www.aqualifestyleclub.co.za' &&
+    targets.vercel.rootDirectory === 'AqualLifeStyle/9.4.2/aqua-frontend',
+  'FAILED_RENDER_CANDIDATE_OR_TARGETS_CHANGED');
+  return pin;
+}
+
+function validateFailedRenderArtifact(pin, descriptor, metadata) {
+  const record = validateFailedRenderReconciliation();
+  check(objectDigest(pin) === objectDigest(record.run) && descriptor.runId === pin.runId &&
+    descriptor.runAttempt === pin.attempt && descriptor.sha === pin.executorSha && descriptor.artifactId === pin.artifactId &&
+    String(metadata.id) === pin.artifactId && metadata.digest === 'sha256:' + pin.archiveSha256 &&
+    metadata.workflow_run?.repository_id === 1423239668 && metadata.workflow_run?.head_repository_id === 1423239668,
+  'FAILED_RENDER_ORIGINAL_ARTIFACT_REQUIRED');
+}
+
+function validateFailedRenderAudit(rows, descriptor, pin, targets) {
+  const record = validateFailedRenderReconciliation(), identity = record.originalIdentity, baseline = record.baselineRecordedBeforeAttempt;
+  check(objectDigest(pin) === objectDigest(record.run) && descriptor.runId === pin.runId && descriptor.runAttempt === pin.attempt &&
+    descriptor.sha === pin.executorSha && descriptor.artifactId === pin.artifactId && Array.isArray(rows) &&
+    rows.length === pin.rowCount && objectDigest(rows) === pin.rowsSha256 && targets.render.id === identity.renderServiceId &&
+    targets.vercel.id === identity.vercelProjectId && targets.vercel.teamId === identity.vercelTeamId,
+  'FAILED_RENDER_ORIGINAL_AUDIT_REQUIRED');
+  const expected = { ...identity, releaseRunId: pin.runId, releaseRunAttempt: pin.attempt,
+    executorSha: pin.executorSha, policySha256: record.policySha256 };
+  const phases = name => rows.filter(row => row.phase === name);
+  check(rows.every(row => Object.entries(expected).every(([key, value]) => row[key] === value) && row.memberRelease === undefined &&
+    row.vercelDeployId === undefined && (row.renderDeployId === undefined || row.renderDeployId === record.renderOperation.deployId) &&
+    (row.baselineRenderDeployId === undefined || row.baselineRenderDeployId === baseline.renderDeployId) &&
+    (row.baselineVercelDeployId === undefined || row.baselineVercelDeployId === baseline.vercelDeployId)) &&
+    rows[0].phase === 'evidence-selected' && rows.at(-1).phase === 'failed' && rows.at(-1).code === pin.terminalFailureCode &&
+    phases('failed').length === 1 && phases('render-requesting').length === 1 && phases('render-requested').length === 1 &&
+    phases('render-requested')[0].renderDeployId === record.renderOperation.deployId &&
+    rows.findIndex(row => row.phase === 'render-requesting') < rows.findIndex(row => row.phase === 'render-requested') &&
+    phases('render-ready').length === 0 && phases('verified').length === 0 && !rows.some(row => row.phase.startsWith('vercel-')),
+  'FAILED_RENDER_EFFECT_OR_FAILURE_CHANGED');
+  return Object.freeze({ runId: pin.runId, runAttempt: pin.attempt, executorSha: pin.executorSha,
+    artifactId: pin.artifactId, archiveSha256: pin.archiveSha256, rowsSha256: pin.rowsSha256,
+    originalConclusion: 'failure', terminalFailureCode: pin.terminalFailureCode,
+    outcome: 'ACKNOWLEDGED_RENDER_FAILURE_NO_VERCEL_REQUEST', renderDeployId: record.renderOperation.deployId,
+    reconciliationSha256: failedRenderDigest, successfulFullReleasePredecessor: false,
+    replayAuthority: false, deploymentAuthority: false });
+}
 
 // Fixed reviewed local records, never URLs, dispatch fields or candidate content.
 // Historical resolution does not refresh an observation's original timestamp.
@@ -56,10 +141,11 @@ export function validateReconciliationRecords(bytes = Object.fromEntries(Object.
 }
 
 export function isReconciledHistoricalRun(runId) {
-  return ['40850715880', '40883686654'].includes(String(runId));
+  return ['40850715880', '40883686654', '41527223264'].includes(String(runId));
 }
 
 export function validateHistoricalContext(run, attempt, production, candidate, targets) {
+  if (String(run.id) === '41527223264') return validateFailedRenderContext(run, attempt, production, candidate, targets);
   const record = validateReconciliationRecords(), p = record.heldPair;
   const pin = record.runs.find(r => r.runId === String(run.id));
   check(pin && run.run_attempt === pin.attempt && attempt === pin.attempt && run.run_number === pin.runNumber &&
@@ -71,7 +157,11 @@ export function validateHistoricalContext(run, attempt, production, candidate, t
     production.status === 'completed' && production.conclusion === 'failure' && production.name === 'Unattended recovery release' &&
     production.steps?.filter(s => s.name === 'Revalidate policy, provenance, providers and recovery before automatic deployment' &&
       s.conclusion === 'failure').length === 1, 'FAILED_RUN_OR_EXECUTION_CHANGED');
-  check(candidate.memberRelease === undefined && candidate.sha === record.candidateSha && candidate.policySha256 === record.policySha256 &&
+  const carried = validateFailedRenderReconciliation();
+  const acceptedSource = candidate.sha === record.candidateSha ||
+    candidate.sha === carried.acceptedCandidateSha && candidate.policySha256 === carried.policySha256 &&
+      carried.carryForwardExactHistoricalRuns.includes(String(run.id));
+  check(candidate.memberRelease === undefined && acceptedSource && candidate.policySha256 === record.policySha256 &&
     candidate.executorRepository === 'aqua-lifestyle/aqua-deployment' && candidate.environment === record.originalIdentity.environment &&
     candidate.profile === record.originalIdentity.profile &&
     candidate.renderServiceId === p.renderServiceId && candidate.vercelProjectId === p.vercelProjectId && candidate.vercelTeamId === p.vercelTeamId &&
@@ -83,6 +173,7 @@ export function validateHistoricalContext(run, attempt, production, candidate, t
 }
 
 export function validateHistoricalArtifact(pin, descriptor, metadata) {
+  if (pin.runId === '41527223264') return validateFailedRenderArtifact(pin, descriptor, metadata);
   const record = validateReconciliationRecords();
   check(objectDigest(pin) === objectDigest(record.runs.find(r => r.runId === pin.runId)) &&
     descriptor.runId === pin.runId && descriptor.runAttempt === pin.attempt && descriptor.sha === pin.executorSha &&
@@ -92,6 +183,7 @@ export function validateHistoricalArtifact(pin, descriptor, metadata) {
 }
 
 export function validateHistoricalAudit(rows, descriptor, pin, targets) {
+  if (pin.runId === '41527223264') return validateFailedRenderAudit(rows, descriptor, pin, targets);
   const record = validateReconciliationRecords(), p = record.heldPair;
   check(objectDigest(pin) === objectDigest(record.runs.find(r => r.runId === pin.runId)) &&
     descriptor.runId === pin.runId && descriptor.runAttempt === pin.attempt && descriptor.sha === pin.executorSha &&
