@@ -67,6 +67,7 @@ export function validateRun(run, jobs, mainSha) {
   requireThat(shaPattern.test(run.head_sha) && run.head_sha === mainSha, 'STALE_OR_INVALID_SOURCE');
   requireThat(!targets.excludedCommits.includes(run.head_sha), 'CURRENT_MERGE_NOT_AUTHORIZED');
   requireThat(jobs.length === requiredJobs.length && new Set(jobs.map(j => j.name)).size === jobs.length &&
+    new Set(jobs.map(j => j.id)).size === jobs.length && jobs.every(j => positiveAttempt(j.id)) &&
     jobs.every(j => j.run_id === run.id && j.run_attempt === run.run_attempt) &&
     requiredJobs.every(name => jobs.some(j => j.name === name && j.status === 'completed' &&
       j.conclusion === 'success')), 'CI_INVENTORY_NOT_QUALIFIED');
@@ -394,35 +395,56 @@ export function validateHealth(response, sha) {
 
 // No configurable provider URL, response bodies, request headers or raw errors are logged.
 // POSTs are never automatically retried: a lost response requires provider reconciliation.
-export function clients(env, fetcher = fetch) {
+export function clients(env, fetcher = fetch, reportGitHubRead = row => console.error(JSON.stringify(row))) {
   const evidenceToken = () => {
     requireThat(typeof env.AQGREEN_EVIDENCE_READ_TOKEN === 'string' &&
       env.AQGREEN_EVIDENCE_READ_TOKEN.trim().length > 0, 'GITHUB_EVIDENCE_READ_CREDENTIAL_REQUIRED');
     return env.AQGREEN_EVIDENCE_READ_TOKEN;
   };
-  async function request(base, token, route, body) {
+  const executorToken = () => {
+    requireThat(typeof env.GH_TOKEN === 'string' && env.GH_TOKEN.trim().length > 0,
+      'GITHUB_EXECUTOR_JOB_CREDENTIAL_REQUIRED');
+    return env.GH_TOKEN;
+  };
+  const tokenFor = owner => owner === 'source' ? evidenceToken() : executorToken();
+  // Report only fixed repository/family identifiers and observed status, never
+  // arbitrary routes, headers, bodies or errors. Preserve existing failure codes.
+  const readContext = (repository, route) => ({ repository, operation:
+    route.startsWith('/actions/') ? 'actions' : route.startsWith('/environments/') ? 'environments' :
+    route.startsWith('/rules') ? 'governance' : route.includes('/check-runs') ? 'checks' :
+    route.startsWith('/git/') || route.startsWith('/contents/') ? 'contents' :
+    route.startsWith('/commits/') || route.startsWith('/pulls/') ? 'pull-request-provenance' : 'required-evidence' });
+  async function request(base, token, route, body, github) {
     requireThat(token, 'PROVIDER_CREDENTIAL_UNAVAILABLE');
     let response;
     try {
       response = await fetcher(base + route, { method: body ? 'POST' : 'GET', redirect: 'error',
         signal: AbortSignal.timeout(30_000), headers: { Authorization: `Bearer ${token}`,
-          Accept: 'application/json', 'Content-Type': 'application/json' },
+          Accept: 'application/json', 'Content-Type': 'application/json',
+          ...(github ? { 'X-GitHub-Api-Version': '2022-11-28' } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}) });
-    } catch { throw new ReleaseFailure(body ? 'AMBIGUOUS_PROVIDER_POST_INSPECT_BEFORE_RETRY' : 'PROVIDER_READ_FAILED'); }
+    } catch {
+      if (github) reportGitHubRead({ phase: 'github-read-failed', ...github, classification: 'TRANSPORT_UNAVAILABLE' });
+      throw new ReleaseFailure(body ? 'AMBIGUOUS_PROVIDER_POST_INSPECT_BEFORE_RETRY' : 'PROVIDER_READ_FAILED');
+    }
+    if (!response.ok && github) reportGitHubRead({ phase: 'github-read-rejected', ...github,
+      ...(Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ?
+        { httpStatus: response.status } : {}) });
     requireThat(response.ok, body ? 'PROVIDER_POST_REJECTED_INSPECT_BEFORE_RETRY' : 'PROVIDER_READ_REJECTED');
     try { return await response.json(); } catch { throw new ReleaseFailure('INVALID_PROVIDER_RESPONSE'); }
   }
-  const githubRead = (repository, route, body) => {
+  const githubRead = (owner, route, body) => {
     requireThat(body === undefined, 'GITHUB_EVIDENCE_WRITE_FORBIDDEN');
-    return request(`https://api.github.com/repos/${repository}`, evidenceToken(), route);
+    const repository = owner === 'source' ? targets.repository : execution.repository;
+    return request(`https://api.github.com/repos/${repository}`, tokenFor(owner), route, undefined, readContext(repository, route));
   };
   return {
-    gh: (route, body) => githubRead(targets.repository, route, body),
-    executor: (route, body) => githubRead(execution.repository, route, body),
+    gh: (route, body) => githubRead('source', route, body),
+    executor: (route, body) => githubRead('executor', route, body),
     artifact: async (owner, id) => {
       requireThat(['source', 'executor'].includes(owner) && positiveId(id),
         'GITHUB_ARTIFACT_INPUT_INVALID');
-      const token = evidenceToken();
+      const token = tokenFor(owner);
       try {
         const repository = owner === 'source' ? targets.repository : execution.repository;
         const response = await fetcher(`https://api.github.com/repos/${repository}/actions/artifacts/${id}/zip`, {
@@ -519,16 +541,19 @@ export async function qualify(api, runId) {
   const run = await api.gh(`/actions/runs/${runId}`);
   requireThat(String(run.id) === String(runId) && positiveAttempt(run.run_attempt), 'CI_IDENTITY_UNVERIFIABLE');
   const page = await api.gh(`/actions/runs/${runId}/attempts/${run.run_attempt}/jobs?per_page=100`);
-  requireThat(page.total_count === page.jobs?.length, 'CI_INVENTORY_INCOMPLETE');
-  if (external) for (const job of page.jobs ?? []) {
+  requireThat(Array.isArray(page.jobs) && page.total_count === page.jobs.length, 'CI_INVENTORY_INCOMPLETE');
+  const checkIds = [];
+  if (external) for (const job of page.jobs) {
     const prefix = `https://api.github.com/repos/${targets.repository}/check-runs/`;
     const id = job.check_run_url?.startsWith(prefix) ? job.check_run_url.slice(prefix.length) : '';
     requireThat(positiveId(id) && Number.isSafeInteger(Number(id)), 'CI_CHECK_IDENTITY_UNVERIFIABLE');
-    const check = await api.gh(`/check-runs/${id}`);
-    requireThat(String(check.id) === id && check.app?.id === 15368 && check.head_sha === run.head_sha &&
-      check.name === job.name && check.status === 'completed' && check.conclusion === 'success',
-      'CI_TRUSTED_APP_REQUIRED');
+    checkIds.push(id);
   }
+  requireThat(new Set(checkIds).size === checkIds.length, 'CI_CHECK_IDENTITY_UNVERIFIABLE');
+  // GitHub's authenticated Actions run/attempt/jobs are the execution authority.
+  // Protected governance still pins all required check contexts to App 15368;
+  // admission still verifies the approved workflow/security definitions and report.
+  // Do not re-query the Checks API with a fine-grained source PAT.
   const main = await api.gh('/git/ref/heads/main');
   const qualified = validateRun(run, page.jobs, main.object.sha);
   // The latest run can change while its attempt-specific jobs are being read.

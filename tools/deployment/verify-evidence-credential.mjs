@@ -51,7 +51,7 @@ export async function checkCredential(env, { event, checkoutSha, mode, fetcher =
     emit({ check: phase, httpStatus: response.status });
     return response;
   };
-  const api = clients({ AQGREEN_EVIDENCE_READ_TOKEN: token }, transport);
+  const api = clients({ AQGREEN_EVIDENCE_READ_TOKEN: token, GH_TOKEN: env.GH_TOKEN }, transport);
   await currentApproval(api, head);
   if (mode === 'context') { emit({ check: 'trusted-context', result: 'PASS', executorSha: head }); return; }
 

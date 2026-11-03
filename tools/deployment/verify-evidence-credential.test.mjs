@@ -91,7 +91,8 @@ test('full credential check authenticates both repositories, archive integrity a
   const f = setup(); await f.run();
   assert.equal(f.reports.at(-1).result, 'PASS');
   assert.ok(f.calls.some(c => c.url.endsWith('/user')));
-  assert.ok(f.calls.some(c => c.url.includes('/check-runs/')));
+  assert.ok(f.calls.some(c => c.url.startsWith(`https://api.github.com/repos/${executor}/commits/${head}/check-runs?`)));
+  assert.ok(!f.calls.some(c => c.url.startsWith(`https://api.github.com/repos/${source}/check-runs/`)));
   assert.ok(f.calls.some(c => c.url.includes('/contents/')));
   assert.ok(f.calls.some(c => c.url.includes('/commits/') && c.url.includes('/pulls')));
   assert.ok(f.calls.some(c => c.url.includes('/actions/artifacts/7890/zip')));
@@ -99,7 +100,7 @@ test('full credential check authenticates both repositories, archive integrity a
     '/environments/production-release', '/actions/runs?per_page=1'])
     assert.ok(f.calls.some(c => c.url.startsWith(`https://api.github.com/repos/${repo}${route}`)));
   assert.ok(f.calls.filter(c => c.url.startsWith('https://api.github.com/')).every(c =>
-    c.options.headers.Authorization === `Bearer ${token}`));
+    c.options.headers.Authorization === `Bearer ${c.url.startsWith(`https://api.github.com/repos/${executor}/`) ? 'own-job-canary' : token}`));
   const output = JSON.stringify(f.reports);
   for (const secret of [token, 'forbidden-render-canary', 'forbidden-vercel-canary', 'signed=not-for-logs'])
     assert.ok(!output.includes(secret));
@@ -131,7 +132,7 @@ test('evidence token owners must match an approved username and its own immutabl
 });
 
 test('any required read failure stops immediately without retry or scope fallback', async () => {
-  for (const failedPath of ['/user', '/check-runs/200', '/actions/artifacts/7890/zip', '/contents/',
+  for (const failedPath of ['/user', '/actions/runs/123/attempts/1/jobs', '/actions/artifacts/7890/zip', '/contents/',
     '/rulesets/25403847', '/environments/production-release', '/actions/runs?per_page=1']) {
     const f = setup(); let failed = false;
     await assert.rejects(f.run('verify', async (url, options) => {

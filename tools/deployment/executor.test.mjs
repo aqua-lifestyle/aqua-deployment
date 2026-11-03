@@ -70,9 +70,16 @@ test('Render failure and incorrect backend health prevent frontend deployment',a
     await assert.rejects(f.execute());assert.deepEqual(f.posts.map(x=>x.provider),['render']);
   }
 });
-test('wrong CI App, revision, result or check URL is rejected',async()=>{
-  for(const mutate of [c=>c.app.id=1,c=>c.head_sha=previous,c=>c.conclusion='neutral',c=>c.name='forged']){
-    const f=fixture();const read=f.api.gh;f.api.gh=async(route)=>{const r=await read(route);if(route.startsWith('/check-runs/'))mutate(r);return r;};
+test('wrong protected CI App, source revision, job result or check URL is rejected',async()=>{
+  for(const mutate of [f=>{
+    for(const rows of [f.state.rules,f.state.ruleset.rules])
+      rows.find(r=>r.type==='required_status_checks').parameters.required_status_checks[0].integration_id=1;
+  },f=>f.state.main=previous]){
+    const f=fixture();mutate(f);
+    await assert.rejects(f.execute());assert.equal(f.posts.length,0);
+  }
+  for(const mutate of [j=>j.conclusion='neutral',j=>j.name='forged']){
+    const f=fixture();const read=f.api.gh;f.api.gh=async route=>{const r=await read(route);if(route.includes('/jobs?'))mutate(r.jobs[0]);return r;};
     await assert.rejects(f.execute());assert.equal(f.posts.length,0);
   }
   const f=fixture();const read=f.api.gh;f.api.gh=async route=>{const r=await read(route);if(route.includes('/jobs?'))r.jobs[0].check_run_url='https://attacker.invalid/check';return r;};
@@ -120,11 +127,11 @@ test('legacy application provider ambiguity is preserved during executor takeove
   await validateLegacyHistory(api);job.steps[0].conclusion='failure';await assert.rejects(validateLegacyHistory(api),/RECONCILIATION/);
 });
 test('provider token destinations are fixed and redirects are rejected',async()=>{
-  const calls=[];const api=clients({...runnerEnv(),AQGREEN_EVIDENCE_READ_TOKEN:'github-canary'},async(url,opts)=>{calls.push({url,opts});return {ok:true,json:async()=>({})};});
+  const calls=[];const api=clients({...runnerEnv(),GH_TOKEN:'job-canary',AQGREEN_EVIDENCE_READ_TOKEN:'github-canary'},async(url,opts)=>{calls.push({url,opts});return {ok:true,json:async()=>({})};});
   await api.render('/services/'+targets.render.id);await api.vercel('/v9/projects/'+targets.vercel.id);await api.executor('/actions/runs/456');
   assert.deepEqual(calls.map(x=>new URL(x.url).origin),['https://api.render.com','https://api.vercel.com','https://api.github.com']);
   assert.ok(calls.every(x=>x.opts.redirect==='error'));
-  assert.equal(calls[2].opts.headers.Authorization,'Bearer github-canary');
+  assert.equal(calls[2].opts.headers.Authorization,'Bearer job-canary');
   assert.ok(!JSON.stringify(calls[0]).includes('synthetic-vercel-token'));
 });
 test('application targets, scripts and arbitrary fields are not executor inputs',async()=>{

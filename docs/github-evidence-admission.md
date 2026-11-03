@@ -34,8 +34,11 @@ merged and that runtime approval has not occurred.
 
 These properties are distinct:
 
-- Authenticated GitHub API results establish reported source/run/attempt, check
-  identities, producing Actions App 15368 and job outcomes.
+- Authenticated GitHub Actions API results establish source/run/attempt and exact
+  job/check identities and outcomes. Protected required-status-check governance
+  pins every required context to Actions App 15368. The owner's bounded
+  [Actions admission simplification](protected-actions-admission.md) selects this
+  existing GitHub authority instead of duplicate application Checks API reads.
 - The executor-owned inventory pins all 240 existing stable test identities and
   25 source files, including workflows, harness, reporter and test definitions.
   The candidate's inventory must match too; it is not an authority.
@@ -62,10 +65,13 @@ an ordinary application PR cannot silently update the approved copy.
 1. The existing application CI completion trigger dispatches only source SHA,
    CI run ID and attempt. Automatic API dispatch is not manual release dispatch.
 2. Candidate qualification authenticates the exact current-main push, all 17
-   checks, App 15368, source and executor identities, merged PR provenance and
-   existing governance. Source is fetched as inert Git objects.
+   successful Actions jobs, unique job/check IDs, source and executor identities,
+   merged PR provenance and protected governance requiring all contexts from App
+   15368. Source is fetched as inert Git objects. Application check runs are not
+   re-queried through the unsupported fine-grained PAT Checks API.
 3. The separate admission job has no production environment or provider secrets.
-   Its explicit read-only GitHub evidence credential covers both repositories.
+   Its explicit source read credential covers the application; the native read-only
+   job token covers the executor repository.
    It verifies regular
    Git blobs against all protected hashes; no checkout/execution of app scripts.
 4. Admission inventories the exact CI run's artifacts. It requires one unexpired
@@ -99,8 +105,10 @@ bind observed bytes; they are not independent signatures. Authenticity comes fro
 the approved executor workflow, GitHub artifact provenance and same-run job checks.
 Production audit rows retain authorization/evidence/inventory and artifact IDs.
 
-The GitHub client uses only `AQGREEN_EVIDENCE_READ_TOKEN` for both repositories
-and artifact downloads. The job token cannot supply cross-repository authority.
+The GitHub client uses `AQGREEN_EVIDENCE_READ_TOKEN` for application reads and
+application artifacts, and `GH_TOKEN` (the native job token) for executor-local
+reads and executor artifacts. This is fixed repository routing, not a fallback.
+The job token cannot supply cross-repository application authority.
 The evidence client permits GET only; missing/denied authentication fails without
 credential fallback. This enforces transport behavior; actual fine-grained token
 permissions and repository scope require authorized owner configuration/readback.
