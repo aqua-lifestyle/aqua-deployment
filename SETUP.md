@@ -17,6 +17,13 @@ failure categories, exact application/CI binding and bounded validation evidence
 Provider credentials remain isolated from fetching; ordinary PR tests remain
 secret-free. This correction authorizes no production operation.
 
+The owner-authorized [fixed evidence-token diagnostic](docs/evidence-token-diagnostic.md)
+adds a separate protected-main manual check with no inputs. It uses the existing
+read token for only the accepted application's fixed commit GET and emits a
+sanitized HTTP/object-match verdict. It does not fetch source, dispatch release
+admission, change credentials or grant permissions. Execute it only under the
+owner's bounded authorization; its result is not production authorization.
+
 The earlier commission-invalidation correction selects policy v7; see the
 [schema-first and forward-only operator procedure](docs/first-release-recovery.md#commission-invalidation-schema-first-policy-v7).
 It adds no migration execution, deployment dispatch, credential or activation step.

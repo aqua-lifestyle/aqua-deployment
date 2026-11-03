@@ -1,0 +1,35 @@
+name: Protected evidence token diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    name: Check accepted application commit access
+    if: >-
+      github.repository == 'aqua-lifestyle/aqua-deployment' &&
+      github.repository_id == '1423239668' &&
+      github.ref == 'refs/heads/main' && github.ref_protected &&
+      github.run_attempt == 1 &&
+      ((github.actor == 'Xolani-M' && github.actor_id == '86495928') ||
+       (github.actor == 'aqualifestyleclub' && github.actor_id == '307076734')) &&
+      (github.triggering_actor == 'Xolani-M' || github.triggering_actor == 'aqualifestyleclub')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Validate protected main context without the evidence token
+        run: node tools/deployment/evidence-token-diagnostic.mjs context
+      - name: Read only the fixed accepted application commit
+        env:
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
+        run: node tools/deployment/evidence-token-diagnostic.mjs verify
