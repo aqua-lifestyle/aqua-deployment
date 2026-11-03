@@ -32,7 +32,8 @@ test('inert source fetch accepts validated qualification-only requests and rejec
     for (const value of [true, 'true', false, 'false']) {
       writeFileSync(path, JSON.stringify({ inputs: { ...dispatch, qualification_only: value } }));
       const calls = [];
-      fetchSource({ GITHUB_EVENT_PATH: path, SOURCE_DIR: join(dir, 'objects') }, (command, args) => {
+      fetchSource({ GITHUB_EVENT_PATH: path, SOURCE_DIR: join(dir, 'objects'),
+        AQGREEN_EVIDENCE_READ_TOKEN: 'read-canary' }, (command, args) => {
         calls.push({ command, args }); return args.includes('rev-parse') ? source + '\n' : '';
       });
       assert.equal(calls.length, 3);
@@ -85,7 +86,7 @@ test('production job requires the validated false output, never raw qualificatio
   const beforeProduction = workflow.split('\n  production:\n')[0];
   assert.doesNotMatch(beforeProduction, /environment:/);
   assert.deepEqual([...beforeProduction.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),
-    ['AQGREEN_EVIDENCE_READ_TOKEN', 'AQGREEN_EVIDENCE_READ_TOKEN']);
+    ['AQGREEN_EVIDENCE_READ_TOKEN', 'AQGREEN_EVIDENCE_READ_TOKEN', 'AQGREEN_EVIDENCE_READ_TOKEN']);
 });
 
 test('qualification dispatch executes normal candidate/admission, retains a purpose-bound receipt and rejects deploy', async () => {

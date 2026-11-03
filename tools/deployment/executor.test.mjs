@@ -142,10 +142,13 @@ test('source fetch is inert, fixed-origin, SHA-only and strips inherited credent
   const dir=mkdtempSync(join(tmpdir(),'aqua-inert-'));try{
     const path=join(dir,'event.json');writeFileSync(path,JSON.stringify({inputs:{ci_run_id:'123',ci_run_attempt:'1',sha:source}}));
     const calls=[];fetchSource({GITHUB_EVENT_PATH:path,SOURCE_DIR:join(dir,'objects'),GITHUB_WORKSPACE:'/trusted',
-      RENDER_API_KEY:'render-canary',VERCEL_TOKEN:'vercel-canary',GIT_CONFIG_COUNT:'1'},(exe,args,opts)=>{
+      AQGREEN_EVIDENCE_READ_TOKEN:'read-canary',RENDER_API_KEY:'render-canary',VERCEL_TOKEN:'vercel-canary',
+      GIT_CONFIG_COUNT:'7',GIT_CONFIG_KEY_0:'unsafe',GIT_CONFIG_VALUE_0:'inherited-canary'},(exe,args,opts)=>{
         calls.push({exe,args,opts});return args.includes('rev-parse')?source+'\n':'';});
     assert.equal(calls.length,3);assert.ok(calls.every(x=>x.exe==='git' && !('RENDER_API_KEY' in x.opts.env)));
-    assert.ok(calls.every(x=>!('VERCEL_TOKEN' in x.opts.env) && !('GIT_CONFIG_COUNT' in x.opts.env)));
+    assert.ok(calls.every(x=>!('VERCEL_TOKEN' in x.opts.env) && !JSON.stringify(x).includes('inherited-canary')));
+    assert.ok([calls[0],calls[2]].every(x=>!('GIT_CONFIG_COUNT' in x.opts.env)));
+    assert.equal(calls[1].opts.env.GIT_CONFIG_COUNT,'1');
     assert.ok(calls[1].args.includes('https://github.com/aqua-lifestyle/aqua-lifestyle.git'));
     assert.ok(calls.every(x=>!x.args.includes('checkout')&&!x.args.includes('submodule')));
   }finally{rmSync(dir,{recursive:true,force:true});}
@@ -158,7 +161,8 @@ test('separate pre-secret admission gates deployment; only the protected GET che
   assert.deepEqual([...candidate.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]), ['AQGREEN_EVIDENCE_READ_TOKEN']);
   assert.ok(!admission.includes('environment:'));
   assert.doesNotMatch(admission,/secrets\.(RENDER_API_KEY|VERCEL_TOKEN)/);
-  assert.deepEqual([...admission.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]), ['AQGREEN_EVIDENCE_READ_TOKEN']);
+  assert.deepEqual([...admission.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),
+    ['AQGREEN_EVIDENCE_READ_TOKEN','AQGREEN_EVIDENCE_READ_TOKEN']);
   assert.match(production,/needs: \[candidate, admission\]/);
   assert.match(production,/needs\.admission\.result == 'success'/);
   assert.match(production,/environment: production-release/);
