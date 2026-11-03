@@ -58,7 +58,7 @@ const environment = () => ({ name: targets.environment, can_admins_bypass: false
   protection_rules: [{ type: 'branch_policy' }] });
 const branches = () => [{ name: 'main', type: 'branch' }];
 const runnerEnv = (attempt = 1) => ({ GITHUB_REPOSITORY: targets.executor.repository, GITHUB_SHA:'d'.repeat(40), GITHUB_WORKFLOW_SHA:'d'.repeat(40),
-  GITHUB_RUN_ID: '456', GITHUB_RUN_ATTEMPT: String(attempt), GITHUB_REF: 'refs/heads/main',
+  GITHUB_RUN_ID: '456', GITHUB_RUN_ATTEMPT: String(attempt), GITHUB_REF: 'refs/heads/main', GITHUB_REF_PROTECTED: 'true',
   GITHUB_WORKFLOW_REF: `${targets.executor.repository}/.github/workflows/deploy.yml@refs/heads/main`,
   RENDER_API_KEY: 'synthetic-render-key', VERCEL_TOKEN: 'synthetic-vercel-token' });
 // Preserve explicit v6 compatibility coverage. New schema-first tests select v7

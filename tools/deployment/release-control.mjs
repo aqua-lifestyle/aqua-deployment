@@ -5,7 +5,6 @@ import { pathToFileURL } from 'node:url';
 import { approvedRecoveryReadback, legacyRecoveryPair, validateFirstReleaseRecovery,
   validateLegacyProviderPair, FirstReleaseRecoveryDenied, nativeRecoveryPolicyKind, validNativeHeldFrontend } from './first-release-recovery.mjs';
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
-import { approvedBypassReadback, approvedReadbacks, GovernanceReadbackDenied } from './governance-readback.mjs';
 import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody, validateFileDeployment } from './vercel-source.mjs';
 import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validateReadiness } from './runtime-readiness.mjs';
 import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied, memberContinuation,
@@ -140,7 +139,7 @@ export function freezeCandidate(qualified, env, policy = standingPolicy, qualifi
   requireThat(['full', memberPolicy.mode].includes(releaseMode), 'EXECUTOR_INPUT_INVALID');
   requireThat(env.GITHUB_REPOSITORY === execution.repository && positiveId(env.GITHUB_RUN_ID) &&
     positiveId(env.GITHUB_RUN_ATTEMPT) && positiveAttempt(Number(env.GITHUB_RUN_ATTEMPT)) &&
-    env.GITHUB_REF === 'refs/heads/main' &&
+    env.GITHUB_REF === 'refs/heads/main' && env.GITHUB_REF_PROTECTED === 'true' &&
     env.GITHUB_WORKFLOW_REF === `${execution.repository}/.github/workflows/${execution.workflow}@refs/heads/main` &&
     (!external || (shaPattern.test(env.GITHUB_SHA) && env.GITHUB_WORKFLOW_SHA === env.GITHUB_SHA)),
   'RELEASE_CONTEXT_UNVERIFIABLE');
@@ -188,7 +187,7 @@ export function validatePolicy(qualified, env, policy = standingPolicy) {
   requireThat(qualified.qualificationOnly === false, 'QUALIFICATION_ONLY_CANNOT_DEPLOY');
   requireThat(env.GITHUB_REPOSITORY === execution.repository && env.GITHUB_RUN_ID === qualified.releaseRunId &&
     env.GITHUB_RUN_ATTEMPT === String(qualified.releaseRunAttempt) &&
-    env.GITHUB_REF === 'refs/heads/main' &&
+    env.GITHUB_REF === 'refs/heads/main' && env.GITHUB_REF_PROTECTED === 'true' &&
     env.GITHUB_WORKFLOW_REF === `${execution.repository}/.github/workflows/${execution.workflow}@refs/heads/main` &&
     (!external || (env.GITHUB_SHA === qualified.executorSha && env.GITHUB_WORKFLOW_SHA === qualified.executorSha)),
   'TRUSTED_RELEASE_CONTEXT_REQUIRED');
@@ -205,8 +204,8 @@ export function validateEnvironment(environment, branches) {
     branches[0].name === 'main' && branches[0].type === 'branch', 'UNATTENDED_MAIN_ONLY_ENVIRONMENT_REQUIRED');
 }
 
-// Owner-controlled merge governance, not an independently protected verifier.
-// One non-bypassable ruleset must enforce all mandatory checks and history safety.
+// Retained for the historical setup checker, not the deployment execution path.
+// GitHub's existing protected merge process enforces these settings.
 export function validateMainGovernance(rules, ruleset) {
   requireThat(Array.isArray(rules) && rules.length > 0 && rules.length < 100 &&
     rules.every(r => ['Repository', 'Organization'].includes(r.ruleset_source_type) && positiveAttempt(r.ruleset_id)),
@@ -232,26 +231,14 @@ export function validateMainGovernance(rules, ruleset) {
     rows.some(checksRequired)), 'MAIN_CI_GOVERNANCE_REQUIRED');
 }
 
-export async function validateInfrastructure(api, identity, policy = standingPolicy, readbacks = approvedReadbacks) {
-  // Approve the exact executor revision before trusting its administrator readbacks.
+export async function validateInfrastructure(api, identity, policy = standingPolicy) {
+  // Protected merges and GitHub's environment boundary enforce settings. Runtime
+  // authenticates the exact administrator-approved executor and current run;
+  // it must not need branch-rules, ruleset or environment-administration reads.
   if (external) {
     validateReleaseIdentity(identity);
     await validateExecutorApproval(api, identity, policy);
   }
-  const rules = await api.gh('/rules/branches/main?per_page=100');
-  requireThat(Array.isArray(rules) && rules.length > 0 && rules.length < 100,
-    'MAIN_GOVERNANCE_UNVERIFIABLE');
-  const checkRules = rules.filter(r => r.type === 'required_status_checks' &&
-    r.ruleset_source_type === 'Repository' && r.ruleset_source === targets.repository && positiveAttempt(r.ruleset_id));
-  requireThat(checkRules.length === 1, 'MAIN_CI_GOVERNANCE_REQUIRED');
-  // Missing private metadata requires an approved, revision-bound readback;
-  // it never means empty bypass actors and never requires runtime write access.
-  const ruleset = approvedBypassReadback(await api.gh(`/rulesets/${checkRules[0].ruleset_id}`), targets.repository, readbacks);
-  validateMainGovernance(rules, ruleset);
-  const environment = await api.gh(`/environments/${targets.environment}`);
-  const page = await api.gh(`/environments/${targets.environment}/deployment-branch-policies?per_page=100`);
-  requireThat(page.total_count === page.branch_policies?.length, 'ENVIRONMENT_BRANCH_INVENTORY_INCOMPLETE');
-  validateEnvironment(environment, page.branch_policies);
   if (external) {
     const head = await api.executor('/git/ref/heads/main');
     requireThat(head.object?.sha === identity.executorSha, 'STALE_EXECUTOR_REVISION');
@@ -260,24 +247,6 @@ export async function validateInfrastructure(api, identity, policy = standingPol
     requireThat(String(current.id) === identity.releaseRunId && current.head_sha === identity.executorSha &&
       current.run_attempt === identity.releaseRunAttempt && current.status === 'in_progress',
       'EXECUTOR_ATTEMPT_CHANGED');
-    const environment = await api.executor(`/environments/${targets.environment}`);
-    const page = await api.executor(`/environments/${targets.environment}/deployment-branch-policies?per_page=100`);
-    requireThat(page.total_count === page.branch_policies?.length, 'ENVIRONMENT_BRANCH_INVENTORY_INCOMPLETE');
-    validateEnvironment(environment, page.branch_policies);
-    const rules = await api.executor('/rules/branches/main?per_page=100');
-    requireThat(Array.isArray(rules) && rules.length > 0 && rules.length < 100, 'EXECUTOR_HISTORY_PROTECTION_REQUIRED');
-    const ids = [...new Set(rules.map(r => r.ruleset_id))];
-    let protectedHistory = false;
-    for (const id of ids) {
-      requireThat(positiveAttempt(id), 'EXECUTOR_HISTORY_PROTECTION_REQUIRED');
-      const rule = approvedBypassReadback(await api.executor(`/rulesets/${id}`), execution.repository, readbacks);
-      if (rule.enforcement === 'active' && rule.source === execution.repository &&
-        rule.source_type === 'Repository' && rule.target === 'branch' &&
-        Array.isArray(rule.bypass_actors) && rule.bypass_actors.length === 0 &&
-        ['deletion', 'non_fast_forward'].every(type => rule.rules?.some(r => r.type === type) &&
-          rules.some(r => r.type === type && r.ruleset_id === id))) protectedHistory = true;
-    }
-    requireThat(protectedHistory, 'EXECUTOR_HISTORY_PROTECTION_REQUIRED');
     await validateLegacyHistory(api);
   }
 }
@@ -1447,7 +1416,7 @@ export async function run(env, options = {}) {
   try { await main(env, options); return 0; }
   catch (error) {
     const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied ||
-      error instanceof GovernanceReadbackDenied || error instanceof VercelSourceDenied ||
+      error instanceof VercelSourceDenied ||
       error instanceof FirstReleaseRecoveryDenied || error instanceof SchemaFirstDenied ||
       error instanceof MemberReleaseDenied || error instanceof HistoricalReconciliationDenied ||
       error instanceof PriorRunNotRecognized) ? error.message : 'UNEXPECTED_RELEASE_ERROR';

@@ -3,6 +3,10 @@
 Version: 1. Base: `11f8fd0fe891de81a138d5beeb77a837b6561406`.
 Branch: `fix/protected-actions-admission-20261103`.
 
+The later [protected-merge correction](protected-merge-admission.md) supersedes this
+worklog's runtime-governance-read assumptions. Its Actions/credential routing and
+security-evidence contracts remain; historical observations below are not refreshed.
+
 ## Governing owner direction and scope
 
 The owner's current direction, **“Finish the MVP Without Further Unnecessary

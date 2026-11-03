@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { clients, qualify, validateRun, targets } from './release-control.mjs';
+import { clients, qualify, validateRun, freezeCandidate, validatePolicy, targets } from './release-control.mjs';
 import { authenticatePreMutationProducer } from './release-prior-run-classification.mjs';
 import { sha256 } from './github-evidence.mjs';
-import { run, jobs, source, previous, fixture } from './fixtures/provider.mjs';
+import { run, jobs, source, previous, fixture, runnerEnv } from './fixtures/provider.mjs';
 
 function actionsFixture() {
   const state = { run: run(), jobs: jobs(), main: source }, calls = [];
@@ -49,15 +49,28 @@ test('Actions authority still denies foreign source/workflow, failed or replaced
   assert.throws(() => validateRun(run(), jobs().map(j => ({ ...j, id: 0 })), source), /CI_INVENTORY_NOT_QUALIFIED/);
 });
 
-test('full guarded flow keeps security evidence, protected App-bound governance and provider ordering without source Checks reads', async () => {
-  const f = fixture(), read = f.api.gh;
-  f.api.gh = route => {
-    assert.ok(!route.includes('check-runs'), 'only authenticated Actions evidence is selected');
-    return read(route);
-  };
+test('complete guarded flow uses protected merges without any runtime governance or environment-administration read', async () => {
+  const f = fixture();
+  for (const owner of ['gh', 'executor']) {
+    const read = f.api[owner];
+    f.api[owner] = route => {
+      assert.doesNotMatch(route, /^\/(rules|rulesets|environments|actions\/permissions)/);
+      if (owner === 'gh') assert.ok(!route.includes('check-runs'), 'authenticated Actions evidence is selected');
+      return read(route);
+    };
+  }
   await f.execute();
   assert.deepEqual(f.posts.map(p => p.provider), ['render', 'vercel']);
   assert.equal(f.reports.at(-1).phase, 'verified');
+});
+
+test('the GitHub-provided protected-main context is mandatory at candidate creation and the deployment guard', () => {
+  const qualified = validateRun(run(), jobs(), source), q = fixture().state.candidate;
+  for (const value of [undefined, null, false, true, 'false', '']) {
+    const env = { ...runnerEnv(), GITHUB_REF_PROTECTED: value };
+    assert.throws(() => freezeCandidate(qualified, env), /RELEASE_CONTEXT_UNVERIFIABLE/);
+    assert.throws(() => validatePolicy(q, env), /TRUSTED_RELEASE_CONTEXT_REQUIRED/);
+  }
 });
 
 test('executor artifacts use only the native job token; neither credential follows a storage redirect', async () => {
@@ -100,11 +113,12 @@ test('native executor credential is wired only to the three existing controller 
   }
   assert.doesNotMatch(yaml.split('\n  production:\n')[0], /secrets\.(RENDER_API_KEY|VERCEL_TOKEN)|environment:/);
   assert.match(yaml, /needs\.candidate\.outputs\.qualification_only == 'false'/);
+  assert.match(yaml, /github.ref == 'refs\/heads\/main' && github.ref_protected/);
 });
 
 test('reviewed pre-routing workflow fingerprints remain recognized without relaxing mutation reconciliation', async () => {
   const workflow = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8')
-    .replace(/^          GH_TOKEN: \$\{\{ github.token \}\}\n/gm, '');
+    .replace(/^          GH_TOKEN: \$\{\{ github.token \}\}\n/gm, '').replace(' && github.ref_protected', '');
   assert.equal(sha256(Buffer.from(workflow)), '018d52b64d1acbeabef5d60704fbc200d4fd0036632489a228559c68f4610f8d');
   const controller = readFileSync(new URL('./release-control.mjs', import.meta.url));
   const sha = 'a'.repeat(40);
@@ -114,4 +128,12 @@ test('reviewed pre-routing workflow fingerprints remain recognized without relax
   }, sha);
   assert.equal(proof.workflowSha256, sha256(Buffer.from(workflow)));
   assert.equal(proof.executorSha, sha);
+  const previousWorkflow = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8')
+    .replace(' && github.ref_protected', '');
+  assert.equal(sha256(Buffer.from(previousWorkflow)), '01d3e74bbdcee105c159a321c52d1016d4e7c0157ab8d873f280bb6b52f5b92e');
+  const prior = await authenticatePreMutationProducer(async route => {
+    const path = route.split('/contents/')[1].split('?')[0], bytes = path.endsWith('.yml') ? Buffer.from(previousWorkflow) : controller;
+    return { type: 'file', path, encoding: 'base64', size: bytes.length, content: bytes.toString('base64') };
+  }, sha);
+  assert.equal(prior.workflowSha256, sha256(Buffer.from(previousWorkflow)));
 });

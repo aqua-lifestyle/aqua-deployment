@@ -36,7 +36,8 @@ These properties are distinct:
 
 - Authenticated GitHub Actions API results establish source/run/attempt and exact
   job/check identities and outcomes. Protected required-status-check governance
-  pins every required context to Actions App 15368. The owner's bounded
+  pins every required context to Actions App 15368 through GitHub's existing merge
+  protections, rather than a release-time governance API read. The owner's bounded
   [Actions admission simplification](protected-actions-admission.md) selects this
   existing GitHub authority instead of duplicate application Checks API reads.
 - The executor-owned inventory pins all 240 existing stable test identities and
@@ -66,8 +67,8 @@ an ordinary application PR cannot silently update the approved copy.
    CI run ID and attempt. Automatic API dispatch is not manual release dispatch.
 2. Candidate qualification authenticates the exact current-main push, all 17
    successful Actions jobs, unique job/check IDs, source and executor identities,
-   merged PR provenance and protected governance requiring all contexts from App
-   15368. Source is fetched as inert Git objects. Application check runs are not
+   merged PR provenance under the existing protected merge process requiring all
+   contexts from App 15368. Source is fetched as inert Git objects. Application check runs are not
    re-queried through the unsupported fine-grained PAT Checks API.
 3. The separate admission job has no production environment or provider secrets.
    Its explicit source read credential covers the application; the native read-only
@@ -113,8 +114,19 @@ The evidence client permits GET only; missing/denied authentication fails withou
 credential fallback. This enforces transport behavior; actual fine-grained token
 permissions and repository scope require authorized owner configuration/readback.
 
-GitHub hides bypass actors from readers without ruleset-write access. The runtime
-first authenticates the exact trusted-administrator executor merge, then may use
+The owner's [protected-merge correction](protected-merge-admission.md) selects
+GitHub's existing merge/environment enforcement and trusted-administrator control
+instead of runtime branch-rules, ruleset, bypass and environment-configuration
+reads. The controller still authenticates the exact trusted-administrator executor
+merge, protected-main context, current executor revision/run and complete provider
+history. It does not require administrative API access or treat an unavailable
+settings read as empty/valid settings. Trusted administrators remain responsible
+for maintaining the protected configuration; runtime does not independently audit
+its contents or changes.
+
+The following bypass-readback account is historical setup context, not a current
+release gate. GitHub hides bypass actors from readers without ruleset-write access.
+The historical checker first authenticates the trusted executor context, then may use
 its committed `governance/ruleset-readbacks.json` for that private field. Every
 public ruleset field selected by the contract, including ID, source, conditions,
 rules, enforcement and `updated_at`, must match the original privileged readback.
@@ -125,7 +137,7 @@ hidden actors or cryptographic independence. Actual executor settings and the
 original administrator readback are now recorded; their runtime policy authority
 was established by PR #1's trusted-administrator merge for policy v3. This policy-v4
 correction requires its own separately authorized trusted-administrator merge.
-See the exact assumptions and next actions in
+See the historical assumptions and actions in
 [`permission-unblocking.md`](permission-unblocking.md).
 
 ### Qualification-only dispatch
