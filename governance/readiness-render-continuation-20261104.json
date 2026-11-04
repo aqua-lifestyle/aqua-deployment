@@ -1,0 +1,45 @@
+{
+  "contract": "aqua.exact-readiness-render-continuation",
+  "version": 1,
+  "sourceBindingSha256": "da6502bd20c0df2c4ea1a151b995e5ea997ae58b3cf424c7cec0cb12c1785919",
+  "runId": "41868204651",
+  "runNumber": 39,
+  "attempt": 1,
+  "executorSha": "bda49a9495620beba831105404b1656d822a4a1b",
+  "productionJobId": 126708982332,
+  "artifactId": "13342784015",
+  "archiveSha256": "500e7d55ce3c07606742d771ff83b67824fed7408777ed1dc5eaadc867ee5182",
+  "reportSha256": "107a8931e5c9434d8fa978c037599cc31fccd262353d8daa43617ddd1b77a887",
+  "rowsSha256": "3c272f018626769576e6ac85e9765171aec763d1be83e6066944206305cfcd0b",
+  "rowCount": 28,
+  "terminalFailureCode": "API_REVISION_OR_RECOVERY_READINESS_FAILED",
+  "originalConclusion": "failure",
+  "renderDeployId": "dep-dbllu0gm7kps73bujf70",
+  "renderSha": "2488682e7f36828c380b2f962f29b9f9b4cb6384",
+  "renderEvidence": {
+    "githubDeploymentId": "7551712123",
+    "appId": 14658,
+    "appSlug": "render",
+    "statuses": [
+      { "id": "21357070516", "state": "in_progress", "createdAt": "2026-11-04T16:36:19Z", "exactRenderDeployLinked": true },
+      { "id": "21357260746", "state": "success", "createdAt": "2026-11-04T16:37:57Z", "exactRenderDeployLinked": true }
+    ]
+  },
+  "laterPublicHealthObservation": {
+    "observedAt": "2026-11-04T16:42:34.696Z",
+    "httpStatus": 200,
+    "buildId": "2488682e7f36828c380b2f962f29b9f9b4cb6384",
+    "exactHealthPredicate": "PASS"
+  },
+  "limitations": {
+    "originalFailedHealthResponse": "NOT_RETAINED_CAUSE_UNDETERMINED",
+    "laterPassingObservationErasesOriginalFailure": false,
+    "currentLiveStateHoldsAndOidc": "REQUIRE_FRESH_EXISTING_CHECKS",
+    "databaseWriteAbsence": "NOT_ESTABLISHED_BY_DEPLOYMENT_OR_HEALTH"
+  },
+  "vercelEffect": "NO_MUTATION_INITIATED_BY_ORIGINAL_ATTEMPT",
+  "originalFailureRewritten": false,
+  "successfulFullReleasePredecessor": false,
+  "financialActivationAuthorized": false,
+  "databaseMutationAuthorized": false
+}

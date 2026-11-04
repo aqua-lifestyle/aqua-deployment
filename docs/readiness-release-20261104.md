@@ -55,3 +55,28 @@ historical failure archive. They are not production operation or OIDC evidence.
 
 Actual main-CI, trigger and provider results are reported only after observation.
 No financial activation, migration, credential or infrastructure change is included.
+
+## Actual new-source acknowledgement and guarded continuation
+
+Application main CI `41861969794/1` passed all 17 jobs. Automatic trigger
+`41866785653` failed at App-token setup before its dispatch step; no trigger or
+credential setting was changed. The existing authorized executor workflow was
+invoked once as `41868204651/1` at executor `bda49a9...`.
+
+That execution issued one Render request for the new source. Render App deployment
+`7551712123` acknowledged `dep-dbllu0gm7kps73bujf70` and reported success. The
+executor's immediate health predicate failed; its response was not retained and
+no transient/startup cause is assumed. A later ordinary health observation passed
+the exact predicate at the new source. No Vercel operation was initiated.
+
+The separate immutable continuation record retains that original failed outcome,
+actual original archive/digests and provider acknowledgement. The existing reuse
+branch may use only that exact new-source deployment after fresh unique-live,
+health, hold, recovery and OIDC checks. It must not redeploy Render or adopt another
+same-SHA ID. Audits preserve the original operation's run/executor and distinguish
+the continuation's actual starting revision from the original rollout baseline.
+
+Focused history/continuation tests: **42 passed, zero failed/skipped**. They cover
+authenticated archive preservation, no Render POST on reuse, altered/missing/live
+state rejection, unchanged OIDC/financial/recovery gates and verified audit origin.
+Hosted full safety results are recorded on the exact continuation-binding PR.

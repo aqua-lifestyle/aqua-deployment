@@ -10,7 +10,8 @@ import { approvedRecoveryReadback } from './first-release-recovery.mjs';
 import { approvedSchemaReadback, schemaSource, validateCompletedCandidateCarryForward } from './commission-schema-first.mjs';
 import { partialReleaseRecord, partialReleaseRunId, partialReconciliationSha256,
   partialRenderProof, partialRenderReuse, validatePartialRenderOrigin } from './partial-release-reconciliation.mjs';
-import { readinessRelease, readinessCandidateSha, readinessRecordDigest, validateReadinessCandidate } from './readiness-release.mjs';
+import { readinessRelease, readinessCandidateSha, readinessRecordDigest, validateReadinessCandidate,
+  readinessContinuation, readinessContinuationDigest } from './readiness-release.mjs';
 
 const record = partialReleaseRecord(), common = record.retainedAudit.common;
 const baseline = record.retainedAudit.baseline;
@@ -33,7 +34,7 @@ const annotations = pin => [{ annotation_level: 'failure', message:
 
 // Real orchestration/validators; synthetic CI/provider responses and a controlled
 // clock. None of these responses is asserted to be a new production observation.
-function continuationFixture(successor = false) {
+function continuationFixture(successor = false, reuse = false) {
   const f = fixture(), sourceRead = f.api.gh, executorRead = f.api.executor,
     renderRead = f.api.render, vercelRead = f.api.vercel;
   const binding = successor ? readinessRelease() : null;
@@ -68,6 +69,11 @@ function continuationFixture(successor = false) {
     { id: record.renderOperation.deployId, status: 'live', commit: { id: common.sha } },
     { id: baseline.baselineRenderDeployId, status: 'deactivated', commit: { id: baseline.baselineRenderSha } }
   ];
+  const reusePin = reuse ? readinessContinuation() : null;
+  if (reuse) {
+    f.state.renderRows[0].status = 'deactivated';
+    f.state.renderRows.unshift({id:reusePin.renderDeployId,status:'live',commit:{id:active.sha}});
+  }
   f.state.originalRun = originalRun();
   f.state.originalJobs = [originalJobs(1), originalJobs(2)];
   f.state.originalAnnotations = record.run.attempts.map(annotations);
@@ -102,16 +108,26 @@ function continuationFixture(successor = false) {
     name: 'production-release-audit-41822854444-1', expired: false, size_in_bytes: failedArchive.length,
     digest: 'sha256:' + binding.readinessFailure.archiveSha256, workflow_run: { id: failed.id,
       head_sha: failed.head_sha, head_branch: 'main', repository_id: 1423239668, head_repository_id: 1423239668 } } : null;
+  const reuseArchive = reuse ? Buffer.from(readFileSync(new URL('./fixtures/readiness-render-41868204651-1.zip.b64', import.meta.url),'utf8'),'base64') : null;
+  const reuseRun = reuse ? {...failed,id:Number(reusePin.runId),run_number:reusePin.runNumber,head_sha:reusePin.executorSha} : null;
+  const reuseMeta = reuse ? {...failedMeta,id:Number(reusePin.artifactId),name:'production-release-audit-41868204651-1',
+    size_in_bytes:reuseArchive.length,digest:'sha256:'+reusePin.archiveSha256,
+    workflow_run:{...failedMeta.workflow_run,id:reuseRun.id,head_sha:reuseRun.head_sha}} : null;
   const artifactRead = f.api.artifact;
-  f.api.artifact = async (owner, id) => successor && owner === 'executor' && id === binding.readinessFailure.artifactId ?
-    failedArchive : artifactRead(owner, id);
+  f.api.artifact = async (owner, id) => reuse && owner === 'executor' && id === reusePin.artifactId ? reuseArchive :
+    successor && owner === 'executor' && id === binding.readinessFailure.artifactId ? failedArchive : artifactRead(owner, id);
   f.api.executor = async route => {
     if (successor && route === '') return { id: 1423239668 };
     if (route === `/actions/runs/${f.state.candidate.releaseRunId}`)
-      return { ...await executorRead(route), run_number: successor ? 39 : 37 };
-    if (route.startsWith('/actions/workflows/deploy.yml/runs?')) return { total_count: successor ? 39 : 37,
+      return { ...await executorRead(route), run_number: reuse ? 40 : successor ? 39 : 37 };
+    if (route.startsWith('/actions/workflows/deploy.yml/runs?')) return { total_count: reuse ? 40 : successor ? 39 : 37,
       workflow_runs: [await f.api.executor(`/actions/runs/${f.state.candidate.releaseRunId}`), f.state.originalRun, ...skipped,
-        ...(successor ? [failed, stopped] : [])] };
+        ...(successor ? [failed, stopped] : []), ...(reuse ? [reuseRun] : [])] };
+    if (reuse && route === '/actions/runs/41868204651/attempts/1/jobs?per_page=100')
+      return {total_count:3,jobs:originalJobs(1).map(j=>({...j,run_id:reuseRun.id,run_attempt:1,
+        id:j.name==='Unattended recovery release'?reusePin.productionJobId:j.id}))};
+    if (reuse && route === '/actions/runs/41868204651/artifacts?per_page=100') return {total_count:1,artifacts:[reuseMeta]};
+    if (reuse && route === '/actions/artifacts/'+reusePin.artifactId) return reuseMeta;
     if (successor && route === '/actions/runs/41817019405/attempts/1/jobs?per_page=100')
       return { total_count: 3, jobs: originalJobs(2).map(j => ({ ...j, run_id: stopped.id, run_attempt: 1 })) };
     if (successor && route === '/actions/runs/41822854444/attempts/1/jobs?per_page=100')
@@ -138,12 +154,14 @@ function continuationFixture(successor = false) {
     return executorRead(route);
   };
   f.api.render = async (route, body) => {
+    if (reuse) assert.equal(body, undefined, 'acknowledged new-source backend must never be redeployed');
     if (successor && body) {
       assert.equal(body.commitId, active.sha); f.posts.push({ provider: 'render', route, body });
       f.state.newRender = { id: 'dep-new', status: 'build_in_progress', commit: { id: active.sha } };
       f.state.renderRows.unshift(f.state.newRender); return structuredClone(f.state.newRender);
     }
     assert.equal(body, undefined, 'continuation must never POST to Render');
+    if (reuse && route.endsWith('/deploys/'+reusePin.renderDeployId)) return f.state.renderRows.find(r=>r.id===reusePin.renderDeployId);
     if (route.endsWith('/deploys/' + record.renderOperation.deployId))
       return f.state.renderRows.find(r => r.id === record.renderOperation.deployId);
     if (route.endsWith('/deploys/' + baseline.baselineRenderDeployId))
@@ -158,7 +176,7 @@ function continuationFixture(successor = false) {
     return vercelRead(route, body);
   };
   f.api.health = async () => ({ status: 200, recovery: null, body: { status: 'Healthy',
-    buildId: f.state.newRender?.status === 'live' ? active.sha : common.sha,
+    buildId: reuse || f.state.newRender?.status === 'live' ? active.sha : common.sha,
     environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy', dataProtectionKeyStoreStatus: 'Healthy' } });
   f.execute = async (options = {}) => {
     const now = () => f.state.clock;
@@ -460,5 +478,54 @@ test('the successor still stops at altered schema sources, recovery expiry, fina
     const f = continuationFixture(true); edit(f);
     await assert.rejects(f.execute(), /SOURCE_CHANGED|EVIDENCE_EXPIRED|RUNTIME_CONFIGURATION|PROTECTED_RUNTIME/);
     assert.equal(f.posts.some(p => p.provider === 'vercel'), false); assert.equal(f.state.uploads.length, 0);
+  }
+});
+
+test('the actual acknowledged readiness-source deployment is reused with no Render request and fresh OIDC', async () => {
+  const f=continuationFixture(true,true),plan=await evidencePlan(f.api,f.state.candidate,f.state.policy);
+  assert.equal(plan.readinessRenderContinuation.runId,'41868204651');
+  assert.equal(plan.readinessRenderContinuation.originalConclusion,'failure');
+  assert.equal(plan.readinessRenderContinuation.terminalFailureCode,'API_REVISION_OR_RECOVERY_READINESS_FAILED');
+  await f.execute();
+  assert.deepEqual(f.posts.map(p=>p.provider),['vercel']);
+  assert.equal(f.reports.some(r=>r.phase==='render-requesting'||r.phase==='render-requested'),false);
+  const last=f.reports.at(-1);
+  assert.equal(last.phase,'verified');assert.equal(last.renderDeployId,readinessContinuation().renderDeployId);
+  assert.equal(last.renderOriginRunId,'41868204651');assert.equal(last.startingRenderSha,readinessCandidateSha);
+  assert.equal(last.startingBackendBindingSha256,readinessContinuationDigest);
+  validateBaselineReceipt(f.reports,{runId:last.releaseRunId,runAttempt:1,sha:last.executorSha},f.state.candidate);
+});
+
+test('the new-source continuation cannot change the archive, original failure, acknowledgement or disclosed limitations', async () => {
+  const record=readinessContinuation();
+  const archive=Buffer.from(readFileSync(new URL('./fixtures/readiness-render-41868204651-1.zip.b64',import.meta.url),'utf8'),'base64');
+  assert.equal(sha256(archive),record.archiveSha256);
+  for(const edit of[r=>r.renderDeployId='dep-other',r=>r.terminalFailureCode='success',
+    r=>r.limitations.originalFailedHealthResponse='TRANSIENT_STARTUP_ASSUMED']){
+    const r=structuredClone(record);edit(r);
+    assert.throws(()=>readinessContinuation(Buffer.from(JSON.stringify(r))),/RECORD_CHANGED/);
+  }
+  const f=continuationFixture(true,true);
+  (await f.api.executor('/actions/artifacts/'+record.artifactId)).digest='sha256:'+'a'.repeat(64);
+  await assert.rejects(f.execute(),/ARTIFACT_CHANGED/);assert.equal(f.state.providerCalls,0);
+});
+
+test('new-source reuse rejects absent, wrong, inactive or duplicated live state without redeployment or frontend upload',async()=>{
+  for(const edit of[f=>f.state.renderRows.shift(),f=>f.state.renderRows[0].commit.id=common.sha,
+    f=>f.state.renderRows[0].status='deactivated',
+    f=>{f.state.renderRows[0].status='deactivated';f.state.renderRows[1].status='live';},
+    f=>f.state.renderRows.push({id:'dep-other',status:'live',commit:{id:readinessCandidateSha}})]){
+    const f=continuationFixture(true,true);edit(f);
+    await assert.rejects(f.execute(),/RENDER_/);assert.equal(f.posts.length,0);assert.equal(f.state.uploads.length,0);
+  }
+});
+
+test('new-source reuse preserves OIDC and held operations before every frontend mutation',async()=>{
+  for(const edit of[f=>f.api.readiness=async()=>{throw Error('synthetic OIDC failure');},
+    f=>f.state.vars.find(v=>v.envVar.key==='App__FinancialOperations__Enabled').envVar.value='true',
+    f=>f.state.clock=Date.parse('2026-11-05T06:00:00Z')]){
+    const f=continuationFixture(true,true);edit(f);
+    await assert.rejects(f.execute(),/PROTECTED_RUNTIME|RUNTIME_CONFIGURATION|EVIDENCE_EXPIRED/);
+    assert.equal(f.posts.length,0);assert.equal(f.state.uploads.length,0);
   }
 });
