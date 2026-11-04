@@ -3,7 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { clients, targets, standingPolicy, validateRender } from './release-control.mjs';
+import { clients, targets, standingPolicy, validateRender, deploymentHistory } from './release-control.mjs';
+import { validateFailedRenderReconciliation } from './historical-release-reconciliation.mjs';
 import { runtimeSettings, cleanStartRuntimeSettings } from './runtime-readiness.mjs';
 import { memberRuntimeSettings } from './member-release.mjs';
 const nativeSource = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
@@ -213,6 +214,31 @@ export async function observeNativeRecoveryBaseline(env, { checkoutSha, fetcher 
       (provider === 'vercel' ? (path.includes('?') ? '&' : '?') + `teamId=${p.vercelTeamId}` : '') };
     return api[provider](path);
   };
+  const renderHistory = async name => {
+    const deployments = await deploymentHistory({ render: path => read('render', name, path) }, 'render');
+    const validId = value => typeof value === 'string' && /^dep-[a-z0-9]+$/.test(value);
+    const summary = deploy => ({ id: deploy.id, status: deploy.status,
+      ...(/^[a-f0-9]{40}$/.test(deploy.commit?.id ?? '') ? { revision: deploy.commit.id } : { revisionState: 'NOT_DETERMINED' }) });
+    check(deployments.length > 0 && deployments.every(deploy => validId(deploy.id)) &&
+      new Set(deployments.map(deploy => deploy.id)).size === deployments.length, 'NATIVE_RENDER_HISTORY_UNVERIFIED');
+    const live = deployments.filter(deploy => deploy.status === 'live');
+    emit({ provider: 'render', check: name, liveDeployments: live.map(summary) });
+    check(live.length === 1 && live[0].id === p.renderDeployId && live[0].commit?.id === p.renderSha,
+      'NATIVE_RENDER_BASELINE_CHANGED');
+    const timestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+    check(deployments.every(deploy => typeof deploy.createdAt === 'string' && timestamp.test(deploy.createdAt) &&
+      Number.isFinite(Date.parse(deploy.createdAt)) && Date.parse(deploy.createdAt) <= Date.now() + 30_000),
+      'NATIVE_RENDER_HISTORY_UNVERIFIED');
+    const pending = new Set(['created', 'queued', 'build_in_progress', 'pre_deploy_in_progress', 'update_in_progress']);
+    check(!deployments.some(deploy => pending.has(deploy.status)), 'NATIVE_RENDER_OPERATION_UNACCOUNTED');
+    const later = deployments.filter(deploy => deploy.id !== live[0].id && Date.parse(deploy.createdAt) >= Date.parse(live[0].createdAt));
+    emit({ provider: 'render', check: name, laterAttempts: later.map(summary) });
+    const reconciled = validateFailedRenderReconciliation(), failed = new Set(['build_failed', 'pre_deploy_failed', 'update_failed', 'canceled']);
+    check(reconciled.originalIdentity.renderServiceId === p.renderServiceId && later.every(deploy =>
+      deploy.id === reconciled.renderOperation.deployId && deploy.commit?.id === reconciled.originalIdentity.sha && failed.has(deploy.status)),
+    'NATIVE_RENDER_OPERATION_UNACCOUNTED');
+    return { live: summary(live[0]), accountedLaterAttempts: later.map(summary) };
+  };
   try {
     check(p.renderServiceId === targets.render.id && p.vercelProjectId === targets.vercel.id && p.vercelTeamId === targets.vercel.teamId &&
       p.rootDirectory === targets.vercel.rootDirectory, 'NATIVE_TARGET_DEFINITION_MISMATCH');
@@ -224,9 +250,7 @@ export async function observeNativeRecoveryBaseline(env, { checkoutSha, fetcher 
       d.healthCheckPath === '/api/health' && d.maintenanceMode?.enabled === false && !d.disk && !service.disk, 'NATIVE_SERVICE_PROFILE_UNVERIFIED');
     const disks = await read('render', 'disks', `/disks?serviceId=${p.renderServiceId}&limit=100`);
     check(Array.isArray(disks) && disks.length === 0, 'NATIVE_NO_DISK_PROFILE_UNVERIFIED');
-    const latest = await read('render', 'latest-deploy', `/services/${p.renderServiceId}/deploys?limit=1`);
-    check(Array.isArray(latest) && latest.length === 1 && latest[0].deploy?.id === p.renderDeployId &&
-      latest[0].deploy.status === 'live' && latest[0].deploy.commit?.id === p.renderSha, 'NATIVE_RENDER_BASELINE_CHANGED');
+    const renderState = await renderHistory('deployment-history');
     const render = await read('render', 'held-deploy', `/services/${p.renderServiceId}/deploys/${p.renderDeployId}`);
     check(render.id === p.renderDeployId && render.status === 'live' && render.commit?.id === p.renderSha, 'NATIVE_RENDER_BASELINE_CHANGED');
     const project = await read('vercel', 'project', `/v9/projects/${p.vercelProjectId}`);
@@ -256,8 +280,11 @@ export async function observeNativeRecoveryBaseline(env, { checkoutSha, fetcher 
     check(finalProject.id === project.id && finalProject.accountId === project.accountId && finalProject.targets?.production?.id === web.id &&
       finalProject.rootDirectory === p.rootDirectory, 'NATIVE_FRONTEND_CHANGED_DURING_OBSERVATION');
     await readMapping();
+    const finalRenderState = await renderHistory('deployment-history-recheck');
+    check(JSON.stringify(finalRenderState) === JSON.stringify(renderState), 'NATIVE_RENDER_CHANGED_DURING_OBSERVATION');
     const finalRender = await read('render', 'held-deploy-recheck', `/services/${p.renderServiceId}/deploys/${p.renderDeployId}`);
-    check(finalRender.status === 'live' && finalRender.commit?.id === p.renderSha, 'NATIVE_RENDER_CHANGED_DURING_OBSERVATION');
+    check(finalRender.id === p.renderDeployId && finalRender.status === 'live' && finalRender.commit?.id === p.renderSha,
+      'NATIVE_RENDER_CHANGED_DURING_OBSERVATION');
     emit({ contract: 'aqua.native-recovery-baseline-observation', version: 1, status: 'VERIFIED', observedAt: new Date().toISOString(),
       producer: { executorSha: checkoutSha, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
         actor: env.GITHUB_ACTOR, actorId: env.GITHUB_ACTOR_ID, workflow: 'provider-credential-check.yml', mode: 'native-recovery-readback' },
@@ -270,12 +297,16 @@ export async function observeNativeRecoveryBaseline(env, { checkoutSha, fetcher 
         healthCheckPath: '/api/health', autoDeploy: 'off', maintenance: false, operationalHoldsVerified: true },
       applicability: { nativeHealthGatedDeploy: 'DOCUMENTED_APPLICABLE_TO_VERIFIED_PROFILE',
         cachedArtifactEligibility: 'NOT_VERIFIED', recoveryRehearsalPerformed: false },
+      renderDeploymentState: finalRenderState,
       authenticatedReads: evidence,
       readStatusSha256: createHash('sha256').update(JSON.stringify(evidence)).digest('hex') });
     return true;
-  } catch {
+  } catch (error) {
+    const reasons = ['NATIVE_RENDER_HISTORY_UNVERIFIED', 'NATIVE_RENDER_BASELINE_CHANGED', 'NATIVE_RENDER_OPERATION_UNACCOUNTED',
+      'NATIVE_RENDER_CHANGED_DURING_OBSERVATION', 'UNKNOWN_RENDER_DEPLOYMENT_STATE', 'PROVIDER_HISTORY_INVENTORY_TOO_LARGE'];
     emit({ contract: 'aqua.native-recovery-baseline-observation', version: 1, status: 'UNVERIFIED',
       code: 'NATIVE_RECOVERY_READ_OR_IDENTITY_UNVERIFIED', provider: active?.provider ?? 'context', check: active?.check ?? 'definition',
+      ...(reasons.includes(error?.message) ? { reason: error.message } : {}),
       authenticatedReads: evidence }); return false;
   }
 }
