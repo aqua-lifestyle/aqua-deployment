@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { objectDigest, sha256 } from './github-evidence.mjs';
 import { validateCompletedCandidateCarryForward } from './commission-schema-first.mjs';
+import { readinessCandidateSha, validateReadinessCandidate } from './readiness-release.mjs';
 const nativeSource = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
 const fixedTargets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 export const nativeRecoveryPolicyKind = 'held-native-first-release-recovery-v1';
@@ -29,10 +30,11 @@ function validateNativeRecovery(o, candidate, policy, schemaProof) {
   // Reuse the already-pinned exact candidate carry-forward. The completed
   // operation/authority keep their original source; this is not general ancestry.
   const carried = candidate.sha !== p.candidateSha;
-  const carry = carried ? validateCompletedCandidateCarryForward() : null;
+  const successor = candidate.sha === readinessCandidateSha ? validateReadinessCandidate(candidate) : null;
+  const carry = successor ? successor.completedCarry : carried ? validateCompletedCandidateCarryForward() : null;
   const observationPins = carried ? p.currentObservation : p;
   check(exact(o, ['observedAt', 'expiresAt', 'observer', 'candidateSha', 'baseline', 'nativeRecovery', 'compatibility', 'recovery']) &&
-    o.candidateSha === candidate.sha && (carried ?
+    o.candidateSha === (successor ? successor.historicalRecoveryCandidateSha : candidate.sha) && (carried ?
       candidate.sha === carry.candidateSha && carry.operationSourceSha === p.candidateSha &&
       carry.policyScopeSha256 === p.policyScopeSha256 && carry.targetsSha256 === p.targetsSha256 &&
       carry.databaseIdentitySha256 === p.databaseIdentitySha256 && carry.tenantId === p.tenantId : candidate.sha === p.candidateSha) &&
@@ -97,12 +99,14 @@ function validateNativeRecovery(o, candidate, policy, schemaProof) {
   check(exact(o.compatibility, ['schemaAndData', 'configuration', 'evidenceReference']) &&
     o.compatibility.schemaAndData === 'HELD_RECEIVER_SCHEMA55_ONLY' && o.compatibility.configuration === true && o.compatibility.evidenceReference === observationPins.observationReference &&
     exact(o.recovery, ['mode', 'sourceSha', 'schemaEvidenceSha256', 'legacyFinancialRollbackAllowed']) &&
-    o.recovery.mode === 'forward-only-hold-aware' && o.recovery.sourceSha === candidate.sha &&
+    o.recovery.mode === 'forward-only-hold-aware' &&
+    o.recovery.sourceSha === (successor ? successor.historicalRecoveryCandidateSha : candidate.sha) &&
     o.recovery.schemaEvidenceSha256 === schemaProof.evidenceSha256 && o.recovery.legacyFinancialRollbackAllowed === false,
   'NATIVE_RECOVERY_HOLD_PRESERVING_METHOD_REQUIRED');
   return { kind: nativeRecoveryPolicyKind, frontendSourceProvenance: 'VERIFIED_MEMBER_SOURCE_AUDIT',
     nativeRecoveryMode: n.mode, cachedArtifactEligibility: n.cachedArtifactEligibility,
-    cachedRollbackAuthorized: false, databaseRollbackAllowed: false, ...p.heldPair };
+    cachedRollbackAuthorized: false, databaseRollbackAllowed: false,
+    ...(successor ? { historicalRecoverySourceSha: o.recovery.sourceSha, qualifiedSourceSha: candidate.sha } : {}), ...p.heldPair };
 }
 
 export function validNativeHeldFrontend(proof, web) {

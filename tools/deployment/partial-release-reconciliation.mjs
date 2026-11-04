@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { objectDigest, sha256 } from './github-evidence.mjs';
 import { HistoricalReconciliationDenied } from './historical-release-reconciliation.mjs';
+import { readinessCandidateSha, validateReadinessCandidate } from './readiness-release.mjs';
 
 export const partialReleaseRunId = '41798557430';
 export const partialReconciliationSha256 = 'ff401ecaf71e29c009768a1aaba14c1cf167cd270b2784932feb7f75b8eac9cb';
@@ -37,8 +38,11 @@ export function partialRenderProof() {
 
 function validateCandidate(candidate, targets) {
   const c = partialReleaseRecord().retainedAudit.common;
+  const successor = candidate.sha === readinessCandidateSha ? validateReadinessCandidate(candidate) : null;
   check(candidate.memberRelease === undefined && candidate.version === c.version &&
-    ['repository', 'sha', 'ciRunId', 'ciRunAttempt', 'policySha256', 'environment', 'profile',
+    (successor ? successor.previousCandidateSha === c.sha :
+      ['sha', 'ciRunId', 'ciRunAttempt'].every(k => candidate[k] === c[k])) &&
+    ['repository', 'policySha256', 'environment', 'profile',
       'executorRepository', 'renderServiceId', 'vercelProjectId', 'vercelTeamId'].every(k => candidate[k] === c[k]) &&
     targets.repository === c.repository && targets.executor?.repository === c.executorRepository &&
     targets.render.id === c.renderServiceId && targets.vercel.id === c.vercelProjectId &&
@@ -48,6 +52,7 @@ function validateCandidate(candidate, targets) {
 
 export function validatePartialRenderOrigin(row, targets) {
   validateCandidate(row, targets);
+  check(row.sha === partialReleaseRecord().retainedAudit.common.sha, 'PARTIAL_RENDER_ORIGIN_CHANGED');
   const proof = partialRenderProof();
   check(row.renderReconciliation && objectDigest(row.renderReconciliation) === objectDigest(proof) &&
     row.renderDeployId === proof.renderDeployId && row.renderReleaseRunAttempt === 1 &&
@@ -71,7 +76,9 @@ export function partialRenderReuse(proof, candidate, targets) {
 export async function reconcilePartialRelease(api, run, originalAttempt, production, candidate, targets) {
   const r = partialReleaseRecord(), p = r.run;
   validateCandidate(candidate, targets);
-  partialRenderReuse(partialRenderProof(), candidate, targets);
+  if (candidate.sha !== readinessCandidateSha) partialRenderReuse(partialRenderProof(), candidate, targets);
+  else check(candidate.releaseRunAttempt === 1 && candidate.releaseRunId !== p.runId &&
+    candidate.executorSha !== p.executorSha, 'PARTIAL_NEW_EXECUTION_REQUIRED');
   check(String(run.id) === p.runId && run.run_number === p.runNumber && run.run_attempt === p.latestAttempt &&
     run.head_sha === p.executorSha && run.status === 'completed' && run.conclusion === 'failure' &&
     run.actor?.login === p.actor.login && run.actor?.id === p.actor.id && run.head_branch === 'main' &&

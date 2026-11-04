@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { objectDigest, sha256 } from './github-evidence.mjs';
 import { memberContinuation, memberPolicy, memberPolicyDigest, validateMemberContinuation } from './member-release.mjs';
 import { validateFrontendProof } from './vercel-source.mjs';
+import { readinessCandidateSha, validateReadinessCandidate, validateReadinessFailureContext,
+  validateReadinessFailureArtifact, validateReadinessFailureAudit } from './readiness-release.mjs';
 
 export class HistoricalReconciliationDenied extends Error {}
 const check = (ok, detail) => { if (!ok) throw new HistoricalReconciliationDenied(
@@ -24,7 +26,9 @@ const renewedRecoveryPolicy = Object.freeze({
 });
 const matchesReconciledPolicy = (candidate, original) => candidate.policySha256 === original ||
   original === renewedRecoveryPolicy.originalSha256 && candidate.sha === renewedRecoveryPolicy.candidateSha &&
-    candidate.policySha256 === renewedRecoveryPolicy.sha256;
+    candidate.policySha256 === renewedRecoveryPolicy.sha256 ||
+  original === renewedRecoveryPolicy.originalSha256 && candidate.sha === readinessCandidateSha &&
+    validateReadinessCandidate(candidate).previousCandidateSha === renewedRecoveryPolicy.candidateSha;
 
 export function validateFailedRenderReconciliation(bytes = readFileSync(
   new URL('../../governance/render-failure-reconciliation-20261103.json', import.meta.url))) {
@@ -60,7 +64,8 @@ function validateFailedRenderContext(run, attempt, production, candidate, target
     production.status === 'completed' && production.conclusion === 'failure' && production.name === 'Unattended recovery release' &&
     production.steps?.filter(step => step.name === 'Revalidate policy, provenance, providers and recovery before automatic deployment' &&
       step.conclusion === 'failure').length === 1, 'FAILED_RENDER_EXECUTION_CHANGED');
-  check(candidate.memberRelease === undefined && candidate.sha === record.acceptedCandidateSha &&
+  check(candidate.memberRelease === undefined && (candidate.sha === record.acceptedCandidateSha ||
+    candidate.sha === readinessCandidateSha && validateReadinessCandidate(candidate).previousCandidateSha === record.acceptedCandidateSha) &&
     matchesReconciledPolicy(candidate, record.policySha256) && candidate.executorRepository === identity.executorRepository &&
     candidate.repository === identity.repository && candidate.environment === identity.environment && candidate.profile === identity.profile &&
     candidate.renderServiceId === identity.renderServiceId && candidate.vercelProjectId === identity.vercelProjectId &&
@@ -151,10 +156,11 @@ export function validateReconciliationRecords(bytes = Object.fromEntries(Object.
 }
 
 export function isReconciledHistoricalRun(runId) {
-  return ['40850715880', '40883686654', '41527223264'].includes(String(runId));
+  return ['40850715880', '40883686654', '41527223264', '41822854444'].includes(String(runId));
 }
 
 export function validateHistoricalContext(run, attempt, production, candidate, targets) {
+  if (String(run.id) === '41822854444') return validateReadinessFailureContext(run, attempt, production, candidate);
   if (String(run.id) === '41527223264') return validateFailedRenderContext(run, attempt, production, candidate, targets);
   const record = validateReconciliationRecords(), p = record.heldPair;
   const pin = record.runs.find(r => r.runId === String(run.id));
@@ -169,6 +175,8 @@ export function validateHistoricalContext(run, attempt, production, candidate, t
       s.conclusion === 'failure').length === 1, 'FAILED_RUN_OR_EXECUTION_CHANGED');
   const carried = validateFailedRenderReconciliation();
   const acceptedSource = candidate.sha === record.candidateSha ||
+    candidate.sha === readinessCandidateSha && validateReadinessCandidate(candidate).previousCandidateSha === carried.acceptedCandidateSha &&
+      carried.carryForwardExactHistoricalRuns.includes(String(run.id)) ||
     candidate.sha === carried.acceptedCandidateSha && matchesReconciledPolicy(candidate, carried.policySha256) &&
       carried.carryForwardExactHistoricalRuns.includes(String(run.id));
   check(candidate.memberRelease === undefined && acceptedSource && matchesReconciledPolicy(candidate, record.policySha256) &&
@@ -183,6 +191,7 @@ export function validateHistoricalContext(run, attempt, production, candidate, t
 }
 
 export function validateHistoricalArtifact(pin, descriptor, metadata) {
+  if (pin.runId === '41822854444') return validateReadinessFailureArtifact(pin, descriptor, metadata);
   if (pin.runId === '41527223264') return validateFailedRenderArtifact(pin, descriptor, metadata);
   const record = validateReconciliationRecords();
   check(objectDigest(pin) === objectDigest(record.runs.find(r => r.runId === pin.runId)) &&
@@ -193,6 +202,7 @@ export function validateHistoricalArtifact(pin, descriptor, metadata) {
 }
 
 export function validateHistoricalAudit(rows, descriptor, pin, targets) {
+  if (pin.runId === '41822854444') return validateReadinessFailureAudit(rows, descriptor, pin);
   if (pin.runId === '41527223264') return validateFailedRenderAudit(rows, descriptor, pin, targets);
   const record = validateReconciliationRecords(), p = record.heldPair;
   check(objectDigest(pin) === objectDigest(record.runs.find(r => r.runId === pin.runId)) &&

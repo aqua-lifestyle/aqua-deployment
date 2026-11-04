@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { objectDigest, sha256 } from './github-evidence.mjs';
+import { readinessCandidateSha, validateReadinessCandidate } from './readiness-release.mjs';
 
 // Executor-owned pins from the frozen, CI-qualified application. No candidate
 // manifest, dispatch input or migration command can extend this exception.
@@ -73,8 +74,20 @@ function validateCompletedMigration55Scope(q, policy) {
   const p = completedMigration55;
   let compatibility = null;
   if (q?.sha !== p.candidateSha) {
-    check(q?.sha === carryCandidateSha, 'COMPLETED_M55_EXACT_SCOPE_REQUIRED');
-    compatibility = validateCompletedCandidateCarryForward();
+    if (q?.sha === readinessCandidateSha) {
+      compatibility = validateReadinessCandidate(q).completedCarry;
+      const original = validateCompletedCandidateCarryForward();
+      check(['operationSourceSha','completedEvidenceSha256','sourceManifestSha256','policyScopeSha256','targetsSha256',
+        'databaseIdentitySha256','tenantId','migrationId','migrationDefinitionSha256','reviewedSqlSha256',
+        'originalOperationEvidenceModified','historicalObservationTimesRefreshed','databaseOperationAuthorized',
+        'financialActivationAuthorized','productionDeploymentAuthorized'].every(k => compatibility[k] === original[k]) &&
+        compatibility.guardOverride.path === original.guardOverride.path &&
+        compatibility.guardOverride.operationSourceSha256 === original.guardOverride.operationSourceSha256,
+      'COMPLETED_M55_CARRY_FORWARD_SCOPE_REQUIRED');
+    } else {
+      check(q?.sha === carryCandidateSha, 'COMPLETED_M55_EXACT_SCOPE_REQUIRED');
+      compatibility = validateCompletedCandidateCarryForward();
+    }
   }
   check(objectDigest(policy.scope) === p.policyScopeSha256 &&
     objectDigest(fixedTargets) === p.targetsSha256 && objectDigest(schemaSource) === p.sourceManifestSha256 &&

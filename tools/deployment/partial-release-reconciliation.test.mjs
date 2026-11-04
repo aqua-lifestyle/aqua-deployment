@@ -10,6 +10,7 @@ import { approvedRecoveryReadback } from './first-release-recovery.mjs';
 import { approvedSchemaReadback, schemaSource, validateCompletedCandidateCarryForward } from './commission-schema-first.mjs';
 import { partialReleaseRecord, partialReleaseRunId, partialReconciliationSha256,
   partialRenderProof, partialRenderReuse, validatePartialRenderOrigin } from './partial-release-reconciliation.mjs';
+import { readinessRelease, readinessCandidateSha, readinessRecordDigest, validateReadinessCandidate } from './readiness-release.mjs';
 
 const record = partialReleaseRecord(), common = record.retainedAudit.common;
 const baseline = record.retainedAudit.baseline;
@@ -32,9 +33,11 @@ const annotations = pin => [{ annotation_level: 'failure', message:
 
 // Real orchestration/validators; synthetic CI/provider responses and a controlled
 // clock. None of these responses is asserted to be a new production observation.
-function continuationFixture() {
+function continuationFixture(successor = false) {
   const f = fixture(), sourceRead = f.api.gh, executorRead = f.api.executor,
     renderRead = f.api.render, vercelRead = f.api.vercel;
+  const binding = successor ? readinessRelease() : null;
+  const active = binding ? { sha: binding.candidateSha, ciRunId: binding.ciRunId, ciRunAttempt: binding.ciRunAttempt } : common;
   f.state.policy = structuredClone(standingPolicy);
   // This unit boundary receives an already authenticated source archive. Supply
   // synthetic frontend bytes with the fixed candidate's tar label, just as CI
@@ -46,18 +49,18 @@ function continuationFixture() {
   f.state.frontendArchive = Buffer.from(f.state.frontendArchive);
   const label = f.state.frontendArchive.indexOf(Buffer.from('comment=' + tarSha));
   assert.ok(label >= 512 && label < 1024);
-  f.state.frontendArchive.write(common.sha, label + 'comment='.length, 'ascii');
-  f.state.candidate = freezeCandidate({ version: 1, repository: common.repository, sha: common.sha,
-    ciRunId: common.ciRunId, ciRunAttempt: common.ciRunAttempt }, f.state.env, f.state.policy);
-  f.state.main = common.sha;
+  f.state.frontendArchive.write(active.sha, label + 'comment='.length, 'ascii');
+  f.state.candidate = freezeCandidate({ version: 1, repository: common.repository, sha: active.sha,
+    ciRunId: active.ciRunId, ciRunAttempt: active.ciRunAttempt }, f.state.env, f.state.policy);
+  f.state.main = active.sha;
   f.state.clock = Date.parse('2026-11-04T09:00:00Z');
-  f.state.pr.merge_commit_sha = common.sha;
-  f.state.report.context = { kind: 'ci', repository: common.repository, sha: common.sha,
-    runId: common.ciRunId, runAttempt: common.ciRunAttempt };
+  f.state.pr.merge_commit_sha = active.sha;
+  f.state.report.context = { kind: 'ci', repository: common.repository, sha: active.sha,
+    runId: active.ciRunId, runAttempt: active.ciRunAttempt };
   f.state.recoveryReadback = structuredClone(approvedRecoveryReadback);
   f.state.schemaReadback = structuredClone(approvedSchemaReadback);
   f.state.vars.push({ envVar: { key: 'App__AQGreenV2__Commissioning__AdmissionMode', value: 'CLEAN_START' } });
-  const carry = validateCompletedCandidateCarryForward();
+  const carry = binding?.completedCarry ?? validateCompletedCandidateCarryForward();
   for (const pin of [...schemaSource.migrationFiles, ...schemaSource.holdSources, ...schemaSource.cleanStartSources])
     f.state.sourceDigests.set(pin.path, pin.path === carry.guardOverride.path ? carry.guardOverride.candidateSha256 : pin.sha256);
   f.state.project.targets.production.id = baseline.baselineVercelDeployId;
@@ -71,30 +74,51 @@ function continuationFixture() {
   const skipped = Array.from({ length: 35 }, (_, i) => ({ ...originalRun(), id: 100 + i,
     run_number: i + 1, run_attempt: 1, head_sha: 'e'.repeat(40) }));
   const metadata = async () => ({ ...await sourceRead('/actions/artifacts/7890'),
-    name: `mandatory-security-${common.sha}-${common.ciRunId}-2`,
-    workflow_run: { id: Number(common.ciRunId), repository_id: 789, head_repository_id: 789,
-      head_sha: common.sha, head_branch: 'main' } });
+    name: `mandatory-security-${active.sha}-${active.ciRunId}-${active.ciRunAttempt}`,
+    workflow_run: { id: Number(active.ciRunId), repository_id: 789, head_repository_id: 789,
+      head_sha: active.sha, head_branch: 'main' } });
   f.api.gh = async route => {
-    if (route === `/actions/runs/${common.ciRunId}`) return { ...await sourceRead('/actions/runs/123'),
-      id: Number(common.ciRunId), run_attempt: 2, head_sha: common.sha, updated_at: '2026-11-04T08:16:20Z' };
-    if (route === `/actions/runs/${common.ciRunId}/attempts/2/jobs?per_page=100`) {
+    if (route === `/actions/runs/${active.ciRunId}`) return { ...await sourceRead('/actions/runs/123'),
+      id: Number(active.ciRunId), run_attempt: active.ciRunAttempt, head_sha: active.sha, updated_at: '2026-11-04T08:16:20Z' };
+    if (route === `/actions/runs/${active.ciRunId}/attempts/${active.ciRunAttempt}/jobs?per_page=100`) {
       const page = await sourceRead('/actions/runs/123/attempts/1/jobs?per_page=100');
-      return { ...page, jobs: page.jobs.map(j => ({ ...j, run_id: Number(common.ciRunId), run_attempt: 2 })) };
+      return { ...page, jobs: page.jobs.map(j => ({ ...j, run_id: Number(active.ciRunId), run_attempt: active.ciRunAttempt })) };
     }
-    if (route === `/actions/runs/${common.ciRunId}/artifacts?per_page=100`)
+    if (route === `/actions/runs/${active.ciRunId}/artifacts?per_page=100`)
       return { total_count: 1, artifacts: [await metadata()] };
     if (route === '/actions/artifacts/7890') return metadata();
-    if (route === `/compare/${carry.operationSourceSha}...${common.sha}`)
+    if (route === `/compare/${carry.operationSourceSha}...${active.sha}`)
       return { status: 'ahead', files: [{ filename: carry.guardOverride.path, status: 'modified' }] };
-    if (route === `/compare/${standingPolicy.firstReleaseRecovery.baseline.renderSha}...${common.sha}`)
+    if (route === `/compare/${standingPolicy.firstReleaseRecovery.baseline.renderSha}...${active.sha}`)
       return { status: 'ahead', files: schemaSource.migrationFiles.map(p => ({ filename: p.path, status: p.status })) };
     return sourceRead(route);
   };
+  const failedArchive = successor ? Buffer.from(readFileSync(new URL('./fixtures/readiness-failed-41822854444-1.zip.b64', import.meta.url), 'utf8'), 'base64') : null;
+  const failed = successor ? { ...originalRun(), id: 41822854444, run_number: 38, run_attempt: 1,
+    head_sha: binding.readinessFailure.executorSha } : null;
+  const stopped = successor ? { ...failed, id: 41817019405, run_number: 37,
+    head_sha: 'a07d5fd14961a9661aa305f8b80a34bfaf591f62' } : null;
+  const failedMeta = successor ? { id: Number(binding.readinessFailure.artifactId),
+    name: 'production-release-audit-41822854444-1', expired: false, size_in_bytes: failedArchive.length,
+    digest: 'sha256:' + binding.readinessFailure.archiveSha256, workflow_run: { id: failed.id,
+      head_sha: failed.head_sha, head_branch: 'main', repository_id: 1423239668, head_repository_id: 1423239668 } } : null;
+  const artifactRead = f.api.artifact;
+  f.api.artifact = async (owner, id) => successor && owner === 'executor' && id === binding.readinessFailure.artifactId ?
+    failedArchive : artifactRead(owner, id);
   f.api.executor = async route => {
+    if (successor && route === '') return { id: 1423239668 };
     if (route === `/actions/runs/${f.state.candidate.releaseRunId}`)
-      return { ...await executorRead(route), run_number: 37 };
-    if (route.startsWith('/actions/workflows/deploy.yml/runs?')) return { total_count: 37,
-      workflow_runs: [await f.api.executor(`/actions/runs/${f.state.candidate.releaseRunId}`), f.state.originalRun, ...skipped] };
+      return { ...await executorRead(route), run_number: successor ? 39 : 37 };
+    if (route.startsWith('/actions/workflows/deploy.yml/runs?')) return { total_count: successor ? 39 : 37,
+      workflow_runs: [await f.api.executor(`/actions/runs/${f.state.candidate.releaseRunId}`), f.state.originalRun, ...skipped,
+        ...(successor ? [failed, stopped] : [])] };
+    if (successor && route === '/actions/runs/41817019405/attempts/1/jobs?per_page=100')
+      return { total_count: 3, jobs: originalJobs(2).map(j => ({ ...j, run_id: stopped.id, run_attempt: 1 })) };
+    if (successor && route === '/actions/runs/41822854444/attempts/1/jobs?per_page=100')
+      return { total_count: 3, jobs: originalJobs(1).map(j => ({ ...j, id: j.name === 'Unattended recovery release' ? 126550639872 : j.id,
+        run_id: failed.id, run_attempt: 1 })) };
+    if (successor && route === '/actions/runs/41822854444/artifacts?per_page=100') return { total_count: 1, artifacts: [failedMeta] };
+    if (successor && route === '/actions/artifacts/' + binding.readinessFailure.artifactId) return failedMeta;
     if (route === `/actions/runs/${partialReleaseRunId}/attempts/1`)
       return { ...f.state.originalRun, run_attempt: 1 };
     if (route === `/actions/runs/${partialReleaseRunId}`) return f.state.originalRun;
@@ -114,6 +138,11 @@ function continuationFixture() {
     return executorRead(route);
   };
   f.api.render = async (route, body) => {
+    if (successor && body) {
+      assert.equal(body.commitId, active.sha); f.posts.push({ provider: 'render', route, body });
+      f.state.newRender = { id: 'dep-new', status: 'build_in_progress', commit: { id: active.sha } };
+      f.state.renderRows.unshift(f.state.newRender); return structuredClone(f.state.newRender);
+    }
     assert.equal(body, undefined, 'continuation must never POST to Render');
     if (route.endsWith('/deploys/' + record.renderOperation.deployId))
       return f.state.renderRows.find(r => r.id === record.renderOperation.deployId);
@@ -128,7 +157,8 @@ function continuationFixture() {
       return { aliases: [{ alias: 'www.aqualifestyleclub.co.za' }] };
     return vercelRead(route, body);
   };
-  f.api.health = async () => ({ status: 200, recovery: null, body: { status: 'Healthy', buildId: common.sha,
+  f.api.health = async () => ({ status: 200, recovery: null, body: { status: 'Healthy',
+    buildId: f.state.newRender?.status === 'live' ? active.sha : common.sha,
     environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy', dataProtectionKeyStoreStatus: 'Healthy' } });
   f.execute = async (options = {}) => {
     const now = () => f.state.clock;
@@ -364,5 +394,71 @@ test('names-only Vercel results still require compiled public inputs and authori
     else { await assert.rejects(f.execute({ publicFetch }), /VERCEL_/);
       assert.ok(!f.reports.some(r => r.phase === 'verified')); }
     assert.deepEqual(f.posts.map(p => p.provider), ['vercel']);
+  }
+});
+
+test('the exact readiness successor preserves history and performs one new-source Render operation before Vercel', async () => {
+  const f = continuationFixture(true), plan = await evidencePlan(f.api, f.state.candidate, f.state.policy);
+  assert.equal(plan.partialRenderContinuation, undefined);
+  assert.equal(plan.acknowledgedBackend.renderDeployId, record.renderOperation.deployId);
+  assert.ok(plan.historicalReconciliations.some(p => p.runId === '41822854444' && p.terminalFailureCode === 'PROTECTED_RUNTIME_READINESS_FAILED'));
+  await f.execute();
+  assert.deepEqual(f.posts.map(p => p.provider), ['render','vercel']);
+  assert.equal(f.posts[0].body.commitId, readinessCandidateSha);
+  const last = f.reports.at(-1);
+  assert.equal(last.phase, 'verified'); assert.equal(last.renderSha, readinessCandidateSha);
+  assert.equal(last.startingRenderDeployId, record.renderOperation.deployId);
+  assert.equal(last.startingRenderSha, common.sha);
+  assert.equal(last.startingBackendBindingSha256, readinessRecordDigest);
+  assert.equal(last.renderOriginRunId, undefined);
+  validateBaselineReceipt(f.reports, { runId: last.releaseRunId, runAttempt: 1, sha: last.executorSha }, f.state.candidate);
+});
+
+test('new-source bindings cannot select another CI, source, policy, target or alter completed history', () => {
+  const f = continuationFixture(true);
+  for (const edit of [q => q.sha = common.sha, q => q.ciRunAttempt++, q => q.ciRunId = common.ciRunId,
+    q => q.policySha256 = 'a'.repeat(64), q => q.renderServiceId = 'srv-other', q => q.memberRelease = 'member']) {
+    const q = { ...f.state.candidate }; edit(q);
+    assert.throws(() => validateReadinessCandidate(q), /EXACT_SCOPE/);
+  }
+  const r = readinessRelease(); r.completedCarry.databaseOperationAuthorized = true;
+  assert.throws(() => readinessRelease(Buffer.from(JSON.stringify(r))), /RECORD_CHANGED/);
+  assert.throws(() => partialRenderReuse(partialRenderProof(), f.state.candidate, targets), /PARTIAL_RENDER_ORIGIN_CHANGED/);
+});
+
+test('the exact readiness failure still requires its authenticated unchanged archive and execution', async () => {
+  for (const edit of [async f => { (await f.api.executor('/actions/artifacts/13316594385')).expired = true; },
+    async f => { (await f.api.executor('/actions/artifacts/13316594385')).digest = 'sha256:' + 'a'.repeat(64); },
+    async f => { (await f.api.executor('/actions/artifacts/13316594385')).workflow_run.repository_id = 1; },
+    async f => { const read = f.api.artifact; f.api.artifact = (owner,id) => owner === 'executor' ? Buffer.from('altered archive') : read(owner,id); },
+    async f => { const read = f.api.executor; f.api.executor = async route => { const result = await read(route);
+      if (route === '/actions/runs/41822854444/attempts/1/jobs?per_page=100') result.jobs[2].steps = [];
+      return result; }; }]) {
+    const f = continuationFixture(true); await edit(f);
+    await assert.rejects(f.execute(), /READINESS_FAILURE_|AUDIT_ARTIFACT_REQUIRED|ARTIFACT_/);
+    assert.equal(f.state.providerCalls, 0); assert.equal(f.posts.length, 0);
+  }
+});
+
+test('the successor never adopts an unreceipted new-SHA Render operation or repeats a rejected provider request', async () => {
+  const f = continuationFixture(true);
+  f.state.renderRows.push({ id:'dep-other',status:'live',commit:{id:readinessCandidateSha} });
+  await assert.rejects(f.execute(), /RENDER_BASELINE_DRIFT/); assert.equal(f.posts.length, 0);
+  const rejected = continuationFixture(true), read = rejected.api.render;
+  let requests = 0;
+  rejected.api.render = async (route, body) => { if (body) { requests++; throw Error('synthetic lost acknowledgement'); } return read(route, body); };
+  await assert.rejects(rejected.execute(), /lost acknowledgement/);
+  assert.equal(requests, 1); assert.equal(rejected.state.uploads.length, 0);
+});
+
+test('the successor still stops at altered schema sources, recovery expiry, financial holds or OIDC failure', async () => {
+  for (const edit of [f => f.state.sourceDigests.set(readinessRelease().completedCarry.guardOverride.path, 'a'.repeat(64)),
+    f => f.state.sourceDigests.set(schemaSource.migrationFiles[0].path, 'a'.repeat(64)),
+    f => f.state.clock = Date.parse('2026-11-05T06:00:00Z'),
+    f => f.state.vars.find(r => r.envVar.key === 'App__FinancialOperations__Enabled').envVar.value = 'true',
+    f => f.api.readiness = async () => { throw Error('synthetic readiness rejection'); }]) {
+    const f = continuationFixture(true); edit(f);
+    await assert.rejects(f.execute(), /SOURCE_CHANGED|EVIDENCE_EXPIRED|RUNTIME_CONFIGURATION|PROTECTED_RUNTIME/);
+    assert.equal(f.posts.some(p => p.provider === 'vercel'), false); assert.equal(f.state.uploads.length, 0);
   }
 });

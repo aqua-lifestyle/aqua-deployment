@@ -1,3 +1,11 @@
+The [exact readiness-fix release binding](docs/readiness-release-20261104.md) selects
+only application merge `2488682e7f36828c380b2f962f29b9f9b4cb6384` and main CI
+`41861969794/1`. It preserves completed/historical evidence, distinguishes the
+acknowledged old backend from the original recovery pair, and uses the existing
+guarded Render-first/Vercel path for the approved new source. Fresh admission,
+recovery expiry, actual provider state, financial holds and protected OIDC remain
+mandatory. Automatic application triggering is unchanged.
+
 The [exact partial-release reconciliation](docs/partial-release-reconciliation-41798557430.md)
 recognizes run `41798557430/1`'s acknowledged Render operation and preserves its
 failed verification and attempt 2's pre-production admission failure. It can feed
