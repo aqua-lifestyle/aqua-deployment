@@ -121,7 +121,7 @@ export function fileDeploymentBody(bundle, target, meta) {
 
 // Original authenticated upload/create acknowledgements + immutable same-run
 // audit establish provenance. Echoed metadata by itself never grants adoption.
-function validateFileDeploymentSource(deployment, proof, target, meta) {
+export function validateFileDeploymentSource(deployment, proof, target, meta) {
   validateFrontendProof(proof, proof.sourceSha, target);
   check(deployment?.projectId === target.id && deployment.target === 'production' &&
     !deployment.gitSource && deployment.meta?.aquaFileSourceSha256 === objectDigest(proof) &&
@@ -181,10 +181,32 @@ export async function verifyObservedFileDeployment(api, deployment, proof, targe
   check(deployment.readyState === 'READY', 'VERCEL_COMPLETED_DEPLOYMENT_REQUIRED');
   const projectPath = `/v9/projects/${target.id}`;
   const before = await api.vercel(projectPath);
-  const mapping = await api.vercel(`/v2/deployments/${deployment.id}/aliases`);
   const host = new URL(target.productionUrl).hostname;
-  check(before.id === target.id && before.targets?.production?.id === deployment.id &&
-    mapping.aliases?.some(x => x.alias === host), 'VERCEL_PUBLIC_ALIAS_NOT_BOUND_TO_DEPLOYMENT');
+  const checkMapping = async () => {
+    const mapping = await api.vercel(`/v2/deployments/${deployment.id}/aliases`);
+    const matches = Array.isArray(mapping?.aliases) ? mapping.aliases.filter(x => x?.alias === host) : [];
+    check(matches?.length === 1 && !matches[0].redirect &&
+      (matches[0].deploymentId === undefined || matches[0].deploymentId === deployment.id) &&
+      (matches[0].projectId === undefined || matches[0].projectId === target.id), 'VERCEL_PUBLIC_ALIAS_NOT_BOUND_TO_DEPLOYMENT');
+  };
+  check(before.id === target.id && before.rootDirectory === target.rootDirectory &&
+    before.targets?.production?.id === deployment.id, 'VERCEL_PUBLIC_ALIAS_NOT_BOUND_TO_DEPLOYMENT');
+  await checkMapping();
+  // Readable effective values retain their existing verifier. Names-only
+  // responses require the compiled observation below; failures never fall back.
+  if (!Array.isArray(deployment.env) || !Array.isArray(deployment.build?.env)) {
+    validateFileDeployment(deployment, proof, target, meta, before.rootDirectory);
+    const after = await api.vercel(projectPath);
+    await checkMapping();
+    check(after.id === target.id && after.targets?.production?.id === deployment.id, 'VERCEL_PUBLIC_ALIAS_NOT_BOUND_TO_DEPLOYMENT');
+    validateFileDeployment(deployment, proof, target, meta, after.rootDirectory);
+    return { contract: 'aqua.observed-next-public-configuration-v1', deploymentId: deployment.id,
+      sourceSha: proof.sourceSha, sourceProofSha256: objectDigest(proof), productionUrl: target.productionUrl,
+      observedAt: new Date().toISOString(), aliasStable: true,
+      observedPublicInputs: Object.fromEntries(Object.keys(proof.publicBuildInputs).map(key => [key, deployment.build.env[key]])),
+      provenance: 'original-authenticated-upload-and-create-audit',
+      configurationEvidence: 'provider-reported-effective-public-inputs', secretsRead: false };
+  }
   const read = async path => {
     try {
       const r = await publicFetch(new URL(path, target.productionUrl).href, { redirect: 'error',
@@ -207,6 +229,7 @@ export async function verifyObservedFileDeployment(api, deployment, proof, targe
     assets.push({ path, bytes });
   }
   const after = await api.vercel(projectPath);
+  await checkMapping();
   const observation = observeCompiledPublicInputs(assets);
   const readback = { deploymentId: deployment.id, sourceProofSha256: objectDigest(proof), before, after,
     productionUrl: target.productionUrl, assets };

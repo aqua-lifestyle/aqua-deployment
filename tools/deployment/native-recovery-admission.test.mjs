@@ -3,13 +3,14 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { objectDigest } from './github-evidence.mjs';
 import { standingPolicy, policyDigest } from './release-control.mjs';
-import { approvedSchemaReadback, validateSchemaReadback } from './commission-schema-first.mjs';
+import { approvedSchemaReadback, validateSchemaReadback, validateCompletedCandidateCarryForward,
+  verifySchemaFirst, schemaSource } from './commission-schema-first.mjs';
 import { approvedRecoveryReadback, legacyRecoveryPair, nativeRecoveryPolicyKind,
   validateFirstReleaseRecovery, validateLegacyProviderPair, validNativeHeldFrontend } from './first-release-recovery.mjs';
 const pins = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
 const at = () => Date.parse(approvedRecoveryReadback.observation.observedAt) + 1000;
 const fixture = () => {
-  const r = structuredClone(approvedRecoveryReadback), p = structuredClone(standingPolicy), q = { sha: pins.candidateSha };
+  const r = structuredClone(approvedRecoveryReadback), p = structuredClone(standingPolicy), q = { sha: validateCompletedCandidateCarryForward().candidateSha };
   const schema = validateSchemaReadback(approvedSchemaReadback, q, p, false, at);
   return { r, p, q, schema, validate: () => validateFirstReleaseRecovery(r, q, p, at, schema) };
 };
@@ -25,7 +26,33 @@ test('native v3 admits actual held pair and source-based recovery without assert
   assert.equal(f.r.observation.nativeRecovery.cachedRollbackAuthorized, false);
   assert.deepEqual(f.p.firstReleaseRecovery.baseline, legacyRecoveryPair);
   assert.equal(f.p.firstReleaseRecovery.baseline.renderSha, pins.sourceComparisonBaselineSha);
+  assert.notEqual(f.q.sha, pins.candidateSha);
+  assert.equal(f.schema.initialSourceSha, pins.candidateSha);
+  assert.equal(f.r.observation.recovery.sourceSha, f.q.sha);
+  assert.equal(f.r.observation.nativeRecovery.observationSha256, pins.currentObservation.observationSha256);
   assert.equal(typeof policyDigest(f.p), 'string');
+});
+test('production-purpose schema and renewed recovery predicates pass together with all source and ancestry gates', async () => {
+  const f = fixture(), carry = validateCompletedCandidateCarryForward();
+  f.q.qualificationOnly = false;
+  const sourcePins = [...schemaSource.migrationFiles, ...schemaSource.holdSources, ...schemaSource.cleanStartSources];
+  const reads = [];
+  const readSource = async path => {
+    reads.push(path);
+    return path === carry.guardOverride.path ? carry.guardOverride.candidateSha256 : sourcePins.find(pin => pin.path === path)?.sha256;
+  };
+  const api = { gh: async route => {
+    if (route === `/compare/${carry.operationSourceSha}...${f.q.sha}`)
+      return { status: 'ahead', files: [{ filename: carry.guardOverride.path, status: 'modified' }] };
+    assert.equal(route, `/compare/${pins.sourceComparisonBaselineSha}...${f.q.sha}`);
+    return { status: 'ahead', files: schemaSource.migrationFiles.map(pin => ({ filename: pin.path, status: pin.status })) };
+  } };
+  const schema = await verifySchemaFirst(api, f.q, f.p, readSource, approvedSchemaReadback, false, at);
+  const proof = validateFirstReleaseRecovery(f.r, f.q, f.p, at, schema);
+  assert.equal(reads.length, 25);
+  assert.equal(schema.initialSourceSha, carry.operationSourceSha);
+  assert.equal(proof.renderDeployId, pins.heldPair.renderDeployId);
+  assert.throws(() => validateFirstReleaseRecovery(f.r, f.q, f.p, at, null), /FIRST_RELEASE_RECOVERY_EVIDENCE_INVALID/);
 });
 test('native recovery cannot silently replace source/migration baselines or select another candidate, identity or target', () => {
   const edits = [f => f.q.sha = 'a'.repeat(40), f => f.r.observation.candidateSha = 'b'.repeat(40),
@@ -35,10 +62,24 @@ test('native recovery cannot silently replace source/migration baselines or sele
     f => f.r.observation.nativeRecovery.tenantId = 2,
     f => f.p.scope.renderServiceId = 'srv-other',
     f => f.schema.evidenceSha256 = 'd'.repeat(64),
-    f => f.schema.schemaEvidenceKind = 'another-kind'];
+    f => f.schema.schemaEvidenceKind = 'another-kind', f => f.schema.initialSourceSha = f.q.sha,
+    f => f.q.sha = pins.candidateSha];
   for (const edit of edits) { const f = fixture(); edit(f); refresh(f); assert.throws(f.validate, /NATIVE_RECOVERY_|FIRST_RELEASE_RECOVERY_/); }
   const f = fixture(); f.p.firstReleaseRecovery.baseline.renderSha = pins.heldPair.renderSha;
   assert.throws(() => policyDigest(f.p), /STANDING_POLICY_INVALID/);
+});
+test('original recovery observation and candidate remain historical, without borrowing the renewed timestamp', () => {
+  const r = JSON.parse(readFileSync(new URL('../../governance/first-release-recovery-readback.json', import.meta.url)));
+  const p = structuredClone(standingPolicy), q = { sha: pins.candidateSha };
+  p.firstReleaseRecovery.evidenceSha256 = objectDigest(r);
+  const oldTime = () => Date.parse(r.observation.observedAt) + 1000;
+  const schema = validateSchemaReadback(approvedSchemaReadback, q, p, false, oldTime);
+  validateFirstReleaseRecovery(r, q, p, oldTime, schema);
+  assert.throws(() => validateFirstReleaseRecovery(r, q, p, at, schema), /EVIDENCE_EXPIRED/);
+  r.observation.observedAt = approvedRecoveryReadback.observation.observedAt;
+  r.observation.expiresAt = approvedRecoveryReadback.observation.expiresAt;
+  p.firstReleaseRecovery.evidenceSha256 = objectDigest(r);
+  assert.throws(() => validateFirstReleaseRecovery(r, q, p, at, schema), /VERIFIED_OBSERVATION_REQUIRED/);
 });
 test('native recovery keeps evidence provenance, held-only compatibility and financial/schema prohibitions strict', () => {
   const edits = [

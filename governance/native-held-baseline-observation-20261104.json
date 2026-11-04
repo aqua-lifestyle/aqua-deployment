@@ -1,0 +1,93 @@
+{
+  "contract": "aqua.native-recovery-baseline-observation",
+  "version": 1,
+  "status": "VERIFIED",
+  "observedAt": "2026-11-04T05:54:23.080Z",
+  "producer": {
+    "executorSha": "c804cbc40acdcc0253c5441e21268c0a2d88a6d0",
+    "runId": "41782065591",
+    "runAttempt": "1",
+    "actor": "Xolani-M",
+    "actorId": "86495928",
+    "workflow": "provider-credential-check.yml",
+    "mode": "native-recovery-readback"
+  },
+  "baseline": {
+    "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+    "renderDeployId": "dep-dbhh7l8m7kps73etljfg",
+    "renderSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+    "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "vercelDeployId": "dpl_7PcajvRJGKp2AzuJGaLPLHy2bqUD",
+    "productionDomain": "www.aqualifestyleclub.co.za",
+    "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend"
+  },
+  "frontendSource": {
+    "sha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+    "provenance": "EXISTING_AUTHENTICATED_MEMBER_QUALIFICATION",
+    "qualificationRecordSha256": "c6fdea58908a56f19a70842fa823a31f7c53b202d81af10b6617690ef0929190",
+    "sourceProofSha256": "e250d98a3f31ff86054cf0caa8b8ecdf3e02cb94de1b21e9fd8f119af038b304"
+  },
+  "serviceProfile": {
+    "type": "web_service",
+    "runtime": "docker",
+    "plan": "starter",
+    "instances": 1,
+    "attachedPersistentDisk": false,
+    "healthCheckPath": "/api/health",
+    "autoDeploy": "off",
+    "maintenance": false,
+    "operationalHoldsVerified": true
+  },
+  "applicability": {
+    "nativeHealthGatedDeploy": "DOCUMENTED_APPLICABLE_TO_VERIFIED_PROFILE",
+    "cachedArtifactEligibility": "NOT_VERIFIED",
+    "recoveryRehearsalPerformed": false
+  },
+  "renderDeploymentState": {
+    "live": {
+      "id": "dep-dbhh7l8m7kps73etljfg",
+      "status": "live",
+      "revision": "4eba3799fc3ece12b4de00b5e3019738f1e159c6"
+    },
+    "accountedLaterAttempts": [
+      {
+        "id": "dep-dbkftrcipgvc73asn0lg",
+        "status": "update_failed",
+        "revision": "a4755801ce89868d7791422f3c983363ab76bf30"
+      }
+    ]
+  },
+  "authenticatedReads": [
+    { "provider": "render", "check": "service", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-ASPNETCORE_ENVIRONMENT", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-App__Recovery__Enabled", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-Bird__Enabled", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-Yoco__Mode", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-App__WeeklyCommissions__Enabled", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-App__EntryMonthlyObligations__Enabled", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-App__FinancialOperations__Enabled", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-App__BackgroundJobs__Enabled", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-AQGreenV2Demo__Enabled", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-AQGreenV2Pilot__Enabled", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-SEED_DEMO_DATA", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-App__YocoCutover__Enabled", "httpStatus": 200 },
+    { "provider": "render", "check": "hold-App__AutomaticPayouts__Enabled", "httpStatus": 200 },
+    { "provider": "render", "check": "disks", "httpStatus": 200 },
+    { "provider": "render", "check": "deployment-history", "httpStatus": 200 },
+    { "provider": "render", "check": "deployment-history", "httpStatus": 200 },
+    { "provider": "render", "check": "held-deploy", "httpStatus": 200 },
+    { "provider": "vercel", "check": "project", "httpStatus": 200 },
+    { "provider": "vercel", "check": "held-deploy", "httpStatus": 200 },
+    { "provider": "vercel", "check": "aliases", "httpStatus": 200 },
+    { "provider": "vercel", "check": "domain", "httpStatus": 200 },
+    { "provider": "health", "check": "held-receiver-health", "httpStatus": 200 },
+    { "provider": "vercel", "check": "project-recheck", "httpStatus": 200 },
+    { "provider": "vercel", "check": "aliases", "httpStatus": 200 },
+    { "provider": "vercel", "check": "domain", "httpStatus": 200 },
+    { "provider": "render", "check": "deployment-history-recheck", "httpStatus": 200 },
+    { "provider": "render", "check": "deployment-history-recheck", "httpStatus": 200 },
+    { "provider": "render", "check": "held-deploy-recheck", "httpStatus": 200 }
+  ],
+  "readStatusSha256": "926861906f6af9cd9943d0744a553a67529584177139c1125d3b4bf9363e7a0a"
+}

@@ -1,3 +1,9 @@
+The [combined recovery/Vercel correction](docs/recovery-vercel-admission-20261104.md)
+accepts the actual protected 4 November recovery observation for the single accepted
+candidate through the existing exact carry-forward, and integrates observed public
+build-input/alias verification into the full release. Original historical records,
+freshness limits, operational holds and production authorization boundaries remain.
+
 The owner-authorized completed-migration55 variant retains policy v7 and explicitly
 selects readback version4; see [the bounded evidence contract](docs/completed-migration55-admission.md).
 Only its pinned completed transition can use the alternative evidence. Historical

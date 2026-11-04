@@ -51,7 +51,7 @@
       "productionDomain": "www.aqualifestyleclub.co.za",
       "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend"
     },
-    "evidenceSha256": "3e8684d215dfcf00bc63c6d5a2be31d469a5302fc9b628817190eb97784cd311"
+    "evidenceSha256": "19ddb9a9f0df837ab7f6cd1d81924a240ea2e6338ae18f546d320cb01bfc4e1c"
   },
   "schemaFirst": {
     "kind": "commission-invalidation-clean-start-completed-m55-v1",

@@ -5,7 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { approvedRecoveryReadback, legacyRecoveryPair, validateFirstReleaseRecovery,
   validateLegacyProviderPair, FirstReleaseRecoveryDenied, nativeRecoveryPolicyKind, validNativeHeldFrontend } from './first-release-recovery.mjs';
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
-import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody, validateFileDeployment } from './vercel-source.mjs';
+import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody,
+  validateFileDeployment, validateFileDeploymentSource, verifyObservedFileDeployment } from './vercel-source.mjs';
 import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validateReadiness } from './runtime-readiness.mjs';
 import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied, memberContinuation,
   validateMemberContinuation, validateMemberIdentity, verifyMemberSource, verifyMemberAuthority, validateMemberReceipt, deployMemberRelease } from './member-release.mjs';
@@ -982,6 +983,11 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     catch { throw new ReleaseFailure('PROTECTED_RUNTIME_READINESS_FAILED'); }
   };
   await readVercelVariables();
+  const verifyFrontend = async (web, proof, meta, root) => {
+    requireThat(root === targets.vercel.rootDirectory, 'VERCEL_SOURCE_PROVENANCE_MISMATCH');
+    readScope('web-readiness');
+    return verifyObservedFileDeployment(api, web, proof, targets.vercel, meta, options.publicFetch);
+  };
   // A verified predecessor remains authoritative after the first rollout. On the
   // first rollout, select the current exact provider pair automatically. On a
   // partial retry use the original immutable baseline, never the advanced live SHA.
@@ -1049,9 +1055,16 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     'ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED');
   if (baselineProof.origin) {
     const origin = { ...baselineProof.origin, releaseRunAttempt: baselineProof.origin.vercelReleaseRunAttempt };
-    if (origin.vercelSourceProof) validateFileDeployment(oldWeb, origin.vercelSourceProof, targets.vercel, {
-      aquaCiRunId: origin.ciRunId, aquaCiRunAttempt: String(origin.ciRunAttempt),
-      aquaSourceSha: origin.sha, aquaReleaseIdentity: releaseKey(origin) }, project.rootDirectory);
+    if (origin.vercelSourceProof) {
+      const meta = { aquaCiRunId: origin.ciRunId, aquaCiRunAttempt: String(origin.ciRunAttempt),
+        aquaSourceSha: origin.sha, aquaReleaseIdentity: releaseKey(origin) };
+      // A retained readable artifact need not still own the alias after an
+      // acknowledged replacement. Never read that replacement's assets as proof
+      // of a names-only predecessor; the observed verifier requires exact binding.
+      if (Array.isArray(oldWeb.env) && Array.isArray(oldWeb.build?.env))
+        await verifyFrontend(oldWeb, origin.vercelSourceProof, meta, project.rootDirectory);
+      else validateFileDeployment(oldWeb, origin.vercelSourceProof, targets.vercel, meta, project.rootDirectory);
+    }
     requireThat(oldWeb.meta?.aquaReleaseIdentity === releaseKey(origin) &&
       oldWeb.meta?.aquaCiRunId === origin.ciRunId && oldWeb.meta?.aquaCiRunAttempt === String(origin.ciRunAttempt),
     'ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED');
@@ -1087,9 +1100,17 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     (x.meta?.aquaCiRunId !== qualified.ciRunId && x.meta?.aquaSourceSha !== qualified.sha) ||
     x.uid === prior.vercelDeployId), 'VERCEL_PROVENANCE_RECEIPT_REQUIRED');
   const origin = { ...qualified, releaseRunAttempt: prior.vercelReleaseRunAttempt ?? qualified.releaseRunAttempt };
-  const isOurs = x => {
-    validateFileDeployment(x, frontend.proof, targets.vercel, { aquaCiRunId: qualified.ciRunId,
-      aquaCiRunAttempt: String(qualified.ciRunAttempt), aquaSourceSha: qualified.sha, aquaReleaseIdentity: releaseKey(origin) }, project.rootDirectory);
+  let vercelPublicInputsObservation;
+  const isOurs = async (x, pending = false) => {
+    const meta = { aquaCiRunId: qualified.ciRunId, aquaCiRunAttempt: String(qualified.ciRunAttempt),
+      aquaSourceSha: qualified.sha, aquaReleaseIdentity: releaseKey(origin) };
+    // Only an exact acknowledged same-run operation can be pending here. Prove
+    // its source before polling; effective inputs must still pass once READY.
+    if (pending && activeVercel.has(x.readyState)) {
+      validateFileDeploymentSource(x, frontend.proof, targets.vercel, meta);
+      if (!Array.isArray(x.env) || !Array.isArray(x.build?.env))
+        validateFileDeployment(x, frontend.proof, targets.vercel, meta, project.rootDirectory);
+    } else vercelPublicInputsObservation = await verifyFrontend(x, frontend.proof, meta, project.rootDirectory);
     return x.projectId === targets.vercel.id &&
     x.meta?.aquaCiRunId === qualified.ciRunId && x.meta?.aquaCiRunAttempt === String(qualified.ciRunAttempt) &&
     x.meta?.aquaReleaseIdentity === releaseKey(origin) && x.target === 'production';
@@ -1099,7 +1120,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     requireThat(/^dpl_[A-Za-z0-9]+$/.test(d.uid), 'VERCEL_DEPLOYMENT_ID_UNAVAILABLE');
     readScope('vercel-deployment');
     const full = await api.vercel(`/v13/deployments/${d.uid}`);
-    requireThat(isOurs(full), 'VERCEL_SOURCE_PROVENANCE_MISMATCH');
+    requireThat(await isOurs(full, true), 'VERCEL_SOURCE_PROVENANCE_MISMATCH');
     requireThat(full.readyState === 'READY' || activeVercel.has(full.readyState), 'PRIOR_VERCEL_FAILURE_REQUIRES_OPERATOR');
     requireThat(!existingVercel, 'AMBIGUOUS_VERCEL_DEPLOYMENTS');
     existingVercel = full;
@@ -1223,7 +1244,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   readScope('vercel-deployment');
   const vercel = await waitFor(() => api.vercel(`/v13/deployments/${existingVercel.id}`),
     x => x.readyState, 'READY', activeVercel, options);
-  requireThat(isOurs(vercel) && vercel.projectId === targets.vercel.id && !vercel.aliasError,
+  requireThat(await isOurs(vercel) && vercel.projectId === targets.vercel.id && !vercel.aliasError,
     'VERCEL_SOURCE_PROVENANCE_MISMATCH');
   readScope('vercel-project');
   project = await api.vercel(projectPath);
@@ -1247,13 +1268,14 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   readScope('vercel-deployment');
   const finalWeb = await api.vercel(`/v13/deployments/${vercel.id}`);
   requireThat(project.targets?.production?.id === vercel.id && finalWeb.readyState === 'READY' &&
-    isOurs(finalWeb) && !finalWeb.aliasError, 'VERCEL_CHANGED_BEFORE_VERIFICATION');
+    await isOurs(finalWeb) && !finalWeb.aliasError, 'VERCEL_CHANGED_BEFORE_VERIFICATION');
   readScope('vercel-deploy-history');
   const finalVercel = await deploymentHistory(api, 'vercel');
   requireThat(finalVercel.every(x => !activeVercel.has(x.state ?? x.readyState) || x.uid === vercel.id),
     'CONCURRENT_VERCEL_BEFORE_VERIFICATION');
   report({ phase: 'verified', sha: qualified.sha, renderSha: render.commit.id, vercelSha: qualified.sha,
-    renderDeployId: render.id, vercelDeployId: vercel.id });
+    renderDeployId: render.id, vercelDeployId: vercel.id,
+    ...(vercelPublicInputsObservation ? { vercelPublicInputsObservation } : {}) });
 }
 
 // Inactive signed-attestation prototype, retained for its existing contract tests.
