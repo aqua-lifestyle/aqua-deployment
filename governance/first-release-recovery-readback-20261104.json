@@ -1,0 +1,50 @@
+{
+  "contract": "aqua.first-release-recovery-readback",
+  "version": 3,
+  "status": "VERIFIED",
+  "observation": {
+    "observedAt": "2026-11-04T05:54:23.080Z",
+    "expiresAt": "2026-11-05T05:54:23.080Z",
+    "observer": { "login": "Xolani-M", "id": 86495928 },
+    "candidateSha": "1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503",
+    "baseline": {
+      "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+      "renderDeployId": "dep-dbhh7l8m7kps73etljfg",
+      "renderSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+      "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+      "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+      "vercelDeployId": "dpl_7PcajvRJGKp2AzuJGaLPLHy2bqUD",
+      "vercelSha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+      "productionDomain": "www.aqualifestyleclub.co.za",
+      "rootDirectory": "AqualLifeStyle/9.4.2/aqua-frontend"
+    },
+    "nativeRecovery": {
+      "mode": "health-gated-exact-source-held-redeploy-v1",
+      "receiverSourceSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+      "sourceAvailable": true,
+      "usesCurrentConfiguration": true,
+      "cachedArtifactEligibility": "NOT_VERIFIED",
+      "cachedRollbackAuthorized": false,
+      "databaseRollbackAllowed": false,
+      "databaseIdentitySha256": "be9ac8fd3ee1b9dd4389633358971f97a1dac2bf35370ed2e87b5cc814a8e324",
+      "tenantId": 1,
+      "ownerAuthoritySha256": "3e9157c7603217066735203e94082c5adacce21e2b0db019695da9c284d0fef1",
+      "ownerAuthorityReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/198b78f7cf72dc1ea34e8788ffe892a34479f221/governance/native-held-recovery-authority-20261102.json",
+      "observationSha256": "ad2f8dd201c46e42b04d974834bd6a5e1292463d6302e4695ab1beb44d662f34",
+      "observationReference": "https://github.com/aqua-lifestyle/aqua-deployment/actions/runs/41782065591",
+      "frontendSourceEvidenceSha256": "7195d016e7f881c37a1a25a7a9352aa485083e344061ad8beb4a873b7d960b7c",
+      "frontendSourceEvidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/blob/198b78f7cf72dc1ea34e8788ffe892a34479f221/governance/held-frontend-source-evidence-20261029.json"
+    },
+    "compatibility": {
+      "schemaAndData": "HELD_RECEIVER_SCHEMA55_ONLY",
+      "configuration": true,
+      "evidenceReference": "https://github.com/aqua-lifestyle/aqua-deployment/actions/runs/41782065591"
+    },
+    "recovery": {
+      "mode": "forward-only-hold-aware",
+      "sourceSha": "1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503",
+      "schemaEvidenceSha256": "96139eda2ad461037c60cae87803a795667dfe5434cd018103c44dc4ea61a9c5",
+      "legacyFinancialRollbackAllowed": false
+    }
+  }
+}

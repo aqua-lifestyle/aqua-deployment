@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { objectDigest, sha256 } from './github-evidence.mjs';
+import { validateCompletedCandidateCarryForward } from './commission-schema-first.mjs';
 const nativeSource = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
 const fixedTargets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 export const nativeRecoveryPolicyKind = 'held-native-first-release-recovery-v1';
@@ -17,7 +18,7 @@ export const legacyRecoveryPair = Object.freeze({
   rootDirectory: 'AqualLifeStyle/9.4.2/aqua-frontend'
 });
 export const approvedRecoveryReadback = JSON.parse(readFileSync(
-  new URL('../../governance/first-release-recovery-readback.json', import.meta.url), 'utf8'));
+  new URL('../../governance/first-release-recovery-readback-20261104.json', import.meta.url), 'utf8'));
 export class FirstReleaseRecoveryDenied extends Error {}
 const check = (ok, code) => { if (!ok) throw new FirstReleaseRecoveryDenied(code); };
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
@@ -25,8 +26,17 @@ const exact = (value, keys) => value && typeof value === 'object' && !Array.isAr
 
 function validateNativeRecovery(o, candidate, policy, schemaProof) {
   const p = nativeSource, n = o.nativeRecovery;
+  // Reuse the already-pinned exact candidate carry-forward. The completed
+  // operation/authority keep their original source; this is not general ancestry.
+  const carried = candidate.sha !== p.candidateSha;
+  const carry = carried ? validateCompletedCandidateCarryForward() : null;
+  const observationPins = carried ? p.currentObservation : p;
   check(exact(o, ['observedAt', 'expiresAt', 'observer', 'candidateSha', 'baseline', 'nativeRecovery', 'compatibility', 'recovery']) &&
-    candidate.sha === p.candidateSha && o.candidateSha === p.candidateSha && objectDigest(o.baseline) === objectDigest(p.heldPair) &&
+    o.candidateSha === candidate.sha && (carried ?
+      candidate.sha === carry.candidateSha && carry.operationSourceSha === p.candidateSha &&
+      carry.policyScopeSha256 === p.policyScopeSha256 && carry.targetsSha256 === p.targetsSha256 &&
+      carry.databaseIdentitySha256 === p.databaseIdentitySha256 && carry.tenantId === p.tenantId : candidate.sha === p.candidateSha) &&
+    objectDigest(o.baseline) === objectDigest(p.heldPair) &&
     objectDigest(policy.firstReleaseRecovery.baseline) === objectDigest(legacyRecoveryPair) &&
     policy.firstReleaseRecovery.baseline.renderSha === p.sourceComparisonBaselineSha &&
     objectDigest(policy.scope) === p.policyScopeSha256 && objectDigest(fixedTargets) === p.targetsSha256 &&
@@ -39,8 +49,8 @@ function validateNativeRecovery(o, candidate, policy, schemaProof) {
     n.mode === 'health-gated-exact-source-held-redeploy-v1' && n.receiverSourceSha === p.heldPair.renderSha &&
     n.sourceAvailable === true && n.usesCurrentConfiguration === true && n.cachedArtifactEligibility === 'NOT_VERIFIED' &&
     n.cachedRollbackAuthorized === false && n.databaseRollbackAllowed === false && n.databaseIdentitySha256 === p.databaseIdentitySha256 && n.tenantId === p.tenantId &&
-    ['ownerAuthoritySha256', 'ownerAuthorityReference', 'observationSha256', 'observationReference',
-      'frontendSourceEvidenceSha256', 'frontendSourceEvidenceReference'].every(k => n[k] === p[k]), 'NATIVE_RECOVERY_EVIDENCE_REQUIRED');
+    ['ownerAuthoritySha256', 'ownerAuthorityReference', 'frontendSourceEvidenceSha256', 'frontendSourceEvidenceReference'].every(k => n[k] === p[k]) &&
+    ['observationSha256', 'observationReference'].every(k => n[k] === observationPins[k]), 'NATIVE_RECOVERY_EVIDENCE_REQUIRED');
   const records = [
     ['native-held-recovery-authority-20261102.json', p.ownerAuthoritySha256],
     ['native-held-baseline-observation-20261102.json', p.observationSha256],
@@ -52,7 +62,7 @@ function validateNativeRecovery(o, candidate, policy, schemaProof) {
     authority.decision.actualVerifiedHeldProviderBaselineRequired === true && authority.decision.sourceAndMigrationComparisonBaselinesMustRemainUnchanged === true &&
     authority.decision.cachedArtifactAvailabilityOrEligibilityMayNotBeAssumed === true &&
     authority.scope.candidateSha === p.candidateSha && authority.scope.nativeDatabaseIdentitySha256 === p.databaseIdentitySha256 && authority.scope.tenantId === p.tenantId &&
-    observed.observedAt === o.observedAt && objectDigest(observed.baseline) === objectDigest(p.heldPair) &&
+    (carried || observed.observedAt === o.observedAt) && objectDigest(observed.baseline) === objectDigest(p.heldPair) &&
     observed.producer.result === 'success' && observed.producer.actor === o.observer.login && observed.producer.actorId === o.observer.id &&
     observed.producer.workflow === 'provider-credential-check.yml' && observed.producer.mode === 'native-recovery-readback' &&
     v.allAuthenticatedGetChecksSucceeded === true && v.exactRenderRevisionLiveAndHealthy === true && v.exactVercelDeploymentReady === true &&
@@ -66,8 +76,26 @@ function validateNativeRecovery(o, candidate, policy, schemaProof) {
     frontend.qualificationResult === 'PASS' && frontend.deploymentId === p.heldPair.vercelDeployId && frontend.sourceSha === p.heldPair.vercelSha &&
     observed.frontendSource.qualificationRecordSha256 === frontend.protectedQualificationRecordSha256 &&
     observed.frontendSource.sourceProofSha256 === frontend.sourceProofSha256, 'NATIVE_RECOVERY_VERIFIED_OBSERVATION_REQUIRED');
+  if (carried) {
+    const bytes = readFileSync(new URL('../../governance/native-held-baseline-observation-20261104.json', import.meta.url));
+    check(sha256(bytes) === observationPins.observationSha256, 'NATIVE_RECOVERY_RECORD_CHANGED');
+    const current = JSON.parse(bytes), producer = current.producer;
+    const { vercelSha, ...pair } = p.heldPair;
+    check(current.contract === 'aqua.native-recovery-baseline-observation' && current.version === 1 && current.status === 'VERIFIED' &&
+      current.observedAt === o.observedAt && producer.runId === observationPins.runId && producer.runAttempt === observationPins.runAttempt &&
+      producer.executorSha === observationPins.executorSha && producer.workflow === 'provider-credential-check.yml' && producer.mode === 'native-recovery-readback' &&
+      producer.actor === o.observer.login && producer.actorId === String(o.observer.id) &&
+      objectDigest(current.baseline) === objectDigest(pair) && current.frontendSource.sha === vercelSha &&
+      current.frontendSource.qualificationRecordSha256 === frontend.protectedQualificationRecordSha256 &&
+      current.frontendSource.sourceProofSha256 === frontend.sourceProofSha256 &&
+      current.serviceProfile.operationalHoldsVerified === true && current.renderDeploymentState.live.id === pair.renderDeployId &&
+      current.renderDeploymentState.live.revision === pair.renderSha && current.renderDeploymentState.live.status === 'live' &&
+      current.authenticatedReads.length > 0 && current.authenticatedReads.every(r => r.httpStatus === 200) &&
+      current.readStatusSha256 === sha256(Buffer.from(JSON.stringify(current.authenticatedReads))),
+    'NATIVE_RECOVERY_VERIFIED_OBSERVATION_REQUIRED');
+  }
   check(exact(o.compatibility, ['schemaAndData', 'configuration', 'evidenceReference']) &&
-    o.compatibility.schemaAndData === 'HELD_RECEIVER_SCHEMA55_ONLY' && o.compatibility.configuration === true && o.compatibility.evidenceReference === p.observationReference &&
+    o.compatibility.schemaAndData === 'HELD_RECEIVER_SCHEMA55_ONLY' && o.compatibility.configuration === true && o.compatibility.evidenceReference === observationPins.observationReference &&
     exact(o.recovery, ['mode', 'sourceSha', 'schemaEvidenceSha256', 'legacyFinancialRollbackAllowed']) &&
     o.recovery.mode === 'forward-only-hold-aware' && o.recovery.sourceSha === candidate.sha &&
     o.recovery.schemaEvidenceSha256 === schemaProof.evidenceSha256 && o.recovery.legacyFinancialRollbackAllowed === false,

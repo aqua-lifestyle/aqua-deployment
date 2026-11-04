@@ -22,6 +22,13 @@ and member receipts are not relabelled as full-release predecessor receipts.
 
 ## Actual protected observation
 
+The [4 November combined correction](recovery-vercel-admission-20261104.md) selects
+the separately versioned `first-release-recovery-readback-20261104.json`, backed by
+the actual successful protected observation from run `41782065591/1`. It reuses the
+existing exact candidate carry-forward for `1b748df` while preserving the original
+operation/authority source and all original records below. The 24-hour recovery
+expiry and current release checks remain enforced.
+
 The [current live-baseline correction](render-live-recovery-baseline.md) selects
 the unique `live` Render deployment from the existing complete bounded history,
 not the newest attempted deployment. It retains exact held ID/revision, direct

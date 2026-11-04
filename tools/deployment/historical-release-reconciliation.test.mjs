@@ -26,7 +26,7 @@ const failedRender = validateFailedRenderReconciliation();
 const failedArchive = Buffer.from(readFileSync(new URL('./fixtures/failed-render-41527223264-1.zip.b64', import.meta.url), 'utf8'), 'base64');
 const failedReport = execFileSync('funzip', [], { input: failedArchive, maxBuffer: 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
 const failedAudit = failedReport.toString('utf8').trim().split('\n').map(JSON.parse);
-const candidate = () => ({ version: 4, repository: targets.repository, sha: record.candidateSha,
+const candidate = () => ({ version: 4, repository: targets.repository, sha: failedRender.acceptedCandidateSha,
   ciRunId: '41322531293', ciRunAttempt: 1, executorRepository: targets.executor.repository, executorSha: 'd'.repeat(40),
   releaseRunId: '456', releaseRunAttempt: 1, policySha256: policyDigest(standingPolicy),
   environment: targets.environment, profile: targets.profile, renderServiceId: targets.render.id,
@@ -101,7 +101,8 @@ test('the authentic acknowledged Render failure remains failed, with its origina
   const pin = failedRender.run, run = prior(pin), q = { ...candidate(), sha: failedRender.acceptedCandidateSha };
   assert.equal(sha256(failedArchive), pin.archiveSha256); assert.equal(sha256(failedReport), pin.reportSha256);
   assert.equal(objectDigest(failedAudit), pin.rowsSha256); assert.equal(failedAudit.length, 27);
-  assert.equal(failedRender.policySha256, policyDigest(standingPolicy));
+  assert.equal(failedRender.policySha256, failedAudit[0].policySha256);
+  assert.notEqual(failedRender.policySha256, policyDigest(standingPolicy));
   assert.deepEqual(validateHistoricalContext(run, 1, production(run), q, targets), pin);
   const f = historyFixture(true); validateHistoricalArtifact(pin, descriptor(pin), f.metas[2]);
   const proof = validateHistoricalAudit(failedAudit, descriptor(pin), pin, targets);
@@ -112,6 +113,26 @@ test('the authentic acknowledged Render failure remains failed, with its origina
   assert.throws(() => validateBaselineReceipt(failedAudit, descriptor(pin), q));
   assert.throws(() => validateMemberReceipt(failedAudit, descriptor(pin), targets));
   assert.throws(() => validateResumeReceipt(failedAudit, { ...q, releaseRunAttempt: 2 }));
+});
+
+test('recovery renewal carries only the exact accepted candidate/policy while preserving original reconciliation hashes', () => {
+  const historical = { ...candidate(), sha: record.candidateSha, policySha256: record.policySha256 };
+  for (const pin of record.runs) {
+    const run = prior(pin);
+    assert.deepEqual(validateHistoricalContext(run, 1, production(run), historical, targets), pin);
+    assert.throws(() => validateHistoricalContext(run, 1, production(run),
+      { ...historical, policySha256: policyDigest(standingPolicy) }, targets), /EXACT_CANDIDATE_AND_TARGETS_REQUIRED/);
+  }
+  for (const pin of [...record.runs, failedRender.run]) {
+    const run = prior(pin), accepted = { ...candidate(), qualificationOnly: false };
+    assert.deepEqual(validateHistoricalContext(run, 1, production(run), accepted, targets), pin);
+    for (const edit of [p => p.authorization.maxCiAgeSeconds--, p => p.schemaFirst.evidenceSha256 = 'a'.repeat(64),
+      p => p.firstReleaseRecovery.evidenceSha256 = 'b'.repeat(64)]) {
+      const policy = structuredClone(standingPolicy); edit(policy);
+      assert.throws(() => validateHistoricalContext(run, 1, production(run),
+        { ...accepted, policySha256: policyDigest(policy) }, targets), /CANDIDATE_OR_TARGETS_CHANGED|EXACT_CANDIDATE_AND_TARGETS_REQUIRED/);
+    }
+  }
 });
 
 test('full history consumes the three exact factual reconciliations for the accepted candidate without creating a successful predecessor', async () => {

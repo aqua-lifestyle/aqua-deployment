@@ -1,5 +1,14 @@
 # Qualified Vercel file deployment
 
+## Current full-release integration
+
+The [4 November combined correction](recovery-vercel-admission-20261104.md) uses
+the existing observed-public-configuration helper in the full-release path.
+Names-only deployment environment responses require actual compiled public-input
+observations; readable effective maps retain strict value verification. Both paths
+check the authoritative production alias before and after verification. This
+supersedes earlier requirements below that assumed readable deployment value maps.
+
 Execution record v1. The owner authorized this bounded executor correction only;
 this document is not business authority, deployment authorization or provider proof.
 Baseline: executor main `19d6213f0e40983d6e0e9629ac32cf3aae27ec17`.

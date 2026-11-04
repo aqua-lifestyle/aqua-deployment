@@ -24,5 +24,13 @@
   "observationSha256": "66f61838301ee86e8f2dd2fe11b545a40585d6ae0722d69c63193559b28152ec",
   "policyScopeSha256": "77f06e7c08e0c3204791ab6243f10588a8c48578f868d16eff8faf0346c8b0e1",
   "targetsSha256": "2b42711b138fa38cd28ee12e6bb4ee07f3802539fb9dc1e4340ab0c0043aed65",
-  "sourceRepositoryId": "1276688422"
+  "sourceRepositoryId": "1276688422",
+  "currentObservation": {
+    "observationSha256": "ad2f8dd201c46e42b04d974834bd6a5e1292463d6302e4695ab1beb44d662f34",
+    "observationReference": "https://github.com/aqua-lifestyle/aqua-deployment/actions/runs/41782065591",
+    "runId": "41782065591",
+    "runAttempt": "1",
+    "executorSha": "c804cbc40acdcc0253c5441e21268c0a2d88a6d0",
+    "logSha256": "3e8787afd3767bb525ebbe07e398760f43a3c3fc42539d68249343bfbcd1329e"
+  }
 }

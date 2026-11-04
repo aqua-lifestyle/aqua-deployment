@@ -22,12 +22,32 @@ export function zipFixture(filename, bytes, extra = {}) {
   } finally {rmSync(dir,{recursive:true,force:true});}
 }
 // A real disposable Git archive, not a candidate-provided self-hash.
+// Exact public source from the accepted frontend, for compiled-input integration
+// cases. This is test source, not a production observation.
+export const frozenPublicEnv = `import { z } from "zod";
+
+const publicEnvSchema = z.object({
+  NEXT_PUBLIC_ABP_API_URL: z.string().url(),
+  NEXT_PUBLIC_DEFAULT_TENANT_NAME: z.string().default("Default"),
+  NEXT_PUBLIC_MONITORING_ENDPOINT: z.string().url().optional(),
+});
+
+export const publicEnv = publicEnvSchema.parse({
+  NEXT_PUBLIC_ABP_API_URL: process.env.NEXT_PUBLIC_ABP_API_URL,
+  NEXT_PUBLIC_DEFAULT_TENANT_NAME: process.env.NEXT_PUBLIC_DEFAULT_TENANT_NAME,
+  NEXT_PUBLIC_MONITORING_ENDPOINT:
+    process.env.NEXT_PUBLIC_MONITORING_ENDPOINT || undefined,
+});
+
+export type PublicEnv = typeof publicEnv;
+`;
 export const frontendFixtureFiles = {
   'package.json': JSON.stringify({scripts:{build:'next build'}}),
   'package-lock.json': '{}',
   'vercel.json': JSON.stringify({framework:'nextjs',installCommand:'npm ci',buildCommand:'npm run build'}),
   'next.config.ts': 'export default {};',
-  'app/page.tsx': 'export default function Page() {return null;}'
+  'app/page.tsx': 'export default function Page() {return null;}',
+  'src/shared/config/public-env.ts': frozenPublicEnv
 };
 export function frontendFixtureArchive(files = frontendFixtureFiles) {
   const dir=mkdtempSync(join(tmpdir(),'aqua-git-frontend-'));
@@ -222,6 +242,7 @@ function fixture() {
         return structuredClone(state.newVercel); }
       if (route === `/v9/projects/${targets.vercel.id}/domains/${legacyRecoveryPair.productionDomain}`) return state.domain;
       if (route === `/v2/deployments/${legacyRecoveryPair.vercelDeployId}/aliases`) return state.recoveryAliases;
+      if (route === '/v2/deployments/dpl_New/aliases') return { aliases: [{ alias: legacyRecoveryPair.productionDomain }] };
       if (route.startsWith('/v9/')) return state.project;
       if (route.startsWith('/v10/')) return { envs: state.publicVars };
       if (route.startsWith('/v1/projects/')) return state.publicVars.find(row=>route.endsWith('/'+row.id));
@@ -286,6 +307,7 @@ function fixture() {
         evidencePlan: state.plan ?? {policySha256:state.candidate.policySha256,verifiedReleases:[],priorFailedRuns:[],baseline:null,resume:null,resumeChain:[],firstReleaseRecoveryEvidenceSha256:state.policy.firstReleaseRecovery.evidenceSha256},
         recoveryReadback:state.recoveryReadback,
         schemaReadback:state.schemaReadback,
+        publicFetch:options.publicFetch,
         receiptRows: state.receiptRows, baselineRows: state.baselineRows });
   };
   return { state, api, posts, reports, execute, authorizationFor,readSourceDigest };

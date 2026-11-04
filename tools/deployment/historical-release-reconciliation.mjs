@@ -15,6 +15,16 @@ const pins = Object.freeze({
   'held-frontend-source-evidence-20261029.json': '7195d016e7f881c37a1a25a7a9352aa485083e344061ad8beb4a873b7d960b7c'
 });
 const failedRenderDigest = 'da3ab4875cc0c608c675f8588565318d2cf922e4056f4e93c867154c90f8b5f6';
+// Only the renewed recovery-evidence policy for the already accepted candidate.
+// Original reconciliation/audit policy hashes remain immutable historical facts.
+const renewedRecoveryPolicy = Object.freeze({
+  candidateSha: '1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503',
+  originalSha256: '1347eae6196a051311e773ae9c10b86c4491505ec4a5e4f2be055e8fdbf8adca',
+  sha256: '717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840'
+});
+const matchesReconciledPolicy = (candidate, original) => candidate.policySha256 === original ||
+  original === renewedRecoveryPolicy.originalSha256 && candidate.sha === renewedRecoveryPolicy.candidateSha &&
+    candidate.policySha256 === renewedRecoveryPolicy.sha256;
 
 export function validateFailedRenderReconciliation(bytes = readFileSync(
   new URL('../../governance/render-failure-reconciliation-20261103.json', import.meta.url))) {
@@ -51,7 +61,7 @@ function validateFailedRenderContext(run, attempt, production, candidate, target
     production.steps?.filter(step => step.name === 'Revalidate policy, provenance, providers and recovery before automatic deployment' &&
       step.conclusion === 'failure').length === 1, 'FAILED_RENDER_EXECUTION_CHANGED');
   check(candidate.memberRelease === undefined && candidate.sha === record.acceptedCandidateSha &&
-    candidate.policySha256 === record.policySha256 && candidate.executorRepository === identity.executorRepository &&
+    matchesReconciledPolicy(candidate, record.policySha256) && candidate.executorRepository === identity.executorRepository &&
     candidate.repository === identity.repository && candidate.environment === identity.environment && candidate.profile === identity.profile &&
     candidate.renderServiceId === identity.renderServiceId && candidate.vercelProjectId === identity.vercelProjectId &&
     candidate.vercelTeamId === identity.vercelTeamId && targets.repository === identity.repository &&
@@ -159,9 +169,9 @@ export function validateHistoricalContext(run, attempt, production, candidate, t
       s.conclusion === 'failure').length === 1, 'FAILED_RUN_OR_EXECUTION_CHANGED');
   const carried = validateFailedRenderReconciliation();
   const acceptedSource = candidate.sha === record.candidateSha ||
-    candidate.sha === carried.acceptedCandidateSha && candidate.policySha256 === carried.policySha256 &&
+    candidate.sha === carried.acceptedCandidateSha && matchesReconciledPolicy(candidate, carried.policySha256) &&
       carried.carryForwardExactHistoricalRuns.includes(String(run.id));
-  check(candidate.memberRelease === undefined && acceptedSource && candidate.policySha256 === record.policySha256 &&
+  check(candidate.memberRelease === undefined && acceptedSource && matchesReconciledPolicy(candidate, record.policySha256) &&
     candidate.executorRepository === 'aqua-lifestyle/aqua-deployment' && candidate.environment === record.originalIdentity.environment &&
     candidate.profile === record.originalIdentity.profile &&
     candidate.renderServiceId === p.renderServiceId && candidate.vercelProjectId === p.vercelProjectId && candidate.vercelTeamId === p.vercelTeamId &&

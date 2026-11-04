@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { fixture, source, previous, frontendFixtureFiles, frontendFixtureArchive, runnerEnv } from './fixtures/provider.mjs';
+import { fixture, source, previous, frontendFixtureFiles, frontendFixtureArchive, frozenPublicEnv, runnerEnv } from './fixtures/provider.mjs';
 import { prepareFrontend, approvedPublicInputs, validatePublicInputs, validateFrontendProof,
   fileDeploymentBody, validateFileDeployment, observeCompiledPublicInputs, verifyObservedFileDeployment } from './vercel-source.mjs';
 import { clients, targets, validateResumeReceipt, validateBaselineReceipt, verifyCandidate } from './release-control.mjs';
@@ -114,25 +114,6 @@ test('upload client binds exact bytes to fixed provider, scope and hash without 
   assert.equal(attempts, 1);
 });
 
-// Exact public (non-secret) source from accepted application 53341b5. Its digest
-// binds the static NEXT_PUBLIC references; Zod's default is not an observation.
-const frozenPublicEnv = `import { z } from "zod";
-
-const publicEnvSchema = z.object({
-  NEXT_PUBLIC_ABP_API_URL: z.string().url(),
-  NEXT_PUBLIC_DEFAULT_TENANT_NAME: z.string().default("Default"),
-  NEXT_PUBLIC_MONITORING_ENDPOINT: z.string().url().optional(),
-});
-
-export const publicEnv = publicEnvSchema.parse({
-  NEXT_PUBLIC_ABP_API_URL: process.env.NEXT_PUBLIC_ABP_API_URL,
-  NEXT_PUBLIC_DEFAULT_TENANT_NAME: process.env.NEXT_PUBLIC_DEFAULT_TENANT_NAME,
-  NEXT_PUBLIC_MONITORING_ENDPOINT:
-    process.env.NEXT_PUBLIC_MONITORING_ENDPOINT || undefined,
-});
-
-export type PublicEnv = typeof publicEnv;
-`;
 const compiledCode = '.parse({NEXT_PUBLIC_ABP_API_URL:"https://aqualifestyle-api.onrender.com",NEXT_PUBLIC_DEFAULT_TENANT_NAME:"Default",NEXT_PUBLIC_MONITORING_ENDPOINT:void 0})';
 const compiledPath = '/_next/static/immutable/chunks/public-env.js';
 function readbackFixture() {
@@ -198,7 +179,7 @@ test('read-only qualification fetches current alias-bound public assets without 
     return new Response(new URL(url).pathname === '/login' ? `<script src="${compiledPath}"></script>` : compiledCode);
   };
   const result = await verifyObservedFileDeployment(api, f.deployment, f.proof, targets.vercel, f.meta, publicFetch);
-  assert.equal(calls.length, 3); assert.equal(publicCalls.length, 2);
+  assert.equal(calls.length, 4); assert.equal(publicCalls.length, 2);
   assert.equal(result.deploymentId, f.deployment.id); assert.equal(result.secretsRead, false);
   assert.equal(result.compiledAssets[0].sha256, sha256(Buffer.from(compiledCode)));
   assert.deepEqual(result.observedPublicInputs, approvedPublicInputs(targets.vercel));
@@ -208,10 +189,18 @@ test('read-only qualification fetches current alias-bound public assets without 
 });
 
 test('read-only qualification fails on alias drift, missing values, HTTP failures and foreign script paths', async () => {
-  for (const variant of ['before', 'after', 'mapping', 'redirect', 'missing', 'foreign', 'oversize']) {
+  for (const variant of ['before', 'after', 'mapping', 'mapping-after', 'alias-redirect', 'alias-duplicate', 'alias-foreign', 'redirect', 'missing', 'foreign', 'oversize']) {
     const f = readbackFixture(); let projects = 0, publicReads = 0;
+    let mappings = 0;
     const api = { vercel: async route => {
-      if (route.includes('/aliases')) return { aliases: variant === 'mapping' ? [] : [{ alias: new URL(targets.vercel.productionUrl).hostname }] };
+      if (route.includes('/aliases')) {
+        mappings++;
+        const alias = { alias: new URL(targets.vercel.productionUrl).hostname };
+        return { aliases: variant === 'mapping' || variant === 'mapping-after' && mappings === 2 ? [] :
+          variant === 'alias-duplicate' ? [alias, alias] :
+          [{ ...alias, ...(variant === 'alias-redirect' ? { redirect: 'foreign.invalid' } :
+            variant === 'alias-foreign' ? { deploymentId: 'dpl_Foreign' } : {}) }] };
+      }
       projects++;
       return (variant === 'before' && projects === 1) || (variant === 'after' && projects === 2) ?
         { ...f.project, targets: { production: { id: 'dpl_Foreign' } } } : structuredClone(f.project);
