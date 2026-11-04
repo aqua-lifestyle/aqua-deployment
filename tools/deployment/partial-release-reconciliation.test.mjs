@@ -22,9 +22,13 @@ const originalJobs = attempt => record.run.attempts[attempt - 1].jobs.map(job =>
   run_id: Number(partialReleaseRunId), run_attempt: attempt, status: 'completed',
   steps: attempt === 1 && job.name === 'Unattended recovery release' ? [{
     name: 'Revalidate policy, provenance, providers and recovery before automatic deployment', conclusion: 'failure' }] : [] }));
+// Actual three-annotation structure observed on both original checks: the two
+// expected failures plus GitHub's unrelated runner-migration notice.
+const runnerNotice = () => ({ annotation_level: 'notice', message:
+  '"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"' });
 const annotations = pin => [{ annotation_level: 'failure', message:
   `${pin.terminalFailureCode}. See the safe-release runbook; do not resume or retry provider requests blindly.` },
-{ annotation_level: 'failure', message: 'Process completed with exit code 1.' }];
+{ annotation_level: 'failure', message: 'Process completed with exit code 1.' }, runnerNotice()];
 
 // Real orchestration/validators; synthetic CI/provider responses and a controlled
 // clock. None of these responses is asserted to be a new production observation.
@@ -162,6 +166,70 @@ test('admission recognizes exactly both failed attempts without an original arti
   assert.ok(plan.priorFailedRuns.some(r => r.runId === partialReleaseRunId && r.runAttempt === 2 && r.basis === 'production-never-executed'));
   assert.equal(plan.baseline, null); assert.equal(plan.resume, null); assert.deepEqual(plan.verifiedReleases, []);
   assert.equal(f.state.providerCalls, 0);
+});
+
+test('the observed runner notice does not change the exact expected failure evidence', async () => {
+  for (const withNotice of [true, false]) {
+    const f = continuationFixture();
+    if (!withNotice) f.state.originalAnnotations = f.state.originalAnnotations.map(rows => rows.filter(a => a.annotation_level === 'failure'));
+    const plan = await evidencePlan(f.api, f.state.candidate, f.state.policy);
+    assert.deepEqual(plan.partialRenderContinuation, partialRenderProof());
+    assert.equal(f.state.providerCalls, 0);
+  }
+});
+
+test('notices cannot hide missing, altered, duplicate or additional failures in either historical check', async () => {
+  for (const attempt of [0, 1]) for (const edit of [
+    rows => rows.splice(0, 1), rows => rows.splice(1, 1),
+    rows => rows[0].message = 'A different terminal failure',
+    rows => rows[1].message = 'Process completed with exit code 2.',
+    rows => rows.push({ annotation_level: 'failure', message: 'Unexpected additional failure' }),
+    rows => rows.push({ ...rows[0] }), rows => rows.push({ ...rows[1] }),
+    rows => rows[0].annotation_level = 'notice', rows => rows[1].annotation_level = 'warning',
+    rows => rows.push({ annotation_level: 'unknown', message: 'Unrecognized severity' }),
+    rows => rows.push(null)
+  ]) {
+    const f = continuationFixture(); edit(f.state.originalAnnotations[attempt]);
+    await assert.rejects(evidencePlan(f.api, f.state.candidate, f.state.policy), /PARTIAL_ORIGINAL_FAILURE_CHANGED/);
+    assert.equal(f.state.providerCalls, 0);
+  }
+});
+
+test('annotation inventory must be a complete bounded page before informational notices can be ignored', async () => {
+  for (const value of [null, {}, [], Array.from({ length: 100 }, runnerNotice)]) {
+    const f = continuationFixture();
+    if (Array.isArray(value) && value.length === 100) value.splice(0, 2, ...f.state.originalAnnotations[0].slice(0, 2));
+    f.state.originalAnnotations[0] = value;
+    await assert.rejects(evidencePlan(f.api, f.state.candidate, f.state.policy), /PARTIAL_ORIGINAL_FAILURE_CHANGED/);
+    assert.equal(f.state.providerCalls, 0);
+  }
+});
+
+test('the subsequent admission-only failure remains non-mutating while continuation still reuses Render', async () => {
+  const f = continuationFixture(), read = f.api.executor;
+  // Actual subsequent run identity/outcome; job responses remain test substitutes.
+  // The existing generic skipped-production classification needs no new exception.
+  const stopped = { ...originalRun(), id: 41817019405, run_number: 37, run_attempt: 1,
+    head_sha: 'a07d5fd14961a9661aa305f8b80a34bfaf591f62' };
+  f.api.executor = async route => {
+    const current = `/actions/runs/${f.state.candidate.releaseRunId}`;
+    if (route === current) return { ...await read(route), run_number: 38 };
+    if (route.startsWith('/actions/workflows/deploy.yml/runs?')) {
+      const page = await read(route);
+      return { total_count: 38, workflow_runs: page.workflow_runs.map(r => r.id === Number(f.state.candidate.releaseRunId) ?
+        { ...r, run_number: 38 } : r).concat(stopped) };
+    }
+    if (route === `/actions/runs/${stopped.id}/attempts/1/jobs?per_page=100`)
+      return { total_count: 3, jobs: originalJobs(2).map(j => ({ ...j, run_id: stopped.id, run_attempt: 1 })) };
+    assert.ok(!route.includes(`/actions/runs/${stopped.id}/artifacts`), 'skipped production has no production audit');
+    return read(route);
+  };
+  const plan = await evidencePlan(f.api, f.state.candidate, f.state.policy);
+  assert.ok(plan.priorFailedRuns.some(r => r.runId === String(stopped.id) && r.runAttempt === 1 && r.basis === 'production-never-executed'));
+  await f.execute();
+  assert.deepEqual(f.posts.map(p => p.provider), ['vercel']);
+  assert.equal(f.reports.at(-1).phase, 'verified');
+  assert.equal(f.reports.at(-1).renderOriginRunId, partialReleaseRunId);
 });
 
 test('full continuation reuses Render, executes OIDC before Vercel, and records the actual cross-run origin', async () => {

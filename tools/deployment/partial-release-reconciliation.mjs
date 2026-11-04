@@ -94,9 +94,15 @@ export async function reconcilePartialRelease(api, run, originalAttempt, product
         job.conclusion === expected.conclusion && job.status === 'completed' &&
         job.run_id === run.id && job.run_attempt === pin.attempt).length === 1), 'PARTIAL_ATTEMPT_EXECUTION_CHANGED');
     const annotations = await api.executor(`/check-runs/${pin.failureCheckRunId}/annotations?per_page=100`);
-    check(Array.isArray(annotations) && annotations.length === 2 &&
-      annotations.filter(a => a.annotation_level === 'failure' && a.message === 'Process completed with exit code 1.').length === 1 &&
-      annotations.filter(a => a.annotation_level === 'failure' &&
+    // A full page could conceal further failures. Informational notices do not
+    // change the required failure set; unknown severities are not informational.
+    check(Array.isArray(annotations) && annotations.length < 100 && annotations.every(a => a &&
+      ['notice', 'warning', 'failure'].includes(a.annotation_level) && typeof a.message === 'string'),
+    'PARTIAL_ORIGINAL_FAILURE_CHANGED');
+    const failures = annotations.filter(a => a.annotation_level === 'failure');
+    check(failures.length === 2 &&
+      failures.filter(a => a.message === 'Process completed with exit code 1.').length === 1 &&
+      failures.filter(a =>
         a.message === `${pin.terminalFailureCode}. See the safe-release runbook; do not resume or retry provider requests blindly.`).length === 1,
     'PARTIAL_ORIGINAL_FAILURE_CHANGED');
   }
