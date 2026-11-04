@@ -1,3 +1,14 @@
+The [exact partial-release reconciliation](docs/partial-release-reconciliation-41798557430.md)
+recognizes run `41798557430/1`'s acknowledged Render operation and preserves its
+failed verification and attempt 2's pre-production admission failure. It can feed
+the existing Render-reuse branch in a new protected execution of reviewed main;
+rerunning the old run cannot install this correction. The retained canonical audit
+and authenticated historical snapshots are digest-pinned, with missing ZIP/linkage
+limitations explicit. They do not prove current live state, holds or readiness.
+Fresh admission, schema/recovery evidence, unique live Render revision, OIDC,
+Vercel source/effective public inputs/domain checks and final audit remain required.
+Merge and any production continuation require separate owner authorization.
+
 The [combined recovery/Vercel correction](docs/recovery-vercel-admission-20261104.md)
 accepts the actual protected 4 November recovery observation for the single accepted
 candidate through the existing exact carry-forward, and integrates observed public
