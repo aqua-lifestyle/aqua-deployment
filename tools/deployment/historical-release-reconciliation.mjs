@@ -156,11 +156,11 @@ export function validateReconciliationRecords(bytes = Object.fromEntries(Object.
 }
 
 export function isReconciledHistoricalRun(runId) {
-  return ['40850715880', '40883686654', '41527223264', '41822854444'].includes(String(runId));
+  return ['40850715880', '40883686654', '41527223264', '41822854444', '41868204651'].includes(String(runId));
 }
 
 export function validateHistoricalContext(run, attempt, production, candidate, targets) {
-  if (String(run.id) === '41822854444') return validateReadinessFailureContext(run, attempt, production, candidate);
+  if (['41822854444','41868204651'].includes(String(run.id))) return validateReadinessFailureContext(run, attempt, production, candidate);
   if (String(run.id) === '41527223264') return validateFailedRenderContext(run, attempt, production, candidate, targets);
   const record = validateReconciliationRecords(), p = record.heldPair;
   const pin = record.runs.find(r => r.runId === String(run.id));
@@ -191,7 +191,7 @@ export function validateHistoricalContext(run, attempt, production, candidate, t
 }
 
 export function validateHistoricalArtifact(pin, descriptor, metadata) {
-  if (pin.runId === '41822854444') return validateReadinessFailureArtifact(pin, descriptor, metadata);
+  if (['41822854444','41868204651'].includes(pin.runId)) return validateReadinessFailureArtifact(pin, descriptor, metadata);
   if (pin.runId === '41527223264') return validateFailedRenderArtifact(pin, descriptor, metadata);
   const record = validateReconciliationRecords();
   check(objectDigest(pin) === objectDigest(record.runs.find(r => r.runId === pin.runId)) &&
@@ -202,7 +202,7 @@ export function validateHistoricalArtifact(pin, descriptor, metadata) {
 }
 
 export function validateHistoricalAudit(rows, descriptor, pin, targets) {
-  if (pin.runId === '41822854444') return validateReadinessFailureAudit(rows, descriptor, pin);
+  if (['41822854444','41868204651'].includes(pin.runId)) return validateReadinessFailureAudit(rows, descriptor, pin);
   if (pin.runId === '41527223264') return validateFailedRenderAudit(rows, descriptor, pin, targets);
   const record = validateReconciliationRecords(), p = record.heldPair;
   check(objectDigest(pin) === objectDigest(record.runs.find(r => r.runId === pin.runId)) &&
