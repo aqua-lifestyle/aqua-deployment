@@ -1,0 +1,157 @@
+{
+  "contract": "aqua.exact-partial-release-reconciliation",
+  "version": 1,
+  "authority": {
+    "basis": "OWNER_AUTHORIZED_EXACT_RUN_IMPLEMENTATION_AND_PROTECTED_REVIEW",
+    "mergeRequired": true,
+    "productionContinuationRequiresSeparateAuthorization": true
+  },
+  "run": {
+    "runId": "41798557430",
+    "runNumber": 36,
+    "latestAttempt": 2,
+    "executorSha": "0ce744a29eec5e0a5a0ef40960472b2f6e636396",
+    "executorRepositoryId": 1423239668,
+    "actor": { "login": "Xolani-M", "id": 86495928 },
+    "originalConclusion": "failure",
+    "attempts": [
+      {
+        "attempt": 1,
+        "terminalFailureCode": "API_REVISION_OR_RECOVERY_READINESS_FAILED",
+        "jobs": [
+          { "id": 126468450950, "name": "Qualify immutable source candidate", "conclusion": "success" },
+          { "id": 126468631482, "name": "Verify approved GitHub evidence before provider access", "conclusion": "success" },
+          { "id": 126469017732, "name": "Unattended recovery release", "conclusion": "failure" }
+        ],
+        "failureCheckRunId": "126469017732",
+        "failedAt": "2026-11-04T08:23:58.7519004Z"
+      },
+      {
+        "attempt": 2,
+        "terminalFailureCode": "TRUSTED_AUDIT_ARTIFACT_REQUIRED",
+        "jobs": [
+          { "id": 126481164701, "name": "Qualify immutable source candidate", "conclusion": "success" },
+          { "id": 126481292959, "name": "Verify approved GitHub evidence before provider access", "conclusion": "failure" },
+          { "id": 126481707479, "name": "Unattended recovery release", "conclusion": "skipped" }
+        ],
+        "failureCheckRunId": "126481292959",
+        "providerEffect": "PRODUCTION_JOB_NOT_EXECUTED"
+      }
+    ]
+  },
+  "originalArtifact": {
+    "id": "13307300799",
+    "name": "production-release-audit-41798557430-1",
+    "archiveSha256": "ca4b367739f4ae4f69462be35db511102b1ce49d525399d51988fcfbdcfb6b89",
+    "reportSha256": "1740b5244b98bc48918c1376cfe218d676ef22a66d7db2d0e0c69a94da03a1d7",
+    "rowsSha256": "67d3d0dfcb86a90439c456699b3f83048732593a718067c1cef4810c44fdc151",
+    "rowCount": 30,
+    "availability": "UNAVAILABLE_AFTER_FULL_RERUN",
+    "authenticatedUploadLog": {
+      "jobId": "126469017732",
+      "step": "Retain redacted release audit",
+      "digestAt": "2026-11-04T08:23:59.7502007Z",
+      "digestLine": "SHA256 digest of uploaded artifact zip is ca4b367739f4ae4f69462be35db511102b1ce49d525399d51988fcfbdcfb6b89",
+      "finalizedAt": "2026-11-04T08:24:00.3846976Z",
+      "finalizedLine": "Artifact production-release-audit-41798557430-1.zip successfully finalized. Artifact ID 13307300799"
+    }
+  },
+  "renderOperation": {
+    "effect": "REQUEST_ACKNOWLEDGED_PROVIDER_SUCCESS_RELEASE_VERIFICATION_FAILED",
+    "deployId": "dep-dblemb8u01pc73a0ouh0",
+    "githubDeploymentId": "7541402640",
+    "sha": "1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503",
+    "appId": 14658,
+    "appSlug": "render",
+    "ref": "main",
+    "environment": "main - aqualifestyle-api",
+    "createdAt": "2026-11-04T08:22:06Z",
+    "logUrl": "https://dashboard.render.com/web/srv-d9f0k8e1a83c73d8n1b0/deploys/dep-dblemb8u01pc73a0ouh0",
+    "environmentUrl": "https://aqualifestyle-api.onrender.com",
+    "statuses": [
+      { "id": "21324967522", "state": "in_progress", "createdAt": "2026-11-04T08:22:07Z", "appId": 14658, "exactRenderDeployLinked": true },
+      { "id": "21325077152", "state": "success", "createdAt": "2026-11-04T08:23:57Z", "appId": 14658, "exactRenderDeployLinked": true }
+    ],
+    "evidenceSource": "AUTHENTICATED_GITHUB_DEPLOYMENT_AND_RENDER_APP_STATUS_READS"
+  },
+  "vercelOperation": { "effect": "NO_MUTATION_INITIATED_BY_EITHER_ATTEMPT" },
+  "limitations": {
+    "archiveBytes": "UNAVAILABLE_NOT_RECREATED",
+    "zipToReportLink": "CARRIED_FORWARD_FROM_PRE_DELETION_AUTHENTICATED_DOWNLOAD_NOT_REDERIVED",
+    "storedAudit": "LOSSLESS_CANONICAL_ROWS_NOT_ORIGINAL_JSONL_SERIALIZATION",
+    "failedHealthResponse": "NOT_RETAINED_CAUSE_UNDETERMINED",
+    "currentLiveStateAndHolds": "REQUIRE_FRESH_EXISTING_PROVIDER_AND_OIDC_CHECKS",
+    "databaseWriteAbsence": "NOT_ESTABLISHED_BY_DEPLOYMENT_OR_HEALTH"
+  },
+  "originalFailuresRewritten": false,
+  "successfulFullReleasePredecessor": false,
+  "deploymentAuthority": false,
+  "retainedAudit": {
+    "common": {
+      "version": 4,
+      "repository": "aqua-lifestyle/aqua-lifestyle",
+      "sha": "1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503",
+      "ciRunId": "41601901625",
+      "ciRunAttempt": 2,
+      "releaseRunId": "41798557430",
+      "releaseRunAttempt": 1,
+      "policySha256": "717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840",
+      "environment": "production-release",
+      "profile": "normal-integrated",
+      "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+      "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+      "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+      "executorRepository": "aqua-lifestyle/aqua-deployment",
+      "executorSha": "0ce744a29eec5e0a5a0ef40960472b2f6e636396",
+      "schemaFirstEvidenceSha256": "96139eda2ad461037c60cae87803a795667dfe5434cd018103c44dc4ea61a9c5",
+      "recoveryMode": "forward-only-hold-aware",
+      "authorizationId": "a7260f0854eb5da362e9c942462eb81f348caf8bd98b36695b1a50761641ea33",
+      "evidenceSha256": "118bd7891e2809911100ff09a887f5362a8d5f0ac2feefbc2ed24b2b367bdb1f",
+      "inventorySha256": "8ae9edb167884e84db0ed9d342eb315bb6d19ee51722eb20f75fb2c4ea99dbd5",
+      "evidenceArtifactId": "13304838144"
+    },
+    "baselineStartsAtRow": 9,
+    "baseline": {
+      "baselineRenderDeployId": "dep-dbhh7l8m7kps73etljfg",
+      "baselineRenderSha": "4eba3799fc3ece12b4de00b5e3019738f1e159c6",
+      "baselineVercelDeployId": "dpl_7PcajvRJGKp2AzuJGaLPLHy2bqUD",
+      "baselineVercelSha": "53341b578bf08a61c554bf36f165beb82626b9e7",
+      "baselineVercelSourceProvenance": "VERIFIED_MEMBER_SOURCE_AUDIT",
+      "firstReleaseRecoveryEvidenceSha256": "19ddb9a9f0df837ab7f6cd1d81924a240ea2e6338ae18f546d320cb01bfc4e1c"
+    },
+    "renderStartsAtRow": 25,
+    "render": { "renderDeployId": "dep-dblemb8u01pc73a0ouh0", "renderReleaseRunAttempt": 1 },
+    "events": [
+      { "phase": "evidence-selected" },
+      { "phase": "provider-read", "scope": "github-repository" },
+      { "phase": "provider-read", "scope": "render-service" },
+      { "phase": "provider-read", "scope": "render-env" },
+      { "phase": "provider-read", "scope": "vercel-project" },
+      { "phase": "provider-read", "scope": "vercel-env" },
+      { "phase": "provider-read", "scope": "render-deploy-history" },
+      { "phase": "provider-read", "scope": "vercel-deployment" },
+      { "phase": "baseline-selected" },
+      { "phase": "provider-read", "scope": "render-deploy" },
+      { "phase": "provider-read", "scope": "vercel-deployment" },
+      { "phase": "provider-read", "scope": "vercel-aliases" },
+      { "phase": "provider-read", "scope": "github-compare" },
+      { "phase": "provider-read", "scope": "render-deploy-history" },
+      { "phase": "provider-read", "scope": "health" },
+      { "phase": "provider-read", "scope": "vercel-deploy-history" },
+      { "phase": "admitted" },
+      { "phase": "provider-read", "scope": "render-service" },
+      { "phase": "provider-read", "scope": "render-env" },
+      { "phase": "provider-read", "scope": "render-deploy-history" },
+      { "phase": "provider-read", "scope": "render-deploy" },
+      { "phase": "provider-read", "scope": "vercel-deployment" },
+      { "phase": "provider-read", "scope": "vercel-aliases" },
+      { "phase": "render-requesting" },
+      { "phase": "render-requested" },
+      { "phase": "provider-read", "scope": "render-deploy" },
+      { "phase": "provider-read", "scope": "render-service" },
+      { "phase": "provider-read", "scope": "render-env" },
+      { "phase": "provider-read", "scope": "health" },
+      { "phase": "failed", "code": "API_REVISION_OR_RECOVERY_READINESS_FAILED" }
+    ]
+  }
+}
