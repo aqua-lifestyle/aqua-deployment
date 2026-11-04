@@ -22,6 +22,14 @@ and member receipts are not relabelled as full-release predecessor receipts.
 
 ## Actual protected observation
 
+The [current live-baseline correction](render-live-recovery-baseline.md) selects
+the unique `live` Render deployment from the existing complete bounded history,
+not the newest attempted deployment. It retains exact held ID/revision, direct
+GET/health checks, holds and Vercel checks, and allows only the exact reconciled
+terminal failure among attempts after the live baseline. All active or unexpected
+later operations and observation drift still deny. Original observations below
+are historical and are not re-dated by this predicate correction.
+
 The existing `provider-credential-check.yml` has a GET-only observation purpose,
 selected with `native_recovery_readback=true`. It preserves main/admin/context
 gates, the same two protected secrets and fixed commands. It performs no mutation,

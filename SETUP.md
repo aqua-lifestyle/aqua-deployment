@@ -8,6 +8,13 @@ It verifies the actual held pair without assuming cached rollback eligibility;
 source/migration baselines and unrelated release gates remain unchanged.
 No deployment is authorized by this contract amendment.
 
+The existing read-only native recovery verifier now distinguishes the
+[live Render baseline from later attempts](docs/render-live-recovery-baseline.md).
+It verifies the exact serving deployment independently, accounts only for the
+already-reconciled terminal failure after that baseline, and rejects unexpected
+or active operations. No provider write or recovery approval is implied by a
+failed or fixture-only observation.
+
 The current [CLEAN_START completion lifetime](docs/clean-start-completion-lifetime.md)
 separates immutable completed-migration facts from current production evidence.
 The pinned completed operation has no rolling CI-age expiry and CLEAN_START does
