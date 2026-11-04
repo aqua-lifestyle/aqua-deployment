@@ -75,3 +75,20 @@ Tests use fixed clocks, synthetic frontend/CI/provider responses and actual pinn
 historical records. Orchestration tests do not establish application Git-byte
 authenticity, a live provider observation, an OIDC exchange or a production release.
 Existing entry-path tests cover independent application Git-byte authentication.
+
+## Annotation-count correction
+
+Base: `a07d5fd14961a9661aa305f8b80a34bfaf591f62`. Run `41817019405/1`
+stopped before production because both original checks contain two unchanged
+failure annotations **and** GitHub's Ubuntu runner-migration notice. The validator
+now requires the exact two failure messages, independently of non-failure notices.
+Missing, altered, duplicate or additional failures, malformed severity/message
+data and a potentially truncated 100-entry page still deny. Historical identities,
+records, provider guards and authorization boundaries are unchanged.
+
+The observed notice reproduced the defect before the correction. The focused
+suite then passed **16/16, zero failed/skipped**. It also executes continuation
+with the subsequent admission-only failure in history: the existing skipped-job
+classification suffices, without another reconciliation or Render request. The
+affected path contains no other total-annotation-count assumption. Hosted required
+Node24/PostgreSQL CI results are recorded on the correction PR at its exact head.
