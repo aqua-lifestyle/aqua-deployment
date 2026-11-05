@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { objectDigest, sha256 } from './github-evidence.mjs';
 import { readinessCandidateSha, validateReadinessCandidate } from './readiness-release.mjs';
 import { pr121CandidateSha, validatePr121Candidate } from './pr121-release.mjs';
+import { firstAccountCandidateSha, validateFirstAccountCandidate } from './first-account-release.mjs';
 
 // Executor-owned pins from the frozen, CI-qualified application. No candidate
 // manifest, dispatch input or migration command can extend this exception.
@@ -75,8 +76,9 @@ function validateCompletedMigration55Scope(q, policy) {
   const p = completedMigration55;
   let compatibility = null;
   if (q?.sha !== p.candidateSha) {
-    if (q?.sha === readinessCandidateSha || q?.sha === pr121CandidateSha) {
-      compatibility = (q.sha === pr121CandidateSha ? validatePr121Candidate(q) : validateReadinessCandidate(q)).completedCarry;
+    if (q?.sha === readinessCandidateSha || q?.sha === pr121CandidateSha || q?.sha === firstAccountCandidateSha) {
+      compatibility = (q.sha === firstAccountCandidateSha ? validateFirstAccountCandidate(q) :
+        q.sha === pr121CandidateSha ? validatePr121Candidate(q) : validateReadinessCandidate(q)).completedCarry;
       const original = validateCompletedCandidateCarryForward();
       check(['operationSourceSha','completedEvidenceSha256','sourceManifestSha256','policyScopeSha256','targetsSha256',
         'databaseIdentitySha256','tenantId','migrationId','migrationDefinitionSha256','reviewedSqlSha256',

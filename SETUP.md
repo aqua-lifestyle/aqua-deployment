@@ -1,3 +1,10 @@
+The [first-account code-only correction](docs/first-account-release-20261105.md)
+binds application PR122 merge `f3490e76628f0b01159bb995bbb7c3bddb479601` and
+main CI `42044364779/1`, including its exact reviewed nonfinancial middleware
+digest. It preserves the PR121 binding, completed operation evidence, all other
+source/migration guards and fresh financial/worker/readiness checks. No activation
+or migration is performed by the binding.
+
 The [PR121 code-only release correction](docs/pr121-release-20261105.md) binds
 application `db4e6a667ecea228f903e209941eadc7f3002bb3` to main CI `42001784909/1`
 and reads the complete authenticated predecessor audit within a finite 4 MiB
