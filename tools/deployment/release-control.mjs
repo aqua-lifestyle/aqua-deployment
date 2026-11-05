@@ -14,7 +14,7 @@ import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateM
   SchemaFirstDenied, isCleanStartSchemaKind, completedMigration55PolicyKind } from './commission-schema-first.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   gitSourceDigest, verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission,
-  readGitHubArtifact, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
+  readGitHubArtifact, readAuditFile, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
 import { HistoricalReconciliationDenied, isReconciledHistoricalRun, validateHistoricalContext,
   validateHistoricalArtifact, validateHistoricalAudit } from './historical-release-reconciliation.mjs';
 import { partialReleaseRunId, reconcilePartialRelease, partialRenderReuse,
@@ -1492,20 +1492,13 @@ export async function main(env, options = {}) {
   try { admittedPlan = JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/evidence-plan.json`, 'utf8')); }
   catch { throw new ReleaseFailure('FROZEN_EVIDENCE_PLAN_REQUIRED'); }
   requireThat(objectDigest(admittedPlan) === objectDigest(plan), 'RELEASE_EVIDENCE_PLAN_CHANGED');
-  const readAudit = file => {
-    let text;
-    try { text = readFileSync(file, 'utf8');
-      requireThat(text.length <= 1024 * 1024, 'AUDIT_RECEIPT_UNVERIFIABLE');
-      return text.trim().split('\n').map(line => JSON.parse(line));
-    } catch { throw new ReleaseFailure('AUDIT_RECEIPT_UNVERIFIABLE'); }
-  };
   await deploy(api, q, policy, report, { env, evidencePlan: plan, admissionReceipt,
     readSourceDigest: readSource, now: options.now,
     schemaReadback: options.schemaReadback,
     recoveryReadback: options.recoveryReadback,
     ...options.deploymentOptions, frontendArchive: trustedSourceArchive,
-    baselineRows: plan.baseline ? readAudit(env.BASELINE_RECEIPT_FILE) : undefined,
-    receiptRows: plan.resume ? plan.resumeChain.flatMap(d => readAudit(plan.resumeChain.length === 1 ?
+    baselineRows: plan.baseline ? readAuditFile(env.BASELINE_RECEIPT_FILE) : undefined,
+    receiptRows: plan.resume ? plan.resumeChain.flatMap(d => readAuditFile(plan.resumeChain.length === 1 ?
       `${env.RESUME_RECEIPT_DIR}/release-report.jsonl` :
       `${env.RESUME_RECEIPT_DIR}/production-release-audit-${d.runId}-${d.runAttempt}/release-report.jsonl`)) : undefined });
 }

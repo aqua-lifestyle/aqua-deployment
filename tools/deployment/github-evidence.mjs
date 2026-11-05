@@ -2,7 +2,7 @@
 // trusts the designated administrators; it is not independent verification.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyReport, validateInventory } from './mandatory-security.mjs';
@@ -19,6 +19,19 @@ export const approvedInventoryBytes = readFileSync(new URL('./approved-security-
 export const approvedInventory = validateInventory(JSON.parse(approvedInventoryBytes));
 export const inventoryDigest = sha256(approvedInventoryBytes);
 export const maxArtifactBytes = 4 * 1024 * 1024;
+// The authenticated predecessor audit is 3,140,509 bytes. Keep a finite bound
+// for the complete audit; the mandatory test report retains its 2 MiB limit.
+export const maxAuditBytes = 4 * 1024 * 1024;
+
+export function readAuditFile(file) {
+  try {
+    const size = statSync(file).size;
+    check(size > 0 && size <= maxAuditBytes, 'AUDIT_RECEIPT_UNVERIFIABLE');
+    const bytes = readFileSync(file);
+    check(bytes.length === size, 'AUDIT_RECEIPT_UNVERIFIABLE');
+    return bytes.toString('utf8').trim().split('\n').map(line => JSON.parse(line));
+  } catch { throw new GitHubEvidenceDenied('AUDIT_RECEIPT_UNVERIFIABLE'); }
+}
 const schemaPins = JSON.parse(readFileSync(new URL('./commission-schema-source.json', import.meta.url)));
 const schemaPaths = [...schemaPins.migrationFiles, ...schemaPins.holdSources,
   ...(schemaPins.cleanStartSources ?? [])].map(p => p.path);
@@ -81,7 +94,9 @@ export async function readGitHubArtifact(api, owner, descriptor, filename) {
     writeFileSync(zip, bytes, { mode: 0o600, flag: 'wx' });
     const names = execFileSync('unzip', ['-Z1', zip], { encoding: 'utf8', maxBuffer: 4096, stdio: ['ignore', 'pipe', 'pipe'] });
     check(names === `${filename}\n`, 'GITHUB_ARTIFACT_CONTENTS_INVALID');
-    return execFileSync('unzip', ['-p', zip, filename], { maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    return execFileSync('unzip', ['-p', zip, filename], {
+      maxBuffer: filename === 'release-report.jsonl' ? maxAuditBytes : 2 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
     if (error instanceof GitHubEvidenceDenied) throw error;
     throw new GitHubEvidenceDenied('GITHUB_ARTIFACT_ARCHIVE_INVALID');
