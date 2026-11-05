@@ -1,0 +1,16 @@
+{
+  "contract": "aqua.first-account-exact-release",
+  "version": 1,
+  "applicationPr": 122,
+  "candidateSha": "f3490e76628f0b01159bb995bbb7c3bddb479601",
+  "reviewedApplicationHead": "5624f24625458f8b8ec0a195801f25ecfb2e8a00",
+  "ciRunId": "42044364779",
+  "ciRunAttempt": 1,
+  "previousCandidateSha": "db4e6a667ecea228f903e209941eadc7f3002bb3",
+  "previousBindingSha256": "f5c3d742512d41ac7715be41dbc66c605ccf8044cc24e0826d92da642cabefdf",
+  "policySha256": "717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840",
+  "scope": "code-only-held-deployment",
+  "guardPath": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/ApplicationRecoveryMiddleware.cs",
+  "previousGuardSha256": "a7ab7d5f2c2a9c68fb4eadccf133c2535f28259d3132ac6f21081875f7666073",
+  "candidateGuardSha256": "3c57877be5bec0a4e9368ce6cc79771e338fa7e1116beab2fc9b215f79b764b3"
+}
