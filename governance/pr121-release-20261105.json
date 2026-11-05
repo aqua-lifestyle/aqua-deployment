@@ -1,0 +1,13 @@
+{
+  "contract": "aqua.pr121-exact-release",
+  "version": 1,
+  "applicationPr": 121,
+  "candidateSha": "db4e6a667ecea228f903e209941eadc7f3002bb3",
+  "reviewedApplicationHead": "3b457f2cb92c855c9b1890feb08f909d442525ca",
+  "ciRunId": "42001784909",
+  "ciRunAttempt": 1,
+  "previousCandidateSha": "2488682e7f36828c380b2f962f29b9f9b4cb6384",
+  "previousBindingSha256": "da6502bd20c0df2c4ea1a151b995e5ea997ae58b3cf424c7cec0cb12c1785919",
+  "policySha256": "717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840",
+  "scope": "code-only-held-deployment"
+}

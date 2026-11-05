@@ -1,3 +1,11 @@
+The [PR121 code-only release correction](docs/pr121-release-20261105.md) binds
+application `db4e6a667ecea228f903e209941eadc7f3002bb3` to main CI `42001784909/1`
+and reads the complete authenticated predecessor audit within a finite 4 MiB
+bound. It reuses the existing protected executor; historical operation evidence,
+source checks, readiness, recovery and financial holds remain mandatory. The
+separate automatic-trigger credentials are not a prerequisite for the approved
+protected entry point.
+
 The [exact readiness-fix release binding](docs/readiness-release-20261104.md) selects
 only application merge `2488682e7f36828c380b2f962f29b9f9b4cb6384` and main CI
 `41861969794/1`. It preserves completed/historical evidence, distinguishes the
