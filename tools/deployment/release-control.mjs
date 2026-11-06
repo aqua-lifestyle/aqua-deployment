@@ -24,6 +24,8 @@ import { readinessCandidateSha, readinessStartingBackend, validateReadinessStart
   ReadinessReleaseDenied } from './readiness-release.mjs';
 import { authenticatePreMutationProducer, classifyPriorFailedRun, PriorRunNotRecognized,
   productionDeployStep, providerReadScopes } from './release-prior-run-classification.mjs';
+import { rootUnboundCandidateSha } from './root-unbound-release.mjs';
+import { verifyOwnerRenderRedeployment, validateOwnerRenderProof } from './root-unbound-render-reconciliation.mjs';
 
 export const targets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 // Only the executor's reviewed targets.json selects this mode. Candidate input
@@ -551,7 +553,7 @@ export function createAuditWriter(identity, emit) {
   return row => {
     for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt',
       'renderOriginRunId', 'renderOriginExecutorSha', 'renderReconciliation',
-      'readinessRenderContinuation',
+      'readinessRenderContinuation', 'ownerRenderRedeploy',
       'startingRenderDeployId', 'startingRenderSha', 'startingBackendBindingSha256',
       'baselineRenderDeployId', 'baselineVercelDeployId', 'baselineRenderSha', 'baselineVercelSha',
       'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256', 'schemaFirstEvidenceSha256', 'recoveryMode',
@@ -607,6 +609,12 @@ export function validateResumeReceipt(rows, frozen) {
     }
     requireThat(row.phase !== 'render-reconciled' || row.renderReconciliation || row.readinessRenderContinuation, 'RESUME_RECEIPT_UNVERIFIABLE');
     if (row.startingBackendBindingSha256 !== undefined) validateReadinessStartingAudit(row);
+    if (row.ownerRenderRedeploy !== undefined) {
+      validateOwnerRenderProof(row.ownerRenderRedeploy, row);
+      requireThat(!known.ownerRenderRedeploy || objectDigest(known.ownerRenderRedeploy) === objectDigest(row.ownerRenderRedeploy),
+        'CONTRADICTORY_RESUME_RECEIPT');
+      known.ownerRenderRedeploy = row.ownerRenderRedeploy;
+    }
     for (const provider of ['render', 'vercel']) {
       if (row.phase === `${provider}-requesting`) pending.add(provider);
       if (row.phase === `${provider}-requested` && row[`${provider}DeployId`]) pending.delete(provider);
@@ -885,6 +893,11 @@ export function validateBaselineReceipt(rows, descriptor, candidate) {
       rows.some(row => row.phase === 'vercel-files-uploaded' && row.vercelSourceProof) &&
       rows.some(row => row.phase === 'vercel-requested' && row.vercelSourceProof), 'VERIFIED_BASELINE_RECEIPT_REQUIRED');
   }
+  if (last.ownerRenderRedeploy !== undefined) {
+    validateOwnerRenderProof(last.ownerRenderRedeploy, last);
+    requireThat(rows.every(row => row.ownerRenderRedeploy === undefined ||
+      objectDigest(row.ownerRenderRedeploy) === objectDigest(last.ownerRenderRedeploy)), 'CONTRADICTORY_BASELINE_RECEIPT');
+  } else requireThat(rows.every(row => row.ownerRenderRedeploy === undefined), 'VERIFIED_BASELINE_RECEIPT_REQUIRED');
   return Object.freeze({ renderDeployId: last.renderDeployId, renderSha: last.sha,
     vercelDeployId: last.vercelDeployId, vercelSha: last.sha, origin: last });
 }
@@ -1026,6 +1039,8 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       rows.push({ envVar });
     }
     validateRender(service, rows, cleanStart);
+    if (qualified.sha === rootUnboundCandidateSha)
+      requireThat(rows.some(r => r.envVar.key === 'Yoco__Mode' && r.envVar.value === 'live'), 'OWNER_RENDER_LIVE_CONFIGURATION_CHANGED');
   };
   await readRender();
   readScope('vercel-project');
@@ -1096,12 +1111,15 @@ export async function deploy(api, qualified, policy, report, options = {}) {
         (baselineProof.vercelSha === undefined && baselineProof.vercelSourceProvenance === 'UNVERIFIED_LEGACY')),
     'AUTOMATIC_BASELINE_PROVENANCE_UNVERIFIABLE');
   }
+  const ownerBackend = qualified.sha === rootUnboundCandidateSha
+    ? await verifyOwnerRenderRedeployment(api, qualified, baselineProof) : null;
   const baselineFields = { baselineRenderDeployId: baselineProof.renderDeployId,
     baselineVercelDeployId: baselineProof.vercelDeployId, baselineRenderSha: baselineProof.renderSha,
     ...(baselineProof.vercelSha !== undefined ? { baselineVercelSha: baselineProof.vercelSha } : {}),
     ...(firstRecovery ? { baselineVercelSourceProvenance: baselineProof.vercelSourceProvenance,
       firstReleaseRecoveryEvidenceSha256: firstRecovery.evidenceSha256 } : {}) };
-  report({ phase: 'baseline-selected', ...baselineFields, ...(acknowledged ? {
+  report({ phase: 'baseline-selected', ...baselineFields,
+    ...(ownerBackend ? { ownerRenderRedeploy: ownerBackend } : {}), ...(acknowledged ? {
     startingRenderDeployId: readyReuse ? prior.renderDeployId : acknowledged.renderDeployId,
     startingRenderSha: readyReuse ? qualified.sha : acknowledged.renderSha,
     startingBackendBindingSha256: readyReuse ? readyReuse.continuationBindingSha256 : acknowledged.bindingSha256 } : {}) });
@@ -1147,8 +1165,8 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   readScope('render-deploy-history');
   const renderDeploys = await deploymentHistory(api, 'render');
   const live = renderDeploys.filter(x => x.status === 'live');
-  const startingRenderId = acknowledged?.renderDeployId ?? baselineProof.renderDeployId;
-  const startingRenderSha = acknowledged?.renderSha ?? baselineProof.renderSha;
+  const startingRenderId = ownerBackend?.renderDeployId ?? acknowledged?.renderDeployId ?? baselineProof.renderDeployId;
+  const startingRenderSha = ownerBackend?.renderSha ?? acknowledged?.renderSha ?? baselineProof.renderSha;
   requireThat(live.length === 1 && (live[0].id === startingRenderId && live[0].commit?.id === startingRenderSha ||
     (live[0].id === prior.renderDeployId && live[0].commit?.id === qualified.sha)), 'RENDER_BASELINE_DRIFT');
   requireThat(!(partial || readyReuse) || (live[0].id === prior.renderDeployId && live[0].commit?.id === qualified.sha),

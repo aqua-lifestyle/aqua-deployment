@@ -1,0 +1,20 @@
+{
+  "contract": "aqua.root-unbound-owner-render-redeployment",
+  "version": 1,
+  "candidateBindingSha256": "279977d49ffa7af25415648078e77a27d1f6e3dfdc0e083478534c349d6466b1",
+  "previousRenderDeployId": "dep-dbm9gbh42hec73e1vrmg",
+  "renderDeployId": "dep-dbmmrtpuqbhc73b0ml0g",
+  "renderSha": "f3490e76628f0b01159bb995bbb7c3bddb479601",
+  "vercelDeployId": "dpl_EsfGAMMEwvtB9rhM8GiTnhf6yudG",
+  "githubDeploymentId": 7593620338,
+  "githubSuccessStatusId": 21550858282,
+  "createdAt": "2026-11-06T06:04:54Z",
+  "completedAt": "2026-11-06T06:07:16Z",
+  "environment": "main - aqualifestyle-api",
+  "yocoMode": "live",
+  "blockedReleaseRunId": "42187090727",
+  "blockedReleaseArtifactId": "13487822691",
+  "blockedReleaseArtifactSha256": "31ae2468b38c2ffba6e23db03ee0a48b876f6164f6873a6fa93adfaab59706cf",
+  "blockedReleaseCode": "RENDER_BASELINE_DRIFT",
+  "scope": "acknowledge-existing-owner-redeployment-only"
+}
