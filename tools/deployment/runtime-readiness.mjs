@@ -13,15 +13,28 @@ export const cleanStartRuntimeSettings = Object.freeze({...runtimeSettings,
 export const readinessUrl = 'https://aqualifestyle-api.onrender.com/api/deployment-readiness';
 const deny = code => { throw Error(code); };
 
+export function validateD10Bindings(value, sha) {
+  const keys = ['requiredAssemblyDigest','requiredRuntimeAssemblyDigest','currentConfigurationDigest',
+    'intendedConfigurationDigest','intendedEnvironmentId','intendedBuildId'];
+  const hashes = keys.slice(0,4);
+  if (!/^[a-f0-9]{40}$/.test(sha ?? '') || !value || Object.keys(value).sort().join() !== keys.sort().join() ||
+    !hashes.every(key => typeof value[key] === 'string' && /^[a-f0-9]{64}$/.test(value[key]) && value[key] !== '0'.repeat(64)) ||
+    value.currentConfigurationDigest === value.intendedConfigurationDigest ||
+    value.intendedEnvironmentId !== 'production-release' || value.intendedBuildId !== sha)
+    deny('D10_RUNTIME_BINDINGS_UNVERIFIED');
+}
+
 export function validateReadiness(response, sha) {
   const body = response?.body;
   const keys = ['contract', 'version', 'status', 'buildId', 'birdConfiguration',
     'yocoConfiguration', 'profile', 'restrictedOperations'];
+  if (body?.version === 2) keys.push('d10Bindings');
   if (response?.status !== 200 || !body || Object.keys(body).sort().join() !== keys.sort().join() ||
-    body.contract !== 'aqua.production-readiness' || body.version !== 1 || body.status !== 'Ready' ||
+    body.contract !== 'aqua.production-readiness' || ![1,2].includes(body.version) || body.status !== 'Ready' ||
     body.buildId !== sha || body.birdConfiguration !== 'StartupValidated' ||
     body.yocoConfiguration !== 'StartupValidated' || body.profile !== 'normal-integrated' ||
     body.restrictedOperations !== 'ConfigurationHeld') deny('PROTECTED_RUNTIME_READINESS_FAILED');
+  if (body.version === 2) validateD10Bindings(body.d10Bindings, sha);
 }
 
 export async function protectedReadiness(env, sha, fetcher = fetch) {

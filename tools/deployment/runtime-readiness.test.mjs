@@ -77,6 +77,39 @@ test('OIDC is requested for the fixed audience and never forwarded to GitHub, pr
   assert.ok(!JSON.stringify(calls).includes(env.RENDER_API_KEY));assert.ok(!JSON.stringify(calls).includes(env.VERCEL_TOKEN));
 });
 
+const nativeResponse=sha=>{const r=response(sha);r.body.version=2;r.body.d10Bindings={
+  requiredAssemblyDigest:'1'.repeat(64),requiredRuntimeAssemblyDigest:'2'.repeat(64),
+  currentConfigurationDigest:'3'.repeat(64),intendedConfigurationDigest:'4'.repeat(64),
+  intendedEnvironmentId:'production-release',intendedBuildId:sha};return r;};
+
+test('native version2 readiness records hash-only bindings in the full release audit',async()=>{
+  const f=fixture();f.api.readiness=async sha=>nativeResponse(sha);
+  await f.execute();const last=f.reports.at(-1);
+  assert.equal(last.phase,'verified');assert.deepEqual(last.d10RuntimeBindings,nativeResponse(source).body.d10Bindings);
+  assert.ok(f.reports.some(r=>r.phase==='provider-read'&&r.scope==='readiness-bindings'));
+  assert.deepEqual(f.posts.map(p=>p.provider),['render','vercel']);
+});
+
+test('native readiness refuses missing, extra, zero, drifting or wrong-source bindings',async()=>{
+  for(const edit of [r=>delete r.body.d10Bindings,r=>r.body.d10Bindings.extra='secret-canary',
+    r=>r.body.d10Bindings.requiredAssemblyDigest='0'.repeat(64),r=>r.body.d10Bindings.intendedBuildId=previous,
+    r=>r.body.d10Bindings.currentConfigurationDigest=r.body.d10Bindings.intendedConfigurationDigest,
+    r=>r.body.version=3]){
+    const f=fixture();f.api.readiness=async sha=>{const r=nativeResponse(sha);edit(r);return r;};
+    await assert.rejects(f.execute());assert.equal(f.posts.some(p=>p.provider==='vercel'),false);
+  }
+  const f=fixture();let reads=0;f.api.readiness=async sha=>{const r=nativeResponse(sha);if(++reads>1)r.body.d10Bindings.requiredAssemblyDigest='5'.repeat(64);return r;};
+  await assert.rejects(f.execute());assert.equal(f.posts.some(p=>p.provider==='vercel'),false);
+});
+
+test('private operator evidence names cannot appear in frontend project configuration',async()=>{
+  for(const key of ['App__AQGreenV2__Commissioning__DecisionJsonBase64','App__AQGreenV2__Commissioning__VerifiedAuthorityJsonBase64',
+    'App__AQGreenV2__Commissioning__CleanStartEvidenceJsonBase64','App__YocoCutover__ReconciliationJsonBase64']){
+    const f=fixture();f.state.publicVars.push({id:'private-evidence',key,target:['production'],type:'sensitive'});
+    await assert.rejects(f.execute(),/RUNTIME_CREDENTIAL_IN_FRONTEND_CONFIGURATION/);assert.equal(f.posts.length,0);
+  }
+});
+
 test('only the environment-bound production job obtains id-token permission',()=>{
   const workflow=readFileSync(new URL('../../.github/workflows/deploy.yml',import.meta.url),'utf8');
   const production=workflow.slice(workflow.indexOf('\n  production:'));
