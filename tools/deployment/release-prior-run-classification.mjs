@@ -53,6 +53,8 @@ const workflowDigests = new Set([
 ]);
 const controllerDigests = new Set([
   sha256(readFileSync(new URL('./release-control.mjs', import.meta.url))),
+  // Reviewed PR124 producer: native bindings added, write-ahead ordering retained.
+  'cdc5b121a5ec017c1b485f225086a2bab23c15ebd604a0bbeb6b145d3209dd3a',
   // Reviewed completed root-unbound producer; original write-ahead ordering retained.
   '31bc2f2bf56f591e86b7a0ff53c349b22bacbda3e531efa6340080e33f7d5bd9',
   // Reviewed 0ab4b71 producer of the baseline-drift stop; POST write-ahead order is unchanged.

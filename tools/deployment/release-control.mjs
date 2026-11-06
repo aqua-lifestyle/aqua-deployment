@@ -26,6 +26,7 @@ import { authenticatePreMutationProducer, classifyPriorFailedRun, PriorRunNotRec
   productionDeployStep, providerReadScopes } from './release-prior-run-classification.mjs';
 import { rootUnboundCandidateSha } from './root-unbound-release.mjs';
 import { postResetCandidateSha } from './post-reset-live-release.mjs';
+import { minimumLiveCandidateSha } from './minimum-live-release.mjs';
 import { verifyOwnerRenderRedeployment, validateOwnerRenderProof } from './root-unbound-render-reconciliation.mjs';
 
 export const targets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
@@ -1078,7 +1079,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   const readProtectedReadiness = async sha => {
     try {
       readScope('readiness'); const response = await api.readiness(sha); validateReadiness(response, sha);
-      requireThat(sha !== qualified.sha || qualified.sha !== postResetCandidateSha || response.body.version === 2, 'D10_NATIVE_READINESS_REQUIRED');
+      requireThat(sha !== qualified.sha || ![postResetCandidateSha,minimumLiveCandidateSha].includes(qualified.sha) || response.body.version === 2, 'D10_NATIVE_READINESS_REQUIRED');
       if (sha === qualified.sha && response.body.version === 2) {
         requireThat(!nativeBindings || objectDigest(nativeBindings) === objectDigest(response.body.d10Bindings), 'D10_RUNTIME_BINDINGS_CHANGED');
         nativeBindings = response.body.d10Bindings;

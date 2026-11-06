@@ -5,6 +5,7 @@ import { pr121CandidateSha, validatePr121Candidate } from './pr121-release.mjs';
 import { firstAccountCandidateSha, validateFirstAccountCandidate } from './first-account-release.mjs';
 import { rootUnboundCandidateSha, validateRootUnboundCandidate } from './root-unbound-release.mjs';
 import { postResetCandidateSha, validatePostResetCandidate } from './post-reset-live-release.mjs';
+import { minimumLiveCandidateSha, validateMinimumLiveCandidate } from './minimum-live-release.mjs';
 
 // Executor-owned pins from the frozen, CI-qualified application. No candidate
 // manifest, dispatch input or migration command can extend this exception.
@@ -78,8 +79,9 @@ function validateCompletedMigration55Scope(q, policy) {
   const p = completedMigration55;
   let compatibility = null;
   if (q?.sha !== p.candidateSha) {
-    if (q?.sha === readinessCandidateSha || q?.sha === pr121CandidateSha || q?.sha === firstAccountCandidateSha || q?.sha === rootUnboundCandidateSha || q?.sha === postResetCandidateSha) {
-      compatibility = (q.sha === postResetCandidateSha ? validatePostResetCandidate(q) :
+    if (q?.sha === readinessCandidateSha || q?.sha === pr121CandidateSha || q?.sha === firstAccountCandidateSha || q?.sha === rootUnboundCandidateSha || q?.sha === postResetCandidateSha || q?.sha === minimumLiveCandidateSha) {
+      compatibility = (q.sha === minimumLiveCandidateSha ? validateMinimumLiveCandidate(q) :
+        q.sha === postResetCandidateSha ? validatePostResetCandidate(q) :
         q.sha === rootUnboundCandidateSha ? validateRootUnboundCandidate(q) :
         q.sha === firstAccountCandidateSha ? validateFirstAccountCandidate(q) :
         q.sha === pr121CandidateSha ? validatePr121Candidate(q) : validateReadinessCandidate(q)).completedCarry;
