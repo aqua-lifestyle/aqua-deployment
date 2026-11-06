@@ -7,7 +7,7 @@ import { approvedRecoveryReadback, legacyRecoveryPair, validateFirstReleaseRecov
 import { AttestationDenied, verifyPrototypeAttestation } from './authorization-attestation.mjs';
 import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody,
   validateFileDeployment, validateFileDeploymentSource, verifyObservedFileDeployment } from './vercel-source.mjs';
-import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validateReadiness } from './runtime-readiness.mjs';
+import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validateReadiness, validateD10Bindings } from './runtime-readiness.mjs';
 import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied, memberContinuation,
   validateMemberContinuation, validateMemberIdentity, verifyMemberSource, verifyMemberAuthority, validateMemberReceipt, deployMemberRelease } from './member-release.mjs';
 import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateMigrationDelta,
@@ -25,6 +25,7 @@ import { readinessCandidateSha, readinessStartingBackend, validateReadinessStart
 import { authenticatePreMutationProducer, classifyPriorFailedRun, PriorRunNotRecognized,
   productionDeployStep, providerReadScopes } from './release-prior-run-classification.mjs';
 import { rootUnboundCandidateSha } from './root-unbound-release.mjs';
+import { postResetCandidateSha } from './post-reset-live-release.mjs';
 import { verifyOwnerRenderRedeployment, validateOwnerRenderProof } from './root-unbound-render-reconciliation.mjs';
 
 export const targets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
@@ -553,7 +554,7 @@ export function createAuditWriter(identity, emit) {
   return row => {
     for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt',
       'renderOriginRunId', 'renderOriginExecutorSha', 'renderReconciliation',
-      'readinessRenderContinuation', 'ownerRenderRedeploy',
+      'readinessRenderContinuation', 'ownerRenderRedeploy', 'd10RuntimeBindings',
       'startingRenderDeployId', 'startingRenderSha', 'startingBackendBindingSha256',
       'baselineRenderDeployId', 'baselineVercelDeployId', 'baselineRenderSha', 'baselineVercelSha',
       'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256', 'schemaFirstEvidenceSha256', 'recoveryMode',
@@ -609,6 +610,12 @@ export function validateResumeReceipt(rows, frozen) {
     }
     requireThat(row.phase !== 'render-reconciled' || row.renderReconciliation || row.readinessRenderContinuation, 'RESUME_RECEIPT_UNVERIFIABLE');
     if (row.startingBackendBindingSha256 !== undefined) validateReadinessStartingAudit(row);
+    if (row.d10RuntimeBindings !== undefined) {
+      validateD10Bindings(row.d10RuntimeBindings, row.sha);
+      requireThat(!known.d10RuntimeBindings || objectDigest(known.d10RuntimeBindings) === objectDigest(row.d10RuntimeBindings),
+        'CONTRADICTORY_RESUME_RECEIPT');
+      known.d10RuntimeBindings = row.d10RuntimeBindings;
+    }
     if (row.ownerRenderRedeploy !== undefined) {
       validateOwnerRenderProof(row.ownerRenderRedeploy, row);
       requireThat(!known.ownerRenderRedeploy || objectDigest(known.ownerRenderRedeploy) === objectDigest(row.ownerRenderRedeploy),
@@ -893,6 +900,12 @@ export function validateBaselineReceipt(rows, descriptor, candidate) {
       rows.some(row => row.phase === 'vercel-files-uploaded' && row.vercelSourceProof) &&
       rows.some(row => row.phase === 'vercel-requested' && row.vercelSourceProof), 'VERIFIED_BASELINE_RECEIPT_REQUIRED');
   }
+  if (last.d10RuntimeBindings !== undefined) {
+    validateD10Bindings(last.d10RuntimeBindings, last.sha);
+    requireThat(rows.some(row => row.phase === 'provider-read' && row.scope === 'readiness-bindings' && row.d10RuntimeBindings) &&
+      rows.every(row => row.d10RuntimeBindings === undefined || objectDigest(row.d10RuntimeBindings) === objectDigest(last.d10RuntimeBindings)),
+      'CONTRADICTORY_BASELINE_RECEIPT');
+  } else requireThat(rows.every(row => row.d10RuntimeBindings === undefined), 'VERIFIED_BASELINE_RECEIPT_REQUIRED');
   if (last.ownerRenderRedeploy !== undefined) {
     validateOwnerRenderProof(last.ownerRenderRedeploy, last);
     requireThat(rows.every(row => row.ownerRenderRedeploy === undefined ||
@@ -1050,7 +1063,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     readScope('vercel-env');
     const rows = (await api.vercel(`/v10/projects/${targets.vercel.id}/env?decrypt=false`)).envs;
     requireThat(Array.isArray(rows) && !rows.some(row =>
-      /(?:BIRDAPIKEY|YOCOSECRETKEY|YOCOWEBHOOKSECRET)$/.test(String(row.key).replace(/[^A-Za-z0-9]/g, '').toUpperCase())),
+      /(?:BIRDAPIKEY|YOCOSECRETKEY|YOCOWEBHOOKSECRET|APPAQGREENV2COMMISSIONING(?:DECISION|VERIFIEDAUTHORITY|CLEANSTARTEVIDENCE)JSONBASE64|APPYOCOCUTOVERRECONCILIATIONJSONBASE64)$/.test(String(row.key).replace(/[^A-Za-z0-9]/g, '').toUpperCase())),
     'RUNTIME_CREDENTIAL_IN_FRONTEND_CONFIGURATION');
     for (const [key, expected] of Object.entries(frontend.proof.publicBuildInputs)) {
       const selected = rows.filter(row => row.key === key && row.target?.includes('production'));
@@ -1061,8 +1074,17 @@ export async function deploy(api, qualified, policy, report, options = {}) {
         requireThat(selected[0].value === expected, 'VERCEL_PUBLIC_BUILD_CONFIGURATION_UNVERIFIED');
     }
   };
+  let nativeBindings = prior.d10RuntimeBindings;
   const readProtectedReadiness = async sha => {
-    try { readScope('readiness'); validateReadiness(await api.readiness(sha), sha); }
+    try {
+      readScope('readiness'); const response = await api.readiness(sha); validateReadiness(response, sha);
+      requireThat(sha !== qualified.sha || qualified.sha !== postResetCandidateSha || response.body.version === 2, 'D10_NATIVE_READINESS_REQUIRED');
+      if (sha === qualified.sha && response.body.version === 2) {
+        requireThat(!nativeBindings || objectDigest(nativeBindings) === objectDigest(response.body.d10Bindings), 'D10_RUNTIME_BINDINGS_CHANGED');
+        nativeBindings = response.body.d10Bindings;
+        report({ phase: 'provider-read', scope: 'readiness-bindings', d10RuntimeBindings: nativeBindings });
+      }
+    }
     catch { throw new ReleaseFailure('PROTECTED_RUNTIME_READINESS_FAILED'); }
   };
   await readVercelVariables();

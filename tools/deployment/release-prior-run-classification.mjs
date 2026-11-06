@@ -53,6 +53,8 @@ const workflowDigests = new Set([
 ]);
 const controllerDigests = new Set([
   sha256(readFileSync(new URL('./release-control.mjs', import.meta.url))),
+  // Reviewed completed root-unbound producer; original write-ahead ordering retained.
+  '31bc2f2bf56f591e86b7a0ff53c349b22bacbda3e531efa6340080e33f7d5bd9',
   // Reviewed 0ab4b71 producer of the baseline-drift stop; POST write-ahead order is unchanged.
   'faf99ea1fec489f19811bb0b8786ba6d1709880657baeccc1e7f121b96bdbc3d',
   // Reviewed 11f8fd0 producer retains the same write-ahead mutation ordering.
@@ -111,7 +113,7 @@ const preMutationFailureCodes = new Set(['PROVIDER_READ_REJECTED', 'PROTECTED_RU
 export const providerReadScopes = Object.freeze(new Set([
   'github-repository', 'github-compare', 'render-service', 'render-env', 'render-deploy-history',
   'render-deploy', 'vercel-project', 'vercel-env', 'vercel-deploy-history', 'vercel-deployment',
-  'vercel-aliases', 'health', 'readiness', 'web-readiness']));
+  'vercel-aliases', 'health', 'readiness', 'readiness-bindings', 'web-readiness']));
 
 export const productionDeployStep = productionName =>
   productionName === 'Authorized recovery release' ?
