@@ -101,6 +101,24 @@ test('substituted, conflicting or incomplete audit evidence fails closed', () =>
     audit: audit({rows: [rows[0], {...rows[1], phase: 'verified', renderDeployId: 'dep-ok', vercelDeployId: 'dpl-ok'}]})}), PriorRunNotRecognized);
 });
 
+test('reviewed baseline-drift producer requires a complete no-mutation audit and grants no continuation', () => {
+  const head = '0ab4b7142709cb55227b5e5d57d1f071b81ef266';
+  const stopped = rows.map(row => ({...row, executorSha: head}));
+  stopped.at(-1).code = 'RENDER_BASELINE_DRIFT';
+  const input = {run: run(41494396970, {sha: head}), attempt: 1, production: failedJob(undefined, 'failure'),
+    audit: {...audit({sha: head, rows: stopped}), producer: {...producer, executorSha: head,
+      controllerSha256: 'faf99ea1fec489f19811bb0b8786ba6d1709880657baeccc1e7f121b96bdbc3d'}}};
+  const result = recognize(input);
+  assert.equal(result.basis, 'audit-verified-never-mutated');
+  assert.equal(result.terminalFailureCode, 'RENDER_BASELINE_DRIFT');
+  assert.equal(result.renderDeployId, undefined);
+  for (const phase of mutationCapablePhases) {
+    const changed = structuredClone(input);
+    changed.audit.rows.splice(1, 0, {...stopped[0], phase});
+    assert.throws(() => recognize(changed), /MUTATION_PHASE_REQUIRES_RECONCILIATION/);
+  }
+});
+
 test('attempted, acknowledged or ambiguous provider writes always require reconciliation', () => {
   for (const phase of ['render-requesting', 'render-requested', 'render-ready', 'vercel-files-requesting',
     'vercel-files-uploaded', 'vercel-requesting', 'vercel-requested']) {
@@ -264,6 +282,15 @@ test('authenticated history rejects expired, substituted, truncated, contradicto
     await assert.rejects(evidencePlan(f.api, f.state.candidate, f.state.policy), error, label);
     assert.equal(f.posts.length, 0, label);
   }
+});
+
+test('history admission authenticates a baseline-drift stop without skipping archive or administrator checks', async () => {
+  const f = historyFixture(); f.historyState.rows.at(-1).code = 'RENDER_BASELINE_DRIFT';
+  const plan = await evidencePlan(f.api, f.state.candidate, f.state.policy);
+  assert.equal(plan.priorFailedRuns[0].terminalFailureCode, 'RENDER_BASELINE_DRIFT');
+  assert.deepEqual(plan.verifiedReleases, []); assert.equal(plan.resume, null); assert.equal(f.posts.length, 0);
+  f.historyState.corrupt = true;
+  await assert.rejects(evidencePlan(f.api, f.state.candidate, f.state.policy), /ARTIFACT_DIGEST_MISMATCH/);
 });
 
 test('a later read-only failed admission does not restart the prior-failure reconciliation cycle', async () => {

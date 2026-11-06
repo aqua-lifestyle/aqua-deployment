@@ -53,6 +53,8 @@ const workflowDigests = new Set([
 ]);
 const controllerDigests = new Set([
   sha256(readFileSync(new URL('./release-control.mjs', import.meta.url))),
+  // Reviewed 0ab4b71 producer of the baseline-drift stop; POST write-ahead order is unchanged.
+  'faf99ea1fec489f19811bb0b8786ba6d1709880657baeccc1e7f121b96bdbc3d',
   // Reviewed 11f8fd0 producer retains the same write-ahead mutation ordering.
   '7e174fe8c165f869156cdc2759717bc72ca116264bd1a5da6d7b7a3693cd6ecf',
   // Reviewed protected-Actions producer before administrative-read removal.
@@ -104,7 +106,7 @@ export const reconciliationForbiddenCodes = Object.freeze(new Set([
 
 // Unknown terminal categories are not evidence of a read-only stop. Extend this
 // reviewed vocabulary explicitly when another failure category is established.
-const preMutationFailureCodes = new Set(['PROVIDER_READ_REJECTED', 'PROTECTED_RUNTIME_READINESS_FAILED']);
+const preMutationFailureCodes = new Set(['PROVIDER_READ_REJECTED', 'PROTECTED_RUNTIME_READINESS_FAILED', 'RENDER_BASELINE_DRIFT']);
 
 export const providerReadScopes = Object.freeze(new Set([
   'github-repository', 'github-compare', 'render-service', 'render-env', 'render-deploy-history',

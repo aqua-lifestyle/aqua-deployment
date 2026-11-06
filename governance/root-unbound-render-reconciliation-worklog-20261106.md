@@ -26,3 +26,10 @@ receipt, financial enablement or reconciliation of Yoco payment references.
 Four focused tests cover fixed GET-only readback, wrong identities/state/mode,
 record/proof tampering and exact same-run retry preservation. Hosted full executor
 CI and protected deployment results are recorded on the PR after execution.
+
+The subsequent admission42190464141 correctly stopped before production: the
+general no-mutation classifier did not yet recognize the earlier baseline-drift
+terminal category or its exact pre-correction controller bytes. The completion
+adds only that reviewed code fingerprint/category. Authenticated complete archive,
+administrator approval, every write-ahead mutation denial and unknown-code denial
+remain required. No failed run becomes successful, a predecessor or a retry grant.
