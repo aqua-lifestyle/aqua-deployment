@@ -3,6 +3,7 @@ import { objectDigest, sha256 } from './github-evidence.mjs';
 import { readinessCandidateSha, validateReadinessCandidate } from './readiness-release.mjs';
 import { pr121CandidateSha, validatePr121Candidate } from './pr121-release.mjs';
 import { firstAccountCandidateSha, validateFirstAccountCandidate } from './first-account-release.mjs';
+import { rootUnboundCandidateSha, validateRootUnboundCandidate } from './root-unbound-release.mjs';
 
 // Executor-owned pins from the frozen, CI-qualified application. No candidate
 // manifest, dispatch input or migration command can extend this exception.
@@ -76,8 +77,9 @@ function validateCompletedMigration55Scope(q, policy) {
   const p = completedMigration55;
   let compatibility = null;
   if (q?.sha !== p.candidateSha) {
-    if (q?.sha === readinessCandidateSha || q?.sha === pr121CandidateSha || q?.sha === firstAccountCandidateSha) {
-      compatibility = (q.sha === firstAccountCandidateSha ? validateFirstAccountCandidate(q) :
+    if (q?.sha === readinessCandidateSha || q?.sha === pr121CandidateSha || q?.sha === firstAccountCandidateSha || q?.sha === rootUnboundCandidateSha) {
+      compatibility = (q.sha === rootUnboundCandidateSha ? validateRootUnboundCandidate(q) :
+        q.sha === firstAccountCandidateSha ? validateFirstAccountCandidate(q) :
         q.sha === pr121CandidateSha ? validatePr121Candidate(q) : validateReadinessCandidate(q)).completedCarry;
       const original = validateCompletedCandidateCarryForward();
       check(['operationSourceSha','completedEvidenceSha256','sourceManifestSha256','policyScopeSha256','targetsSha256',
@@ -265,8 +267,9 @@ export async function verifySchemaFirst(api, q, policy, readSource, readback = a
   check(!clean || schemaSource.cleanStartSources?.length > 0, 'CLEAN_START_SOURCES_NOT_PINNED');
   for (const pin of [...schemaSource.migrationFiles, ...schemaSource.holdSources,
     ...(clean ? schemaSource.cleanStartSources : [])])
-    check(await readSource(pin.path) === (compatibility?.guardOverride.path === pin.path ?
-      compatibility.guardOverride.candidateSha256 : pin.sha256), 'SCHEMA_OR_PAYOUT_GUARD_SOURCE_CHANGED');
+    check(await readSource(pin.path) === (compatibility?.sourceOverrides?.find(p => p.path === pin.path)?.candidateSha256 ??
+      (compatibility?.guardOverride.path === pin.path ? compatibility.guardOverride.candidateSha256 : pin.sha256)),
+    'SCHEMA_OR_PAYOUT_GUARD_SOURCE_CHANGED');
   // The legacy-to-candidate diff must contain exactly the three pinned schema
   // files, including on later code-only releases. No further DDL is authorized.
   validateMigrationDelta(await api.gh(`/compare/${policy.firstReleaseRecovery.baseline.renderSha}...${q.sha}`), true, true);
