@@ -1,0 +1,17 @@
+{
+  "contract": "aqua.verified-hold-exact-release",
+  "version": 1,
+  "applicationPr": 127,
+  "candidateSha": "0e2677125c68477da37801c46c1e4c5812dace4c",
+  "reviewedApplicationHead": "c266c219535dacc9be1821afea8a8a609537eb8b",
+  "ciRunId": "42366416320",
+  "ciRunAttempt": 1,
+  "previousCandidateSha": "22c4e1b0bcd33a2d6ef0c7e147ab38040ecab163",
+  "previousBindingSha256": "a2323dae3db7592bb7a802f43c65c6f8a632f5efecf6c0e9bd68ed9514d93701",
+  "policySha256": "717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840",
+  "scope": "code-only-held-deployment",
+  "requiredReadinessVersion": 2,
+  "runtimePath": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenD10ProductionSelectors.cs",
+  "previousRuntimeSha256": "cc8be6d8adcf8779d12420faa8656bcd4de17aef4318c74f9328fbaee024b3b3",
+  "candidateRuntimeSha256": "1a30b416ee221cbac9e5d22800f88b80bc3b29924326d344a48a107a3c836978"
+}

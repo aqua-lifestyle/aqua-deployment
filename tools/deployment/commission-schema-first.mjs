@@ -7,6 +7,7 @@ import { rootUnboundCandidateSha, validateRootUnboundCandidate } from './root-un
 import { postResetCandidateSha, validatePostResetCandidate } from './post-reset-live-release.mjs';
 import { minimumLiveCandidateSha, validateMinimumLiveCandidate } from './minimum-live-release.mjs';
 import { d10OneTimeCandidateSha, validateD10OneTimeCandidate } from './d10-one-time-release.mjs';
+import { verifiedHoldCandidateSha, validateVerifiedHoldCandidate } from './verified-hold-release.mjs';
 
 // Executor-owned pins from the frozen, CI-qualified application. No candidate
 // manifest, dispatch input or migration command can extend this exception.
@@ -80,8 +81,9 @@ function validateCompletedMigration55Scope(q, policy) {
   const p = completedMigration55;
   let compatibility = null;
   if (q?.sha !== p.candidateSha) {
-    if (q?.sha === readinessCandidateSha || q?.sha === pr121CandidateSha || q?.sha === firstAccountCandidateSha || q?.sha === rootUnboundCandidateSha || q?.sha === postResetCandidateSha || q?.sha === minimumLiveCandidateSha || q?.sha === d10OneTimeCandidateSha) {
-      compatibility = (q.sha === d10OneTimeCandidateSha ? validateD10OneTimeCandidate(q) :
+    if (q?.sha === readinessCandidateSha || q?.sha === pr121CandidateSha || q?.sha === firstAccountCandidateSha || q?.sha === rootUnboundCandidateSha || q?.sha === postResetCandidateSha || q?.sha === minimumLiveCandidateSha || q?.sha === d10OneTimeCandidateSha || q?.sha === verifiedHoldCandidateSha) {
+      compatibility = (q.sha === verifiedHoldCandidateSha ? validateVerifiedHoldCandidate(q) :
+        q.sha === d10OneTimeCandidateSha ? validateD10OneTimeCandidate(q) :
         q.sha === minimumLiveCandidateSha ? validateMinimumLiveCandidate(q) :
         q.sha === postResetCandidateSha ? validatePostResetCandidate(q) :
         q.sha === rootUnboundCandidateSha ? validateRootUnboundCandidate(q) :

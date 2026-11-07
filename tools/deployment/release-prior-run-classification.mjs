@@ -53,6 +53,8 @@ const workflowDigests = new Set([
 ]);
 const controllerDigests = new Set([
   sha256(readFileSync(new URL('./release-control.mjs', import.meta.url))),
+  // Reviewed one-time D10 binding producer; write-ahead ordering is unchanged.
+  '74310922b4bf0d698590abbf6395f01aec0f1692abcb41935151ba45a1344f0e',
   // Reviewed PR125 binding producer; provider write-ahead ordering is unchanged.
   '2a14c6608f071ce074d4f6b1b971cc9cd8ff57d196058d3189eb737f3acb34bb',
   // Reviewed PR124 producer: native bindings added, write-ahead ordering retained.
