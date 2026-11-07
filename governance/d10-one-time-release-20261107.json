@@ -1,0 +1,26 @@
+{
+  "contract": "aqua.d10-one-time-exact-release",
+  "version": 1,
+  "applicationPr": 126,
+  "candidateSha": "22c4e1b0bcd33a2d6ef0c7e147ab38040ecab163",
+  "reviewedApplicationHead": "d4115ac86cfda3e6955d982aaa2556bfa42d5485",
+  "ciRunId": "42344099596",
+  "ciRunAttempt": 1,
+  "previousCandidateSha": "6fe686a67408cfd025b5e7e3770fa29de070a57e",
+  "previousBindingSha256": "06eb95715b1ba44d50b96ca44251df80a7085b9dc5a85cd4ea97b5a6fac08481",
+  "policySha256": "717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840",
+  "scope": "code-only-held-deployment",
+  "requiredReadinessVersion": 2,
+  "sourceOverrides": [
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenD10ProductionSelectors.cs",
+      "previousCandidateSha256": "ad095690c48e81cfd618279035cf515e4f77c3917a08ca99149343ce73485850",
+      "candidateSha256": "cc8be6d8adcf8779d12420faa8656bcd4de17aef4318c74f9328fbaee024b3b3"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Core/Domain/AQGreen/AQGreenD10Commissioning.cs",
+      "previousCandidateSha256": "b8fc9eb07b4c0deb53a7949eedea0ae5a685a17986d922465f0593039e426d42",
+      "candidateSha256": "57bafd6df42babde3dc3286139b88242231647004c2510549e170cf1c06b8c5a"
+    }
+  ]
+}
