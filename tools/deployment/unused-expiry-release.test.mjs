@@ -8,7 +8,7 @@ import {validateVerifiedHoldCandidate} from './verified-hold-release.mjs';
 import {validateUnusedExpiryCandidate} from './unused-expiry-release.mjs';
 import {heldRecoveryRecord,verifyHeldRecovery,validateHeldRecoveryProof} from './held-recovery-reconciliation.mjs';
 const bytes=()=>readFileSync(new URL('../../governance/unused-expiry-release-20261108.json',import.meta.url));
-const q=()=>{const r=JSON.parse(bytes());return {sha:r.candidateSha,ciRunId:r.ciRunId,ciRunAttempt:1,policySha256:r.policySha256,
+const q=()=>{const r=JSON.parse(bytes());return {sha:r.candidateSha,ciRunId:r.ciRunId,ciRunAttempt:r.ciRunAttempt,policySha256:r.policySha256,
  qualificationOnly:false,repository:'aqua-lifestyle/aqua-lifestyle',executorRepository:'aqua-lifestyle/aqua-deployment',environment:'production-release',profile:'normal-integrated',
  renderServiceId:'srv-d9f0k8e1a83c73d8n1b0',vercelProjectId:'prj_6qL1e43KhsWrRshY5GxdmGl3HGMz',vercelTeamId:'team_Hc3BWfhTLfwLzwbgbtaasBUY'};};
 function fixture(){const candidate=q(),selected=validateUnusedExpiryCandidate(candidate),carry=selected.completedCarry;
@@ -19,14 +19,14 @@ function fixture(){const candidate=q(),selected=validateUnusedExpiryCandidate(ca
  return {candidate,selected,carry,pins,read,api};}
 test('unused-expiry successor retains immutable facts and updates exactly reviewed startup/model pins',async()=>{
  const f=fixture(),previous=JSON.parse(readFileSync(new URL('../../governance/verified-hold-release-20261107.json',import.meta.url)));
- const expected=structuredClone(validateVerifiedHoldCandidate({...q(),sha:previous.candidateSha,ciRunId:previous.ciRunId}).completedCarry);
+ const expected=structuredClone(validateVerifiedHoldCandidate({...q(),sha:previous.candidateSha,ciRunId:previous.ciRunId,ciRunAttempt:previous.ciRunAttempt}).completedCarry);
  expected.candidateSha=f.candidate.sha;for(const p of f.selected.sourceOverrides)expected.sourceOverrides.find(x=>x.path===p.path).candidateSha256=p.candidateSha256;
  assert.deepEqual(f.carry,expected);assert.equal(f.selected.requiredReadinessVersion,2);assert.equal(f.carry.databaseOperationAuthorized,false);assert.equal(f.carry.financialActivationAuthorized,false);
  const before=objectDigest(approvedSchemaReadback);await verifySchemaFirst(f.api,f.candidate,standingPolicy,f.read,approvedSchemaReadback,true);assert.equal(objectDigest(approvedSchemaReadback),before);
 });
 test('unused-expiry binding keeps every source migration ancestry CI purpose and target boundary',async()=>{
  const f=fixture();for(const p of f.pins)await assert.rejects(verifySchemaFirst(f.api,f.candidate,standingPolicy,async path=>path===p.path?'0'.repeat(64):f.read(path),approvedSchemaReadback,true),/SOURCE_CHANGED/);
- for(const edit of [x=>x.sha='a'.repeat(40),x=>x.ciRunId='99',x=>x.ciRunAttempt=2,x=>x.qualificationOnly=true,x=>x.memberRelease='other',x=>x.environment='other',
+ for(const edit of [x=>x.sha='a'.repeat(40),x=>x.ciRunId='99',x=>x.ciRunAttempt=1,x=>x.qualificationOnly=true,x=>x.memberRelease='other',x=>x.environment='other',
  x=>x.profile='other',x=>x.repository='other',x=>x.executorRepository='other',x=>x.renderServiceId='other',x=>x.vercelProjectId='other',x=>x.vercelTeamId='other',x=>x.policySha256='0'.repeat(64)]){
  const value=q();edit(value);assert.throws(()=>validateUnusedExpiryCandidate(value),/EXACT_SCOPE_REQUIRED/);}
  const record=JSON.parse(bytes());record.sourceOverrides.pop();assert.throws(()=>validateUnusedExpiryCandidate(q(),Buffer.from(JSON.stringify(record))),/RECORD_CHANGED/);

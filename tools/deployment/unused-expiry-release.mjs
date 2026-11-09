@@ -5,7 +5,7 @@ import {verifiedHoldCandidateSha,verifiedHoldRecordDigest,validateVerifiedHoldCa
 import {ReadinessReleaseDenied} from './readiness-release.mjs';
 const url=new URL('../../governance/unused-expiry-release-20261108.json',import.meta.url);
 export const unusedExpiryCandidateSha=JSON.parse(readFileSync(url)).candidateSha;
-export const unusedExpiryRecordDigest='4d55c6d0794c017c3afa90410228e7e05c3edfad0c891517b211b2efb8d6ff43';
+export const unusedExpiryRecordDigest='19728918520eb3b4fc33e40545a476b3abedbb6b1ceb225414843ee205177bfa';
 export function validateUnusedExpiryCandidate(q,bytes=readFileSync(url)){
   const check=(ok,code)=>{if(!ok)throw new ReadinessReleaseDenied(code);};
   check(Buffer.isBuffer(bytes)&&sha256(bytes)===unusedExpiryRecordDigest,'UNUSED_EXPIRY_RELEASE_RECORD_CHANGED');

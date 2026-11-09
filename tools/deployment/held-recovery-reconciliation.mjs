@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs';
 import {sha256,objectDigest} from './github-evidence.mjs';
 import {unusedExpiryRecordDigest,validateUnusedExpiryCandidate} from './unused-expiry-release.mjs';
 import {ReadinessReleaseDenied} from './readiness-release.mjs';
-export const heldRecoveryRecordDigest='0adc49e6bf9ecb1dc65970d791bd3e7f976da391763a9df5d200e629c9b32c8d';
+export const heldRecoveryRecordDigest='453f9c953c9b6335d28a224dfc4da265937aa76a928a10b41808eb570db04909';
 const check=(ok,code='OWNER_HELD_RECOVERY_UNVERIFIED')=>{if(!ok)throw new ReadinessReleaseDenied(code);};
 export function heldRecoveryRecord(bytes=readFileSync(new URL('../../governance/held-recovery-reconciliation-20261108.json',import.meta.url))){
   check(Buffer.isBuffer(bytes)&&sha256(bytes)===heldRecoveryRecordDigest,'OWNER_HELD_RECOVERY_RECORD_CHANGED');
