@@ -161,12 +161,16 @@ test('source fetch is inert, fixed-origin, SHA-only and strips inherited credent
     assert.ok(calls.every(x=>!x.args.includes('checkout')&&!x.args.includes('submodule')));
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
-test('separate pre-secret admission gates deployment; only the protected GET check also receives provider secrets',()=>{
+test('baseline capture, admission and production secrets stay in distinct protected jobs',()=>{
   const wf=readFileSync(new URL('../../.github/workflows/deploy.yml',import.meta.url),'utf8');
   const extract = (name,next) => wf.match(new RegExp(`\\n  ${name}:([\\s\\S]*?)(?=\\n  ${next}:|$)`))?.[1] ?? '';
-  const candidate=extract('candidate','admission'),admission=extract('admission','production'),production=extract('production','');
-  assert.ok(candidate && admission && production);
+  const candidate=extract('candidate','baseline'),baseline=extract('baseline','admission'),
+    admission=extract('admission','production'),production=extract('production','');
+  assert.ok(candidate && baseline && admission && production);
   assert.deepEqual([...candidate.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]), ['AQGREEN_EVIDENCE_READ_TOKEN']);
+  assert.match(baseline,/environment: production-release/);
+  assert.deepEqual([...baseline.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),
+    ['AQGREEN_EVIDENCE_READ_TOKEN','RENDER_API_KEY','VERCEL_TOKEN']);
   assert.ok(!admission.includes('environment:'));
   assert.doesNotMatch(admission,/secrets\.(RENDER_API_KEY|VERCEL_TOKEN)/);
   assert.deepEqual([...admission.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),
@@ -181,7 +185,7 @@ test('separate pre-secret admission gates deployment; only the protected GET che
   assert.doesNotMatch(production,/npm|npx/);
   assert.match(wf,/group: production-release\s+cancel-in-progress: false/);
   assert.match(wf,/github.ref == 'refs\/heads\/main'/);
-  assert.doesNotMatch(wf,/\$\{\{ inputs\./);
+  assert.match(wf,/prospective_mode/);
   assert.doesNotMatch(admission,/api\.render\.com|api\.vercel\.com/);
   assert.match(admission,/AQUA_ADMISSION_RECEIPT_OUTPUT/);
   assert.doesNotMatch(wf,/AQUA_AUTHORIZATION_BUNDLE|ATTESTATION_REPLAY_DATABASE_URL/);

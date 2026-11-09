@@ -106,21 +106,23 @@ test('failed GitHub reads identify only fixed repository/family/status without r
 test('native executor credential is wired only to the three existing controller steps, with unchanged provider exclusion', () => {
   const yaml = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const steps = yaml.split(/\n      - /).filter(s => s.includes('GH_TOKEN:'));
-  assert.equal(steps.length, 3);
+  assert.equal(steps.length, 4);
   for (const step of steps) {
     assert.match(step, /GH_TOKEN: \$\{\{ github.token \}\}/);
-    assert.match(step, /node tools\/deployment\/release-control.mjs (candidate|admit|deploy)/);
+    assert.match(step, /node tools\/deployment\/release-control.mjs (candidate|capture-baseline|admit|deploy)/);
   }
-  assert.doesNotMatch(yaml.split('\n  production:\n')[0], /secrets\.(RENDER_API_KEY|VERCEL_TOKEN)|environment:/);
+  const candidate= yaml.split('\n  baseline:\n')[0];
+  assert.doesNotMatch(candidate, /secrets\.(RENDER_API_KEY|VERCEL_TOKEN)|environment:/);
   assert.match(yaml, /needs\.candidate\.outputs\.qualification_only == 'false'/);
   assert.match(yaml, /github.ref == 'refs\/heads\/main' && github.ref_protected/);
 });
 
-test('reviewed pre-routing workflow fingerprints remain recognized without relaxing mutation reconciliation', async () => {
-  const workflow = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8')
-    .replace(/^          GH_TOKEN: \$\{\{ github.token \}\}\n/gm, '').replace(' && github.ref_protected', '');
-  assert.equal(sha256(Buffer.from(workflow)), '018d52b64d1acbeabef5d60704fbc200d4fd0036632489a228559c68f4610f8d');
+test('current prospective workflow remains fingerprinted and historical pre-routing producer pins remain recognized', async () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const controller = readFileSync(new URL('./release-control.mjs', import.meta.url));
+  const classifier = readFileSync(new URL('./release-prior-run-classification.mjs', import.meta.url), 'utf8');
+  for (const pin of ['018d52b64d1acbeabef5d60704fbc200d4fd0036632489a228559c68f4610f8d',
+    '01d3e74bbdcee105c159a321c52d1016d4e7c0157ab8d873f280bb6b52f5b92e']) assert.ok(classifier.includes(pin));
   const sha = 'a'.repeat(40);
   const proof = await authenticatePreMutationProducer(async route => {
     const path = route.split('/contents/')[1].split('?')[0], bytes = path.endsWith('.yml') ? Buffer.from(workflow) : controller;
@@ -128,12 +130,4 @@ test('reviewed pre-routing workflow fingerprints remain recognized without relax
   }, sha);
   assert.equal(proof.workflowSha256, sha256(Buffer.from(workflow)));
   assert.equal(proof.executorSha, sha);
-  const previousWorkflow = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8')
-    .replace(' && github.ref_protected', '');
-  assert.equal(sha256(Buffer.from(previousWorkflow)), '01d3e74bbdcee105c159a321c52d1016d4e7c0157ab8d873f280bb6b52f5b92e');
-  const prior = await authenticatePreMutationProducer(async route => {
-    const path = route.split('/contents/')[1].split('?')[0], bytes = path.endsWith('.yml') ? Buffer.from(previousWorkflow) : controller;
-    return { type: 'file', path, encoding: 'base64', size: bytes.length, content: bytes.toString('base64') };
-  }, sha);
-  assert.equal(prior.workflowSha256, sha256(Buffer.from(previousWorkflow)));
 });

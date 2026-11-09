@@ -25,6 +25,23 @@ on:
         options:
           - full
           - schema54-member-reads-v1
+      prospective_mode:
+        description: None, capture a read-only baseline, or authorize the pinned prospective release
+        required: false
+        type: choice
+        default: none
+        options:
+          - none
+          - capture-baseline
+          - authorize
+      recovery_baseline_run_id:
+        description: Successful read-only baseline workflow run (authorize mode only)
+        required: false
+        type: string
+      recovery_baseline_sha256:
+        description: Exact baseline SHA-256 printed by its capture workflow
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -47,6 +64,7 @@ jobs:
     outputs:
       sha: ${{ steps.candidate.outputs.sha }}
       qualification_only: ${{ steps.candidate.outputs.qualification_only }}
+      prospective_mode: ${{ steps.candidate.outputs.prospective_mode }}
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       # Only executor code is checked out and executed; source is inert Git objects.
@@ -83,10 +101,63 @@ jobs:
         run: |
           printf 'Qualified source: `%s`\n\nImmutable artifact digest: `%s`\n\nStanding deployment policy and runtime safety govern automatic admission.\n' "$SOURCE_SHA" "$ARTIFACT_DIGEST" >> "$GITHUB_STEP_SUMMARY"
 
+  baseline:
+    name: Capture prospective provider baseline
+    needs: candidate
+    if: >-
+      needs.candidate.result == 'success' &&
+      needs.candidate.outputs.prospective_mode == 'capture-baseline'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production-release
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.artifact-id }}
+          path: ${{ runner.temp }}/candidate
+          merge-multiple: true
+      - name: Fetch exact source as inert Git objects
+        env:
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
+          SOURCE_DIR: ${{ runner.temp }}/source-git
+        run: node tools/deployment/fetch-source.mjs
+      - name: Capture authenticated provider baseline without mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          SOURCE_DIR: ${{ runner.temp }}/source-git
+          CANDIDATE_DIR: ${{ runner.temp }}/candidate
+          PROSPECTIVE_BASELINE_OUTPUT: ${{ runner.temp }}/report.json
+        run: node tools/deployment/release-control.mjs capture-baseline
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        id: upload
+        with:
+          name: prospective-recovery-baseline-${{ inputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/report.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish baseline locator
+        env:
+          BASELINE_FILE: ${{ runner.temp }}/report.json
+        run: |
+          BASELINE_SHA256="$(node -p "require(process.env.BASELINE_FILE).digest")"
+          printf 'Read-only baseline artifact retained. Use this workflow run ID: `%s` and baseline SHA-256: `%s`. Historical release `42601295675` remains incomplete.\n' "$GITHUB_RUN_ID" "$BASELINE_SHA256" >> "$GITHUB_STEP_SUMMARY"
+
   admission:
     name: Verify approved GitHub evidence before provider access
-    needs: candidate
-    if: needs.candidate.result == 'success'
+    needs: [candidate, baseline]
+    if: >-
+      always() && needs.candidate.result == 'success' &&
+      needs.baseline.result == 'skipped' &&
+      needs.candidate.outputs.prospective_mode != 'capture-baseline'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -143,7 +214,7 @@ jobs:
       pull-requests: read
       id-token: write
     needs: [candidate, admission]
-    if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' }}
+    if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' && needs.candidate.outputs.prospective_mode != 'capture-baseline' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production-release
