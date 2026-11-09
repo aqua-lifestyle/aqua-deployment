@@ -1,7 +1,7 @@
 {
   "contract": "aqua.owner-complete-held-recovery",
   "version": 1,
-  "candidateBindingSha256": "4d55c6d0794c017c3afa90410228e7e05c3edfad0c891517b211b2efb8d6ff43",
+  "candidateBindingSha256": "19728918520eb3b4fc33e40545a476b3abedbb6b1ceb225414843ee205177bfa",
   "previousRenderDeployId": "dep-dbngk5jl550s73f5h5og",
   "renderDeployId": "dep-dbo1qk6417fc73f234g0",
   "renderSha": "0e2677125c68477da37801c46c1e4c5812dace4c",
