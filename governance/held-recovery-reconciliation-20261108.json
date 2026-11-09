@@ -1,0 +1,20 @@
+{
+  "contract": "aqua.owner-complete-held-recovery",
+  "version": 1,
+  "candidateBindingSha256": "4d55c6d0794c017c3afa90410228e7e05c3edfad0c891517b211b2efb8d6ff43",
+  "previousRenderDeployId": "dep-dbngk5jl550s73f5h5og",
+  "renderDeployId": "dep-dbo1qk6417fc73f234g0",
+  "renderSha": "0e2677125c68477da37801c46c1e4c5812dace4c",
+  "vercelDeployId": "dpl_9gLkJk4TBHxcjK6LkKVE14eZ533x",
+  "githubDeploymentId": 7632651571,
+  "githubSuccessStatusId": 21689087460,
+  "createdAt": "2026-11-08T06:57:21Z",
+  "completedAt": "2026-11-08T06:57:46Z",
+  "environment": "main - aqualifestyle-api",
+  "yocoMode": "live",
+  "ownerAuthoritySource": "Current explicit Restore Production API Availability instruction: restore complete Healthy/Held configuration, retaining LIVE credentials and completed code corrections",
+  "recoveryKind": "complete-held-configuration-existing-build",
+  "normalActivationGranted": false,
+  "newProviderRequestOrResumeAuthorityGranted": false,
+  "scope": "acknowledge-existing-owner-held-recovery-only"
+}
