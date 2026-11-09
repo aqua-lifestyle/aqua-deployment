@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { objectDigest, sha256 } from './github-evidence.mjs';
 import { rootUnboundRecordDigest, validateRootUnboundCandidate } from './root-unbound-release.mjs';
 import { ReadinessReleaseDenied } from './readiness-release.mjs';
+import { unusedExpiryCandidateSha } from './unused-expiry-release.mjs';
+import { validateHeldRecoveryProof } from './held-recovery-reconciliation.mjs';
 
 const recordUrl = new URL('../../governance/root-unbound-render-reconciliation-20261106.json', import.meta.url);
 export const ownerRenderRecordDigest = '9588c731cbeac28ff076ccc2cc84c4dc7115d516a7d45fb9a62bd8eeb27c08d0';
@@ -19,6 +21,7 @@ function proof() {
     githubDeploymentId: r.githubDeploymentId, githubSuccessStatusId: r.githubSuccessStatusId };
 }
 export function validateOwnerRenderProof(value, q) {
+  if(q.sha===unusedExpiryCandidateSha)return validateHeldRecoveryProof(value,q);
   // Audit rows have a separately authenticated full-release identity, not a
   // candidate qualification flag. This does not qualify or deploy a receipt.
   validateRootUnboundCandidate({ ...q, qualificationOnly: false });

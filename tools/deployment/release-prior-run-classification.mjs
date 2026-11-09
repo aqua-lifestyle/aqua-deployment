@@ -53,6 +53,8 @@ const workflowDigests = new Set([
 ]);
 const controllerDigests = new Set([
   sha256(readFileSync(new URL('./release-control.mjs', import.meta.url))),
+  // Reviewed verified-hold producer; mutation write-ahead ordering retained.
+  'f5135863277b22f856d77ab0d277422bb618b2e261d87d30e1d86d49798c258c',
   // Reviewed one-time D10 binding producer; write-ahead ordering is unchanged.
   '74310922b4bf0d698590abbf6395f01aec0f1692abcb41935151ba45a1344f0e',
   // Reviewed PR125 binding producer; provider write-ahead ordering is unchanged.
