@@ -25,8 +25,8 @@ function providerFixture(overrides = {}) {
   ];
   const calls = [];
   const api = {
-    render: async route => {
-      calls.push(['render', route]);
+    render: async (route, body) => {
+      calls.push(['render', route, body]);
       if (route.includes('/env-vars/')) {
         const key = route.split('/env-vars/')[1];
         const row = settings.find(x => x.key === key);
@@ -35,8 +35,9 @@ function providerFixture(overrides = {}) {
       if (route === `/services/${targets.render.id}`) return service;
       throw Error(`Unexpected Render read ${route}`);
     },
-    vercel: async route => {
-      calls.push(['vercel', route]);
+    readiness: async sourceSha => { calls.push(['readiness', sourceSha]); return runtimeReadiness(sourceSha); },
+    vercel: async (route, body) => {
+      calls.push(['vercel', route, body]);
       if (route === `/v9/projects/${targets.vercel.id}`) return { id: targets.vercel.id,
         accountId: targets.vercel.teamId, name: targets.vercel.name, rootDirectory: targets.vercel.rootDirectory,
         nodeVersion: '24.x', autoAssignCustomDomains: true, targets: { production: { id: 'dpl_current1' } } };
@@ -54,6 +55,12 @@ function providerFixture(overrides = {}) {
 const run = { id: 5001, run_attempt: 1, event: 'workflow_dispatch', head_branch: 'main', status: 'in_progress',
   head_sha: executorSha, actor: owner };
 const candidate = { sha, ciRunId: '42660068700', ciRunAttempt: 2, executorSha };
+const runtimeReadiness = buildId => ({ status: 200, body: { contract: 'aqua.production-readiness', version: 2,
+  status: 'Ready', buildId, birdConfiguration: 'StartupValidated', yocoConfiguration: 'StartupValidated',
+  profile: 'normal-integrated', restrictedOperations: 'ConfigurationHeld', d10Bindings: {
+    requiredAssemblyDigest: '1'.repeat(64), requiredRuntimeAssemblyDigest: '2'.repeat(64),
+    currentConfigurationDigest: '3'.repeat(64), intendedConfigurationDigest: '4'.repeat(64),
+    intendedEnvironmentId: 'production-release', intendedBuildId: buildId } } });
 const validators = { validateRender: () => {}, validateVercel: () => {}, validateHealth: () => {},
   deploymentHistory: async (_api, provider) => provider === 'render' ? [{ id: 'dep-current1', status: 'live', commit: { id: oldSha } }] :
     [{ uid: 'dpl_current1', state: 'READY' }], repositoryId: 123, now };
@@ -68,13 +75,35 @@ async function captured(overrides) {
 test('captures fresh authenticated Render/Vercel identity and held financial settings without provider writes', async () => {
   const f = await captured();
   assert.equal(f.boundary.targetSha, sha);
+  assert.deepEqual(f.boundary.runtimeReadiness, runtimeReadiness(sha).body);
   assert.equal(f.boundary.render.sourceSha, oldSha);
   assert.equal(f.boundary.health.paymentAvailability, 'Held');
   assert.equal(f.boundary.render.settingsDigest, digest(f.settings));
   assert.ok(prospectiveSettingKeys.includes('App__AutomaticPayouts__Enabled'));
   assert.equal(f.settings.find(x => x.key === 'App__AutomaticPayouts__Enabled').value, 'false');
   assert.ok(f.calls.every(([, route]) => !route.endsWith('/deploys') && !route.includes('POST')));
+  assert.ok(f.calls.filter(([provider]) => ['render','vercel'].includes(provider))
+    .every(([, , body]) => body === undefined));
+  assert.deepEqual(f.calls[0], ['readiness', sha]);
   assert.equal(validateProspectiveBaseline(f.boundary, sha, now), f.boundary);
+});
+
+test('read-only baseline requires exact authenticated D10 runtime bindings before provider reads', async () => {
+  for (const alter of [
+    value => { value.status = 401; },
+    value => { value.body.buildId = oldSha; },
+    value => { value.body.version = 1; delete value.body.d10Bindings; },
+    value => { value.body.d10Bindings.intendedBuildId = oldSha; }
+  ]) {
+    const f = providerFixture();
+    f.api.readiness = async sourceSha => { const value = runtimeReadiness(sourceSha); alter(value); return value; };
+    await assert.rejects(captureProspectiveBaseline(f.api, candidate, run, validators));
+    assert.deepEqual(f.calls, []);
+  }
+  const f = providerFixture();
+  f.api.readiness = async () => { throw new Error('OIDC unavailable'); };
+  await assert.rejects(captureProspectiveBaseline(f.api, candidate, run, validators));
+  assert.deepEqual(f.calls, []);
 });
 
 test('rejects an unverified or changed deployment baseline, health, configuration, or operation state', async () => {
@@ -84,11 +113,14 @@ test('rejects an unverified or changed deployment baseline, health, configuratio
     b => { b.render.status = 'build_in_progress'; },
     b => { b.render.activeDeployments = 1; },
     b => { b.health.paymentAvailability = 'Available'; },
+    b => { b.runtimeReadiness.d10Bindings.intendedBuildId = oldSha; },
+    b => { b.runtimeReadiness.d10Bindings.requiredAssemblyDigest = '0'.repeat(64); },
+    b => { b.runtimeReadiness.version = 1; delete b.runtimeReadiness.d10Bindings; },
     b => { b.digest = '0'.repeat(64); },
     b => { b.targetSha = 'b'.repeat(40); }
   ]) {
     const altered = structuredClone(f.boundary); mutate(altered);
-    assert.throws(() => validateProspectiveBaseline(altered, sha, now), /PROSPECTIVE_BASELINE/);
+    assert.throws(() => validateProspectiveBaseline(altered, sha, now), /PROSPECTIVE_BASELINE|D10_RUNTIME_BINDINGS/);
   }
   const unsafe = providerFixture();
   unsafe.settings.find(x => x.key === 'App__AutomaticPayouts__Enabled').value = 'true';

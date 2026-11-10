@@ -170,7 +170,7 @@ test('baseline capture, admission and production secrets stay in distinct protec
   assert.deepEqual([...candidate.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]), ['AQGREEN_EVIDENCE_READ_TOKEN']);
   assert.match(baseline,/environment: production-release/);
   assert.deepEqual([...baseline.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),
-    ['AQGREEN_EVIDENCE_READ_TOKEN','RENDER_API_KEY','VERCEL_TOKEN']);
+    ['AQGREEN_EVIDENCE_READ_TOKEN','AQGREEN_EVIDENCE_READ_TOKEN','RENDER_API_KEY','VERCEL_TOKEN']);
   assert.ok(!admission.includes('environment:'));
   assert.doesNotMatch(admission,/secrets\.(RENDER_API_KEY|VERCEL_TOKEN)/);
   assert.deepEqual([...admission.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),

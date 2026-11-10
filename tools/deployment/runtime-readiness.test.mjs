@@ -110,10 +110,23 @@ test('private operator evidence names cannot appear in frontend project configur
   }
 });
 
-test('only the environment-bound production job obtains id-token permission',()=>{
+test('OIDC stays within the protected baseline and provider release jobs',()=>{
   const workflow=readFileSync(new URL('../../.github/workflows/deploy.yml',import.meta.url),'utf8');
   const production=workflow.slice(workflow.indexOf('\n  production:'));
-  assert.ok(!workflow.slice(0,workflow.indexOf('\n  production:')).includes('id-token:'));
+  const baseline=workflow.slice(workflow.indexOf('\n  baseline:'),workflow.indexOf('\n  admission:'));
+  assert.match(baseline,/environment: production-release/);
+  assert.match(baseline,/id-token: write/);
+  const permissions=baseline.split('    permissions:\n')[1]?.split('    steps:\n')[0];
+  assert.equal(permissions?.split('\n').map(line=>line.trim()).filter(Boolean).join('\n'),
+    'actions: read\nchecks: read\ncontents: read\nid-token: write\npull-requests: read');
+  assert.match(baseline,/AQGREEN_EVIDENCE_READ_TOKEN: \$\{\{ secrets\.AQGREEN_EVIDENCE_READ_TOKEN \}\}/);
+  assert.match(baseline,/prospective_mode == 'capture-baseline'/);
+  assert.match(baseline,/node tools\/deployment\/release-control\.mjs capture-baseline/);
   assert.match(production,/id-token: write/);assert.match(production,/environment: production-release/);
   assert.match(production,/qualification_only == 'false'/);
+  assert.match(production,/prospective_mode != 'capture-baseline'/);
+  const candidate=workflow.slice(0,workflow.indexOf('\n  baseline:'));
+  const admission=workflow.slice(workflow.indexOf('\n  admission:'),workflow.indexOf('\n  production:'));
+  assert.doesNotMatch(candidate,/id-token: write/);
+  assert.doesNotMatch(admission,/id-token: write/);
 });

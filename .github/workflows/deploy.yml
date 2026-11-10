@@ -110,6 +110,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production-release
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      id-token: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -131,6 +137,7 @@ jobs:
       - name: Capture authenticated provider baseline without mutation
         env:
           GH_TOKEN: ${{ github.token }}
+          AQGREEN_EVIDENCE_READ_TOKEN: ${{ secrets.AQGREEN_EVIDENCE_READ_TOKEN }}
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           SOURCE_DIR: ${{ runner.temp }}/source-git
