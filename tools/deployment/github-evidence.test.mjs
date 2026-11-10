@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import { fixture, source, previous, fixtureNow, zipFixture, runnerEnv } from './fixtures/provider.mjs';
 import { standingPolicy, policyDigest, evidencePlan, clients, admissionJobName, releaseKey } from './release-control.mjs';
 import { approvedInventory, approvedInventoryBytes, inventoryDigest, verifyApprovedDefinitions,
-  verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission, gitSourceDigest, sha256 } from './github-evidence.mjs';
+  verifyGitHubEvidence, verifyGitHubEvidenceForCapture, createGitHubAdmission, validateGitHubAdmission,
+  gitSourceDigest, sha256 } from './github-evidence.mjs';
 import { schemaSource } from './commission-schema-first.mjs';
 const now = () => fixtureNow;
 const verified = f => verifyGitHubEvidence(f.api, f.state.candidate, f.state.policy, f.readSourceDigest, now);
@@ -92,6 +93,41 @@ test('stale, future, undated and changing CI evidence is rejected', async () => 
   const f=fixture(),read=f.api.gh;let reads=0;
   f.api.gh=async route=>{const p=await read(route);if(route==='/actions/runs/123'&&++reads===2)p.run_attempt=2;return p;};
   await assert.rejects(verified(f),/CI_EVIDENCE_CHANGED/);assert.equal(f.state.providerCalls,0);
+});
+
+test('old authentic CI is accepted only for read-only capture, never deployment admission', async () => {
+  const f = fixture(), q = f.state.candidate, read = f.api.gh;
+  const oldTimestamp = new Date(fixtureNow - 86400_001).toISOString();
+  f.api.gh = async route => {
+    const value = await read(route);
+    if (route === '/actions/runs/123') value.updated_at = oldTimestamp;
+    return value;
+  };
+
+  const evidence = await verifyGitHubEvidenceForCapture(f.api, q, f.state.policy, f.readSourceDigest, now);
+  assert.equal(evidence.completedAt, oldTimestamp);
+  assert.equal(evidence.sha, q.sha);
+  assert.equal(evidence.ciRunId, q.ciRunId);
+  assert.equal(evidence.ciRunAttempt, q.ciRunAttempt);
+  assert.equal(evidence.testsVerified, approvedInventory.tests.length);
+
+  await assert.rejects(verifyGitHubEvidence(f.api, q, f.state.policy, f.readSourceDigest, now),
+    /CI_EVIDENCE_STALE_OR_UNDATED/);
+  assert.throws(() => createGitHubAdmission(q, f.state.policy, evidence, now), /ADMISSION_EVIDENCE_EXPIRED/);
+  assert.equal(f.state.providerCalls, 0);
+
+  for (const change of [run => { delete run.updated_at; },
+    run => { run.updated_at = new Date(fixtureNow + 30_001).toISOString(); }]) {
+    const invalid = fixture(), invalidRead = invalid.api.gh;
+    invalid.api.gh = async route => {
+      const value = await invalidRead(route);
+      if (route === '/actions/runs/123') change(value);
+      return value;
+    };
+    await assert.rejects(verifyGitHubEvidenceForCapture(invalid.api, invalid.state.candidate,
+      invalid.state.policy, invalid.readSourceDigest, now), /CI_EVIDENCE_STALE_OR_UNDATED/);
+    assert.equal(invalid.state.providerCalls, 0);
+  }
 });
 
 test('receipts bind every identity, policy and evidence coordinate and cannot cross attempts', async () => {
