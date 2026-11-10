@@ -103,12 +103,15 @@ test('untrusted administrator merge denies before source history or provider rea
 
 test('read secret is scoped to fixed executor steps and never added to untrusted PR test execution', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8');
-  assert.equal([...workflow.matchAll(/AQGREEN_EVIDENCE_READ_TOKEN: \$\{\{ secrets\.AQGREEN_EVIDENCE_READ_TOKEN \}\}/g)].length, 6);
+  assert.equal([...workflow.matchAll(/AQGREEN_EVIDENCE_READ_TOKEN: \$\{\{ secrets\.AQGREEN_EVIDENCE_READ_TOKEN \}\}/g)].length, 7);
   assert.equal([...workflow.matchAll(/GH_TOKEN: \$\{\{ github.token \}\}/g)].length, 4);
   assert.doesNotMatch(workflow, /secrets\.(?!AQGREEN_EVIDENCE_READ_TOKEN|RENDER_API_KEY|VERCEL_TOKEN)/);
   const beforeProduction = workflow.split('\n  production:\n')[0];
   assert.match(beforeProduction,/name: Capture prospective provider baseline/);
   assert.match(beforeProduction,/RENDER_API_KEY: \$\{\{ secrets\.RENDER_API_KEY \}\}/);
   assert.match(beforeProduction,/VERCEL_TOKEN: \$\{\{ secrets\.VERCEL_TOKEN \}\}/);
+  const baseline = workflow.split('\n  baseline:\n')[1].split('\n  admission:\n')[0];
+  const capture = baseline.split('      - name: Capture authenticated provider baseline without mutation')[1];
+  assert.match(capture,/AQGREEN_EVIDENCE_READ_TOKEN: \$\{\{ secrets\.AQGREEN_EVIDENCE_READ_TOKEN \}\}/);
   assert.doesNotMatch(readFileSync(new URL('../../.github/workflows/test.yml', import.meta.url), 'utf8'), /secrets\./);
 });

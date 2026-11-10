@@ -5,13 +5,24 @@ runtime, with startup validation preserved. Policy v6, epoch
 aqgreen-mvp-first-release-recovery-v1, selects normal-integrated explicitly. Old receipts
 and qualification-only receipts cannot authorize this policy or a production run.
 
-Only the environment-bound production job has id-token: write. It requests a fresh
-GitHub OIDC token for https://aqualifestyle-api.onrender.com/api/deployment-readiness,
-using GitHub's runner-provided request credential. Neither token is logged,
-persisted, included in receipts/artifacts, forwarded to providers or exposed to
-candidate/admission. Redirects and OIDC/readiness failures deny authorization. The
-API checks GitHub signing keys, issuer/audience/lifetime and immutable repository,
-owner, workflow, main/ref, run/attempt and production-release environment claims.
+Only the environment-bound prospective-baseline and production jobs have
+id-token: write. The baseline job runs only for qualification-only
+capture-baseline, requests a fresh GitHub OIDC token for
+https://aqualifestyle-api.onrender.com/api/deployment-readiness, and uses it for
+that read-only GET before recording the runtime response in its authenticated
+baseline artifact. Its Render/Vercel calls remain reads; the workflow skips the
+production job for capture-baseline. The production job retains its existing
+readiness checks. Neither OIDC token is logged, persisted, included in
+receipts/artifacts, forwarded to providers or exposed to candidate/admission.
+Redirects and OIDC/readiness failures deny authorization. Both jobs use the same
+main-branch workflow, protected production-release environment, audience and
+immutable repository/workflow identity required by the API; the application trust
+policy is unchanged.
+
+The baseline capture step receives the existing AQGREEN_EVIDENCE_READ_TOKEN only
+for authenticated reads of the private application evidence. Provider settings
+remain individually allowlisted, and capture-baseline cannot write service or
+deployment state.
 
 Render environment enumeration, secret files, and individual credentials are
 rejected by the provider client before network access. Only a fixed allowlist of

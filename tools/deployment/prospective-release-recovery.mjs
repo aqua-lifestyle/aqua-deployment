@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { runtimeSettings } from './runtime-readiness.mjs';
+import { runtimeSettings, validateReadiness } from './runtime-readiness.mjs';
 
 export const prospectiveRecovery = Object.freeze({
   targetSha: '08580d837adb90e022a30ad11ba4fda332d138da',
@@ -49,9 +49,9 @@ export function classifyPinnedIncompleteAttempt(run, attempt, production, deploy
 export function validateProspectiveBaseline(boundary, expectedSha, now = Date.now()) {
   const keys = ['contract', 'version', 'targetSha', 'ciRunId', 'ciRunAttempt', 'capturedAt', 'captureRunId', 'captureRunAttempt',
     'capturedByLogin', 'capturedById',
-    'executorSha', 'render', 'health', 'vercel', 'historicalReleaseRunId', 'digest'];
+    'executorSha', 'runtimeReadiness', 'render', 'health', 'vercel', 'historicalReleaseRunId', 'digest'];
   if (!boundary || Object.keys(boundary).sort().join(',') !== keys.sort().join(',') ||
-      boundary.contract !== 'aqua.prospective-release-baseline' || boundary.version !== 1 ||
+      boundary.contract !== 'aqua.prospective-release-baseline' || boundary.version !== 2 ||
       boundary.targetSha !== expectedSha || expectedSha !== prospectiveRecovery.targetSha ||
       !positiveId(boundary.ciRunId) || !Number.isSafeInteger(boundary.ciRunAttempt) || boundary.ciRunAttempt < 1 ||
       !sha.test(boundary.executorSha ?? '') || !positiveId(boundary.captureRunId) ||
@@ -61,6 +61,7 @@ export function validateProspectiveBaseline(boundary, expectedSha, now = Date.no
       now - Date.parse(boundary.capturedAt) < 0 ||
       now - Date.parse(boundary.capturedAt) > prospectiveRecovery.baselineMaxAgeSeconds * 1000 ||
       boundary.historicalReleaseRunId !== prospectiveRecovery.incompleteReleaseRunId ||
+      !boundary.runtimeReadiness ||
       !boundary.render || Object.keys(boundary.render).sort().join(',') !==
         ['serviceId', 'deploymentId', 'sourceSha', 'status', 'activeDeployments', 'settingsDigest'].sort().join(',') ||
       boundary.render.serviceId !== prospectiveRecovery.renderServiceId ||
@@ -79,6 +80,9 @@ export function validateProspectiveBaseline(boundary, expectedSha, now = Date.no
       !sha.test(boundary.vercel.sourceSha ?? '') || boundary.vercel.state !== 'READY' ||
       boundary.vercel.activeDeployments !== 0 || !digestPattern.test(boundary.digest ?? ''))
     deny('PROSPECTIVE_BASELINE_UNVERIFIABLE');
+  validateReadiness({ status: 200, body: boundary.runtimeReadiness }, expectedSha);
+  if (boundary.runtimeReadiness.version !== 2 || !boundary.runtimeReadiness.d10Bindings)
+    deny('PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED');
   const { digest: supplied, ...body } = boundary;
   if (digest(body) !== supplied) deny('PROSPECTIVE_BASELINE_DIGEST_MISMATCH');
   return Object.freeze(boundary);
@@ -123,6 +127,10 @@ export async function captureProspectiveBaseline(api, candidate, run, options) {
       run.actor?.id !== prospectiveRecovery.owner.id || run.event !== 'workflow_dispatch' ||
       run.head_branch !== 'main' || run.status !== 'in_progress' || run.head_sha !== candidate.executorSha ||
       !run.actor || !Number.isSafeInteger(run.actor.id)) deny('PROSPECTIVE_BASELINE_CONTEXT_REQUIRED');
+  const runtimeReadiness = await api.readiness(candidate.sha);
+  validateReadiness(runtimeReadiness, candidate.sha);
+  if (runtimeReadiness.body.version !== 2 || !runtimeReadiness.body.d10Bindings)
+    deny('PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED');
   const settings = [];
   for (const key of prospectiveSettingKeys) {
     const result = await api.render(`/services/${prospectiveRecovery.renderServiceId}/env-vars/${key}`);
@@ -157,11 +165,12 @@ export async function captureProspectiveBaseline(api, candidate, run, options) {
       web.readyState !== 'READY' || web.aliasError || !sha.test(web.gitSource?.sha ?? ''))
     deny('PROSPECTIVE_VERCEL_BASELINE_UNVERIFIABLE');
 
-  const body = { contract: 'aqua.prospective-release-baseline', version: 1, targetSha: candidate.sha,
+  const body = { contract: 'aqua.prospective-release-baseline', version: 2, targetSha: candidate.sha,
     ciRunId: candidate.ciRunId, ciRunAttempt: candidate.ciRunAttempt,
     capturedAt: new Date(now).toISOString(), captureRunId: String(run.id), captureRunAttempt: run.run_attempt,
     capturedByLogin: run.actor.login, capturedById: run.actor.id,
     executorSha: candidate.executorSha,
+    runtimeReadiness: runtimeReadiness.body,
     render: { serviceId: service.id, deploymentId: live[0].id, sourceSha: live[0].commit.id,
       status: live[0].status, activeDeployments: 0, settingsDigest: digest(settings) },
     health: { status: health.status, buildId: health.buildId, databaseStatus: health.databaseStatus,
