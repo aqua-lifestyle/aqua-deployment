@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runtimeSettings } from './runtime-readiness.mjs';
-import { admissionJobName, targets, validateAdmissionJob, validateDispatchInputs } from './release-control.mjs';
+import { admissionJobName, ReleaseFailure, safeBaselineDiagnostic, targets, validateAdmissionJob, validateDispatchInputs } from './release-control.mjs';
 import { captureProspectiveBaseline, classifyPinnedIncompleteAttempt, createProspectiveAuthorization,
-  digest, prospectiveRecovery, prospectiveSettingKeys, validateProspectiveAuthorization,
+  digest, ProspectiveBaselineDenied, prospectiveBaselinePhases, prospectiveRecovery, prospectiveSettingKeys, validateProspectiveAuthorization,
   validateProspectiveBaseline } from './prospective-release-recovery.mjs';
 
 const now = Date.parse('2026-11-09T18:00:00.000Z');
@@ -67,9 +67,11 @@ const validators = { validateRender: () => {}, validateVercel: () => {}, validat
 
 async function captured(overrides) {
   const f = providerFixture(overrides);
+  const phases = [];
   const boundary = await captureProspectiveBaseline(f.api, candidate, run, { ...validators,
-    deploymentHistory: overrides?.deploymentHistory ?? validators.deploymentHistory });
-  return { ...f, boundary };
+    deploymentHistory: overrides?.deploymentHistory ?? validators.deploymentHistory,
+    onPhase: phase => phases.push(phase) });
+  return { ...f, boundary, phases };
 }
 
 test('captures fresh authenticated Render/Vercel identity and held financial settings without provider writes', async () => {
@@ -79,6 +81,9 @@ test('captures fresh authenticated Render/Vercel identity and held financial set
   assert.equal(f.boundary.render.sourceSha, oldSha);
   assert.equal(f.boundary.health.paymentAvailability, 'Held');
   assert.equal(f.boundary.render.settingsDigest, digest(f.settings));
+  assert.deepEqual(f.phases, ['release-context', 'runtime-readiness', 'render-settings', 'render-service',
+    'render-deployment-history', 'api-health', 'vercel-project', 'vercel-deployment-history',
+    'vercel-production-deployment', 'baseline-artifact']);
   assert.ok(prospectiveSettingKeys.includes('App__AutomaticPayouts__Enabled'));
   assert.equal(f.settings.find(x => x.key === 'App__AutomaticPayouts__Enabled').value, 'false');
   assert.ok(f.calls.every(([, route]) => !route.endsWith('/deploys') && !route.includes('POST')));
@@ -106,6 +111,33 @@ test('read-only baseline requires exact authenticated D10 runtime bindings befor
   assert.deepEqual(f.calls, []);
 });
 
+test('baseline denial keeps only the allowlisted code and fixed phase for safe diagnosis', async () => {
+  const f = providerFixture();
+  f.api.readiness = async sourceSha => {
+    f.calls.push(['readiness', sourceSha]);
+    const body = runtimeReadiness(sourceSha).body;
+    body.version = 1; delete body.d10Bindings;
+    return { status: 200, body };
+  };
+  const phases = [];
+  await assert.rejects(captureProspectiveBaseline(f.api, candidate, run, { ...validators,
+    onPhase: phase => phases.push(phase) }), error => error instanceof ProspectiveBaselineDenied &&
+      error.code === 'PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED' && error.phase === 'runtime-readiness');
+  assert.deepEqual(phases, ['release-context', 'runtime-readiness']);
+  assert.deepEqual(f.calls, [['readiness', sha]]);
+  assert.ok(prospectiveBaselinePhases.includes('runtime-readiness'));
+  assert.deepEqual(safeBaselineDiagnostic(new ProspectiveBaselineDenied(
+    'PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED', 'runtime-readiness'), 'render-settings'),
+  { code: 'PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED', phase: 'runtime-readiness' });
+  assert.deepEqual(safeBaselineDiagnostic(new ReleaseFailure('PROVIDER_READ_REJECTED'), 'render-settings'),
+    { code: 'PROVIDER_READ_REJECTED', phase: 'render-settings' });
+  const raw = safeBaselineDiagnostic(new Error('Bearer do-not-log provider-body'), 'render-settings');
+  assert.deepEqual(raw, { code: 'UNEXPECTED_RELEASE_ERROR', phase: 'render-settings' });
+  assert.doesNotMatch(JSON.stringify(raw), /Bearer|do-not-log|provider-body/);
+  assert.deepEqual(safeBaselineDiagnostic(new Error('opaque'), 'unexpected-provider-route'),
+    { code: 'UNEXPECTED_RELEASE_ERROR', phase: 'baseline-unknown' });
+});
+
 test('rejects an unverified or changed deployment baseline, health, configuration, or operation state', async () => {
   const f = await captured();
   for (const mutate of [
@@ -120,7 +152,8 @@ test('rejects an unverified or changed deployment baseline, health, configuratio
     b => { b.targetSha = 'b'.repeat(40); }
   ]) {
     const altered = structuredClone(f.boundary); mutate(altered);
-    assert.throws(() => validateProspectiveBaseline(altered, sha, now), /PROSPECTIVE_BASELINE|D10_RUNTIME_BINDINGS/);
+    assert.throws(() => validateProspectiveBaseline(altered, sha, now),
+      /PROSPECTIVE_BASELINE|D10_RUNTIME_BINDINGS|PROSPECTIVE_RUNTIME_READINESS/);
   }
   const unsafe = providerFixture();
   unsafe.settings.find(x => x.key === 'App__AutomaticPayouts__Enabled').value = 'true';
