@@ -13,7 +13,34 @@ export const prospectiveRecovery = Object.freeze({
 const sha = /^[a-f0-9]{40}$/;
 const digestPattern = /^[a-f0-9]{64}$/;
 const positiveId = value => typeof value === 'string' && /^[1-9]\d*$/.test(value);
-const deny = code => { throw new Error(code); };
+export const prospectiveBaselinePhases = Object.freeze([
+  'workflow-inputs', 'ci-qualification', 'candidate-freeze', 'checkout-identity',
+  'candidate-validation', 'github-evidence', 'infrastructure-validation', 'candidate-provenance',
+  'release-context', 'repository-read', 'runtime-readiness', 'render-settings', 'render-service',
+  'render-deployment-history', 'api-health', 'vercel-project', 'vercel-deployment-history',
+  'vercel-production-deployment', 'baseline-artifact', 'baseline-validation'
+]);
+const prospectiveBaselineFailureCodes = new Set([
+  'PROSPECTIVE_AUTHORIZATION_DIGEST_MISMATCH', 'PROSPECTIVE_BASELINE_CONTEXT_REQUIRED',
+  'PROSPECTIVE_BASELINE_DIGEST_MISMATCH', 'PROSPECTIVE_BASELINE_UNVERIFIABLE',
+  'PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED', 'PROSPECTIVE_FINANCIAL_FENCE_NOT_HELD',
+  'PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED', 'PROSPECTIVE_OWNER_AUTHORIZATION_REQUIRED',
+  'PROSPECTIVE_PAYMENT_FENCE_NOT_HELD', 'PROSPECTIVE_RENDER_BASELINE_UNVERIFIABLE',
+  'PROSPECTIVE_RENDER_OPERATION_PENDING', 'PROSPECTIVE_RUNTIME_SETTING_UNVERIFIED',
+  'PROSPECTIVE_RUNTIME_READINESS_UNVERIFIED', 'PROSPECTIVE_VERCEL_BASELINE_UNVERIFIABLE',
+  'PROSPECTIVE_VERCEL_OPERATION_PENDING'
+]);
+export class ProspectiveBaselineDenied extends Error {
+  constructor(code, phase = 'baseline-validation') {
+    if (!prospectiveBaselineFailureCodes.has(code) || !prospectiveBaselinePhases.includes(phase))
+      throw new Error('PROSPECTIVE_BASELINE_DIAGNOSTIC_INVALID');
+    super(code);
+    this.name = 'ProspectiveBaselineDenied';
+    this.code = code;
+    this.phase = phase;
+  }
+}
+const deny = (code, phase = 'baseline-validation') => { throw new ProspectiveBaselineDenied(code, phase); };
 const canonical = value => value && typeof value === 'object' ?
   (Array.isArray(value) ? value.map(canonical) :
     Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))) : value;
@@ -80,9 +107,10 @@ export function validateProspectiveBaseline(boundary, expectedSha, now = Date.no
       !sha.test(boundary.vercel.sourceSha ?? '') || boundary.vercel.state !== 'READY' ||
       boundary.vercel.activeDeployments !== 0 || !digestPattern.test(boundary.digest ?? ''))
     deny('PROSPECTIVE_BASELINE_UNVERIFIABLE');
-  validateReadiness({ status: 200, body: boundary.runtimeReadiness }, expectedSha);
+  try { validateReadiness({ status: 200, body: boundary.runtimeReadiness }, expectedSha); }
+  catch { deny('PROSPECTIVE_RUNTIME_READINESS_UNVERIFIED', 'baseline-validation'); }
   if (boundary.runtimeReadiness.version !== 2 || !boundary.runtimeReadiness.d10Bindings)
-    deny('PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED');
+    deny('PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED', 'baseline-validation');
   const { digest: supplied, ...body } = boundary;
   if (digest(body) !== supplied) deny('PROSPECTIVE_BASELINE_DIGEST_MISMATCH');
   return Object.freeze(boundary);
@@ -122,49 +150,68 @@ export function createProspectiveAuthorization(baseline, release, now = Date.now
 }
 
 export async function captureProspectiveBaseline(api, candidate, run, options) {
-  const { validateRender, validateVercel, validateHealth, deploymentHistory, now = Date.now() } = options;
+  const { validateRender, validateVercel, validateHealth, deploymentHistory, now = Date.now(),
+    onPhase = () => {} } = options;
+  let phase = 'release-context';
+  const setPhase = next => {
+    if (!prospectiveBaselinePhases.includes(next)) throw new Error('PROSPECTIVE_BASELINE_DIAGNOSTIC_INVALID');
+    phase = next;
+    onPhase(next);
+  };
+  const reject = code => deny(code, phase);
+  setPhase(phase);
   if (candidate.sha !== prospectiveRecovery.targetSha || run.actor?.login !== prospectiveRecovery.owner.login ||
       run.actor?.id !== prospectiveRecovery.owner.id || run.event !== 'workflow_dispatch' ||
       run.head_branch !== 'main' || run.status !== 'in_progress' || run.head_sha !== candidate.executorSha ||
-      !run.actor || !Number.isSafeInteger(run.actor.id)) deny('PROSPECTIVE_BASELINE_CONTEXT_REQUIRED');
+      !run.actor || !Number.isSafeInteger(run.actor.id)) reject('PROSPECTIVE_BASELINE_CONTEXT_REQUIRED');
+  setPhase('runtime-readiness');
   const runtimeReadiness = await api.readiness(candidate.sha);
-  validateReadiness(runtimeReadiness, candidate.sha);
+  try { validateReadiness(runtimeReadiness, candidate.sha); }
+  catch { reject('PROSPECTIVE_RUNTIME_READINESS_UNVERIFIED'); }
   if (runtimeReadiness.body.version !== 2 || !runtimeReadiness.body.d10Bindings)
-    deny('PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED');
+    reject('PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED');
   const settings = [];
+  setPhase('render-settings');
   for (const key of prospectiveSettingKeys) {
     const result = await api.render(`/services/${prospectiveRecovery.renderServiceId}/env-vars/${key}`);
-    if (result?.key !== key || typeof result.value !== 'string') deny('PROSPECTIVE_RUNTIME_SETTING_UNVERIFIED');
+    if (result?.key !== key || typeof result.value !== 'string') reject('PROSPECTIVE_RUNTIME_SETTING_UNVERIFIED');
     settings.push({ key, value: result.value });
   }
   const settingsByKey = Object.fromEntries(settings.map(row => [row.key, row.value]));
   for (const [key, value] of Object.entries(heldSettings))
-    if (settingsByKey[key] !== value) deny('PROSPECTIVE_FINANCIAL_FENCE_NOT_HELD');
+    if (settingsByKey[key] !== value) reject('PROSPECTIVE_FINANCIAL_FENCE_NOT_HELD');
+  setPhase('render-service');
   const service = await api.render('/services/srv-d9f0k8e1a83c73d8n1b0');
   validateRender(service, settings.filter(row => row.key !== 'App__AutomaticPayouts__Enabled')
     .map(envVar => ({ envVar })));
+  setPhase('render-deployment-history');
   const renderHistory = await deploymentHistory(api, 'render');
-  if (renderHistory.some(row => activeRender.has(row.status))) deny('PROSPECTIVE_RENDER_OPERATION_PENDING');
+  if (renderHistory.some(row => activeRender.has(row.status))) reject('PROSPECTIVE_RENDER_OPERATION_PENDING');
   const live = renderHistory.filter(row => row.status === 'live');
   if (live.length !== 1 || !/^dep-[a-z0-9]+$/.test(live[0].id ?? '') ||
-      !sha.test(live[0].commit?.id ?? '')) deny('PROSPECTIVE_RENDER_BASELINE_UNVERIFIABLE');
+      !sha.test(live[0].commit?.id ?? '')) reject('PROSPECTIVE_RENDER_BASELINE_UNVERIFIABLE');
+  setPhase('api-health');
   const healthResponse = await api.health();
   validateHealth(healthResponse, live[0].commit.id);
   const health = healthResponse.body.result ?? healthResponse.body;
-  if (health.paymentAvailability !== 'Held') deny('PROSPECTIVE_PAYMENT_FENCE_NOT_HELD');
+  if (health.paymentAvailability !== 'Held') reject('PROSPECTIVE_PAYMENT_FENCE_NOT_HELD');
 
+  setPhase('vercel-project');
   const project = await api.vercel('/v9/projects/prj_6qL1e43KhsWrRshY5GxdmGl3HGMz');
   validateVercel(project, options.repositoryId);
+  setPhase('vercel-deployment-history');
   const vercelHistory = await deploymentHistory(api, 'vercel');
   if (vercelHistory.some(row => activeVercel.has(row.state ?? row.readyState)))
-    deny('PROSPECTIVE_VERCEL_OPERATION_PENDING');
+    reject('PROSPECTIVE_VERCEL_OPERATION_PENDING');
   const productionId = project.targets?.production?.id;
-  if (!/^dpl_[A-Za-z0-9]+$/.test(productionId ?? '')) deny('PROSPECTIVE_VERCEL_BASELINE_UNVERIFIABLE');
+  if (!/^dpl_[A-Za-z0-9]+$/.test(productionId ?? '')) reject('PROSPECTIVE_VERCEL_BASELINE_UNVERIFIABLE');
+  setPhase('vercel-production-deployment');
   const web = await api.vercel(`/v13/deployments/${productionId}`);
   if (web.id !== productionId || web.projectId !== project.id || web.target !== 'production' ||
       web.readyState !== 'READY' || web.aliasError || !sha.test(web.gitSource?.sha ?? ''))
-    deny('PROSPECTIVE_VERCEL_BASELINE_UNVERIFIABLE');
+    reject('PROSPECTIVE_VERCEL_BASELINE_UNVERIFIABLE');
 
+  setPhase('baseline-artifact');
   const body = { contract: 'aqua.prospective-release-baseline', version: 2, targetSha: candidate.sha,
     ciRunId: candidate.ciRunId, ciRunAttempt: candidate.ciRunAttempt,
     capturedAt: new Date(now).toISOString(), captureRunId: String(run.id), captureRunAttempt: run.run_attempt,

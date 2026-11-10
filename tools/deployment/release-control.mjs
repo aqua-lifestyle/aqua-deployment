@@ -34,7 +34,8 @@ import { verifyHeldRecovery } from './held-recovery-reconciliation.mjs';
 import { verifyOwnerRenderRedeployment, validateOwnerRenderProof } from './root-unbound-render-reconciliation.mjs';
 import { prospectiveRecovery, captureProspectiveBaseline, createProspectiveAuthorization,
   validateProspectiveAuthorization, validateProspectiveBaseline,
-  classifyPinnedIncompleteAttempt, digest as prospectiveDigest } from './prospective-release-recovery.mjs';
+  classifyPinnedIncompleteAttempt, ProspectiveBaselineDenied, prospectiveBaselinePhases,
+  digest as prospectiveDigest } from './prospective-release-recovery.mjs';
 
 export const targets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 // Only the executor's reviewed targets.json selects this mode. Candidate input
@@ -1572,6 +1573,8 @@ export async function main(env, options = {}) {
   const api = options.api ?? clients(env);
   const policy = options.policy ?? standingPolicy;
   const mode = options.mode ?? process.argv[2];
+  const markBaselinePhase = options.onBaselinePhase ?? (() => {});
+  if (mode === 'capture-baseline') markBaselinePhase('workflow-inputs');
   if (mode === 'qualify-tag') {
     requireThat(env.GITHUB_EVENT_NAME === 'push' && /^refs\/tags\/v\d+\.\d+\.\d+$/.test(env.GITHUB_REF), 'VERSION_TAG_REQUIRED');
     const runs = await api.gh(`/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=${env.GITHUB_SHA}&per_page=100`);
@@ -1589,11 +1592,14 @@ export async function main(env, options = {}) {
     requireThat(env.GITHUB_EVENT_NAME === 'workflow_dispatch', 'EXECUTOR_DISPATCH_REQUIRED');
     const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH));
     dispatchInputs = validateDispatchInputs(event.inputs);
+    if (mode === 'capture-baseline') markBaselinePhase('ci-qualification');
     const qualified = await qualify(api, dispatchInputs.ci_run_id);
     requireThat(qualified.sha === dispatchInputs.sha && String(qualified.ciRunAttempt) === dispatchInputs.ci_run_attempt,
       'CI_EVENT_PROVENANCE_MISMATCH');
+    if (mode === 'capture-baseline') markBaselinePhase('candidate-freeze');
     q = freezeCandidate(qualified, env, policy, dispatchInputs.qualificationOnly, dispatchInputs.releaseMode,
       dispatchInputs.prospectiveMode);
+    if (mode === 'capture-baseline') markBaselinePhase('checkout-identity');
     requireThat(execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim() === q.executorSha,
       'EXECUTOR_CHECKOUT_MISMATCH');
   } else {
@@ -1635,22 +1641,30 @@ export async function main(env, options = {}) {
   if (mode === 'capture-baseline') {
     requireThat(q.prospectiveMode === 'capture-baseline' && q.qualificationOnly,
       'PROSPECTIVE_BASELINE_MUST_BE_READ_ONLY');
+    markBaselinePhase('candidate-validation');
     verifyCandidate(JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/candidate.json`)), q,
       readFileSync(`${env.CANDIDATE_DIR}/source.tar`), sourceArchive(q.sha));
     policyDigest(policy);
     const captureSource = options.readSourceDigest ?? (path => gitSourceDigest(env.SOURCE_DIR, q.sha, path));
+    markBaselinePhase('github-evidence');
     await verifyGitHubEvidence(api, q, policy, captureSource, options.now);
+    markBaselinePhase('infrastructure-validation');
     await validateInfrastructure(api, q, policy);
+    markBaselinePhase('candidate-provenance');
     await validateCandidateProvenance(api, q);
+    markBaselinePhase('release-context');
     const run = await api.executor(`/actions/runs/${q.releaseRunId}`);
     validateReleaseRun(run);
     requireThat(String(run.id) === q.releaseRunId && run.run_attempt === q.releaseRunAttempt &&
       run.status === 'in_progress' && run.head_sha === q.executorSha &&
       run.actor?.login === prospectiveRecovery.owner.login && run.actor?.id === prospectiveRecovery.owner.id,
     'PROSPECTIVE_BASELINE_CONTEXT_REQUIRED');
+    markBaselinePhase('repository-read');
     const repository = await api.gh('');
     const boundary = await captureProspectiveBaseline(api, q, run, { validateRender,
-      validateVercel, validateHealth, deploymentHistory, repositoryId: repository.id, now: options.now });
+      validateVercel, validateHealth, deploymentHistory, repositoryId: repository.id, now: options.now,
+      onPhase: markBaselinePhase });
+    markBaselinePhase('baseline-artifact');
     requireThat(typeof env.PROSPECTIVE_BASELINE_OUTPUT === 'string', 'PROSPECTIVE_BASELINE_OUTPUT_REQUIRED');
     writeFileSync(env.PROSPECTIVE_BASELINE_OUTPUT, JSON.stringify(boundary, null, 2) + '\n',
       { flag: 'wx', mode: 0o600 });
@@ -1721,20 +1735,41 @@ export async function main(env, options = {}) {
       `${env.RESUME_RECEIPT_DIR}/production-release-audit-${d.runId}-${d.runAttempt}/release-report.jsonl`)) : undefined });
 }
 
+export function safeReleaseFailureCode(error) {
+  return (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied ||
+    error instanceof VercelSourceDenied || error instanceof FirstReleaseRecoveryDenied ||
+    error instanceof SchemaFirstDenied || error instanceof MemberReleaseDenied ||
+    error instanceof HistoricalReconciliationDenied || error instanceof PriorRunNotRecognized ||
+    error instanceof ReadinessReleaseDenied || error instanceof ProspectiveBaselineDenied) ?
+    error.message : 'UNEXPECTED_RELEASE_ERROR';
+}
+
+export function safeBaselineDiagnostic(error, phase) {
+  const selectedPhase = error instanceof ProspectiveBaselineDenied ? error.phase : phase;
+  return Object.freeze({ code: safeReleaseFailureCode(error),
+    phase: prospectiveBaselinePhases.includes(selectedPhase) ? selectedPhase : 'baseline-unknown' });
+}
+
 export async function run(env, options = {}) {
-  try { await main(env, options); return 0; }
+  const baselineMode = (options.mode ?? process.argv[2]) === 'capture-baseline';
+  let activeBaselinePhase = null;
+  const baselineOptions = baselineMode ? { ...options, onBaselinePhase: phase => {
+    activeBaselinePhase = prospectiveBaselinePhases.includes(phase) ? phase : 'baseline-unknown';
+    console.log(`capture-baseline-phase=${activeBaselinePhase}`);
+  } } : options;
+  try { await main(env, baselineOptions); return 0; }
   catch (error) {
-    const code = (error instanceof ReleaseFailure || error instanceof GitHubEvidenceDenied ||
-      error instanceof VercelSourceDenied ||
-      error instanceof FirstReleaseRecoveryDenied || error instanceof SchemaFirstDenied ||
-      error instanceof MemberReleaseDenied || error instanceof HistoricalReconciliationDenied ||
-      error instanceof PriorRunNotRecognized || error instanceof ReadinessReleaseDenied) ? error.message : 'UNEXPECTED_RELEASE_ERROR';
+    const baselineDiagnostic = baselineMode ? safeBaselineDiagnostic(error, activeBaselinePhase) : null;
+    const code = baselineDiagnostic?.code ?? safeReleaseFailureCode(error);
+    const phase = baselineDiagnostic?.phase ?? null;
+    const diagnostic = phase ? `${code} phase=${phase}` : code;
     if (failureReport) failureReport(code);
     else if (env.RELEASE_REPORT)
-      appendFileSync(env.RELEASE_REPORT, JSON.stringify({ phase: 'blocked', code, identityVerified: false }) + '\n');
-    console.error(`::error::${code}. See the safe-release runbook; do not resume or retry provider requests blindly.`);
+      appendFileSync(env.RELEASE_REPORT, JSON.stringify({ phase: 'blocked', code,
+        ...(phase ? { capturePhase: phase } : {}), identityVerified: false }) + '\n');
+    console.error(`::error::${diagnostic}. See the safe-release runbook; do not resume or retry provider requests blindly.`);
     if (env.GITHUB_STEP_SUMMARY)
-      appendFileSync(env.GITHUB_STEP_SUMMARY, `Release blocked/failed: **${code}**.\nSee docs/operations/safe-automatic-deployment.md. No automatic rollback or configuration repair.\n`);
+      appendFileSync(env.GITHUB_STEP_SUMMARY, `Release blocked/failed: **${code}**${phase ? `** at **${phase}**` : ''}.\nSee docs/operations/safe-automatic-deployment.md. No automatic rollback or configuration repair.\n`);
     return 1;
   }
 }
