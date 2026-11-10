@@ -258,7 +258,7 @@ test('the authorized application/CI pair qualifies; the outdated SHA and wrong a
 test('all source-fetch workflow steps receive only the read token, while ordinary PR tests remain secret-free', () => {
   const yaml = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   const steps = yaml.split(/\n      - /).filter(step => step.includes('node tools/deployment/fetch-source.mjs'));
-  assert.equal(steps.length, 3);
+  assert.equal(steps.length, 4);
   for (const step of steps) {
     assert.deepEqual([...step.matchAll(/secrets\.(\w+)/g)].map(m => m[1]), ['AQGREEN_EVIDENCE_READ_TOKEN']);
     assert.doesNotMatch(step, /RENDER_API_KEY|VERCEL_TOKEN|npm|npx|checkout/);

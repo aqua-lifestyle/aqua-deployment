@@ -32,6 +32,9 @@ import { verifiedHoldCandidateSha } from './verified-hold-release.mjs';
 import { unusedExpiryCandidateSha } from './unused-expiry-release.mjs';
 import { verifyHeldRecovery } from './held-recovery-reconciliation.mjs';
 import { verifyOwnerRenderRedeployment, validateOwnerRenderProof } from './root-unbound-render-reconciliation.mjs';
+import { prospectiveRecovery, captureProspectiveBaseline, createProspectiveAuthorization,
+  validateProspectiveAuthorization, validateProspectiveBaseline,
+  classifyPinnedIncompleteAttempt, digest as prospectiveDigest } from './prospective-release-recovery.mjs';
 
 export const targets = JSON.parse(readFileSync(new URL('./targets.json', import.meta.url)));
 // Only the executor's reviewed targets.json selects this mode. Candidate input
@@ -134,7 +137,8 @@ export async function validateExecutorApproval(api, identity, policy = standingP
 
 export function validateDispatchInputs(inputs) {
   requireThat(inputs && typeof inputs === 'object' && !Array.isArray(inputs) &&
-    Object.keys(inputs).every(k => ['ci_run_id', 'ci_run_attempt', 'sha', 'qualification_only', 'release_mode'].includes(k)) &&
+    Object.keys(inputs).every(k => ['ci_run_id', 'ci_run_attempt', 'sha', 'qualification_only', 'release_mode',
+      'prospective_mode', 'recovery_baseline_run_id', 'recovery_baseline_sha256'].includes(k)) &&
     positiveId(inputs.ci_run_id) && positiveId(inputs.ci_run_attempt) && shaPattern.test(inputs.sha),
   'EXECUTOR_INPUT_INVALID');
   // workflow_dispatch's event payload uses strings; accept native booleans too,
@@ -144,13 +148,81 @@ export function validateDispatchInputs(inputs) {
   const releaseMode = Object.hasOwn(inputs, 'release_mode') ? inputs.release_mode : 'full';
   requireThat(['full', memberPolicy.mode].includes(releaseMode) &&
     (releaseMode === 'full' || inputs.sha === memberPolicy.frontendSha), 'EXECUTOR_INPUT_INVALID');
+  const prospectiveMode = inputs.prospective_mode ?? 'none';
+  requireThat(['none', 'capture-baseline', 'authorize'].includes(prospectiveMode), 'EXECUTOR_INPUT_INVALID');
+  if (prospectiveMode === 'capture-baseline') requireThat((mode === true || mode === 'true') &&
+    !inputs.recovery_baseline_run_id && !inputs.recovery_baseline_sha256, 'EXECUTOR_INPUT_INVALID');
+  else if (prospectiveMode === 'authorize') requireThat((mode === false || mode === 'false') &&
+    positiveId(inputs.recovery_baseline_run_id) && /^[a-f0-9]{64}$/.test(inputs.recovery_baseline_sha256 ?? '') &&
+    releaseMode === 'full', 'EXECUTOR_INPUT_INVALID');
+  else requireThat(!inputs.recovery_baseline_run_id && !inputs.recovery_baseline_sha256, 'EXECUTOR_INPUT_INVALID');
   return { ci_run_id: inputs.ci_run_id, ci_run_attempt: inputs.ci_run_attempt, sha: inputs.sha,
-    qualificationOnly: mode === true || mode === 'true', ...(releaseMode !== 'full' ? { releaseMode } : {}) };
+    qualificationOnly: mode === true || mode === 'true', ...(releaseMode !== 'full' ? { releaseMode } : {}),
+    prospectiveMode, ...(prospectiveMode === 'authorize' ? { recoveryBaselineRunId: inputs.recovery_baseline_run_id,
+      recoveryBaselineSha256: inputs.recovery_baseline_sha256 } : {}) };
 }
 
-export function freezeCandidate(qualified, env, policy = standingPolicy, qualificationOnly = false, releaseMode = 'full') {
+export async function loadProspectiveRecovery(api, inputs, qualified, releaseRun, policy = standingPolicy, now = Date.now()) {
+  requireThat(inputs.prospectiveMode === 'authorize' && qualified.sha === prospectiveRecovery.targetSha,
+    'PROSPECTIVE_RECOVERY_SOURCE_MISMATCH');
+  validateReleaseRun(releaseRun);
+  requireThat(String(releaseRun.id) === qualified.releaseRunId &&
+    releaseRun.run_attempt === qualified.releaseRunAttempt && releaseRun.status === 'in_progress' &&
+    releaseRun.head_sha === qualified.executorSha && releaseRun.actor?.login === prospectiveRecovery.owner.login &&
+    releaseRun.actor?.id === prospectiveRecovery.owner.id, 'PROSPECTIVE_OWNER_AUTHORIZATION_REQUIRED');
+  const run = await api.executor(`/actions/runs/${inputs.recoveryBaselineRunId}`);
+  requireThat(String(run.id) === inputs.recoveryBaselineRunId && run.run_number > 0 && run.run_attempt === 1 &&
+    run.status === 'completed' && run.conclusion === 'success' && run.event === 'workflow_dispatch' &&
+    run.head_branch === 'main' && run.path === '.github/workflows/deploy.yml' &&
+    run.name === execution.name && run.head_sha === qualified.executorSha &&
+    run.actor?.login === prospectiveRecovery.owner.login && run.actor?.id === prospectiveRecovery.owner.id &&
+    run.repository?.full_name === execution.repository && run.head_repository?.full_name === execution.repository,
+  'PROSPECTIVE_BASELINE_RUN_UNAUTHENTICATED');
+  const jobsPage = await api.executor(`/actions/runs/${run.id}/attempts/1/jobs?per_page=100`);
+  requireThat(jobsPage.total_count === jobsPage.jobs?.length && jobsPage.jobs.length === 4 &&
+    new Set(jobsPage.jobs.map(job => job.name)).size === jobsPage.jobs.length &&
+    jobsPage.jobs.every(job => job.run_id === run.id && job.run_attempt === 1 && job.status === 'completed'),
+  'PROSPECTIVE_BASELINE_JOBS_UNVERIFIABLE');
+  const job = name => jobsPage.jobs.find(row => row.name === name);
+  requireThat(job('Qualify immutable source candidate')?.conclusion === 'success' &&
+    job('Capture prospective provider baseline')?.conclusion === 'success' &&
+    job(admissionJobName)?.conclusion === 'skipped' &&
+    job('Unattended recovery release')?.conclusion === 'skipped', 'PROSPECTIVE_BASELINE_RUN_INVALID');
+  const repository = await api.executor('');
+  const inventory = await api.executor(`/actions/runs/${run.id}/artifacts?per_page=100`);
+  const artifactName = `prospective-recovery-baseline-${qualified.sha}-${run.id}-1`;
+  requireThat(inventory.total_count === inventory.artifacts?.length, 'PROSPECTIVE_BASELINE_ARTIFACT_UNVERIFIABLE');
+  const selected = inventory.artifacts.filter(item => item.name === artifactName);
+  requireThat(selected.length === 1 && !selected[0].expired && selected[0].workflow_run?.id === run.id &&
+    selected[0].workflow_run?.head_sha === run.head_sha, 'PROSPECTIVE_BASELINE_ARTIFACT_UNVERIFIABLE');
+  const artifact = validateArtifact(await api.executor(`/actions/artifacts/${selected[0].id}`), String(run.id),
+    run.head_sha, artifactName, repository.id);
+  let boundary;
+  try {
+    const bytes = await readGitHubArtifact(api, 'executor', artifact, 'report.json');
+    boundary = JSON.parse(bytes.toString('utf8'));
+  } catch { throw new ReleaseFailure('PROSPECTIVE_BASELINE_ARTIFACT_UNVERIFIABLE'); }
+  validateProspectiveBaseline(boundary, qualified.sha, now);
+  requireThat(boundary.captureRunId === String(run.id) && boundary.captureRunAttempt === run.run_attempt &&
+    boundary.executorSha === run.head_sha && boundary.ciRunId === qualified.ciRunId &&
+    boundary.ciRunAttempt === qualified.ciRunAttempt && boundary.digest === inputs.recoveryBaselineSha256,
+  'PROSPECTIVE_BASELINE_IDENTITY_MISMATCH');
+  const authorization = createProspectiveAuthorization(boundary, releaseRun, now);
+  validateProspectiveAuthorization(authorization, boundary, { sha: qualified.sha,
+    releaseRunId: String(releaseRun.id), releaseRunAttempt: releaseRun.run_attempt,
+    actorCreatedAt: releaseRun.created_at }, policy, now);
+  return Object.freeze({ boundary, authorization });
+}
+
+export function freezeCandidate(qualified, env, policy = standingPolicy, qualificationOnly = false,
+  releaseMode = 'full', prospectiveMode = 'none') {
   requireThat(typeof qualificationOnly === 'boolean', 'EXECUTOR_INPUT_INVALID');
   requireThat(['full', memberPolicy.mode].includes(releaseMode), 'EXECUTOR_INPUT_INVALID');
+  requireThat(['none', 'capture-baseline', 'authorize'].includes(prospectiveMode) &&
+    (prospectiveMode === 'none' || qualified.sha === prospectiveRecovery.targetSha && releaseMode === 'full'),
+  'PROSPECTIVE_RECOVERY_SOURCE_MISMATCH');
+  requireThat(prospectiveMode !== 'capture-baseline' || qualificationOnly, 'PROSPECTIVE_BASELINE_MUST_BE_READ_ONLY');
+  requireThat(prospectiveMode !== 'authorize' || !qualificationOnly, 'PROSPECTIVE_AUTHORIZATION_REQUIRES_RELEASE');
   requireThat(env.GITHUB_REPOSITORY === execution.repository && positiveId(env.GITHUB_RUN_ID) &&
     positiveId(env.GITHUB_RUN_ATTEMPT) && positiveAttempt(Number(env.GITHUB_RUN_ATTEMPT)) &&
     env.GITHUB_REF === 'refs/heads/main' && env.GITHUB_REF_PROTECTED === 'true' &&
@@ -158,6 +230,7 @@ export function freezeCandidate(qualified, env, policy = standingPolicy, qualifi
     (!external || (shaPattern.test(env.GITHUB_SHA) && env.GITHUB_WORKFLOW_SHA === env.GITHUB_SHA)),
   'RELEASE_CONTEXT_UNVERIFIABLE');
   const candidate = { ...qualified, version: external ? 4 : 3, qualificationOnly,
+    ...(prospectiveMode !== 'none' ? { prospectiveMode } : {}),
     ...(releaseMode === memberPolicy.mode ? { memberRelease: memberPolicyDigest } : {}),
     ...(external ? { executorRepository: execution.repository, executorSha: env.GITHUB_SHA } : {}), releaseRunId: env.GITHUB_RUN_ID,
     releaseRunAttempt: Number(env.GITHUB_RUN_ATTEMPT), policySha256: policyDigest(policy), ...targetIdentity };
@@ -192,6 +265,12 @@ export function verifyCandidate(candidate, qualified, archive, trustedArchive) {
     requireThat(candidate[key] === qualified[key], 'CANDIDATE_PROVENANCE_MISMATCH');
   requireThat(candidate.sourceSha256 === createHash('sha256').update(archive).digest('hex'),
     'CANDIDATE_CONTENT_MISMATCH');
+  requireThat(candidate.qualificationOnly === qualified.qualificationOnly &&
+    (candidate.prospectiveMode ?? 'none') === (qualified.prospectiveMode ?? 'none') &&
+    (candidate.prospectiveRecovery?.authorization?.digest ?? null) ===
+      (qualified.prospectiveRecovery?.authorization?.digest ?? null), 'CANDIDATE_MODE_OR_AUTHORIZATION_MISMATCH');
+  requireThat(objectDigest(candidate.prospectiveRecovery ?? null) ===
+    objectDigest(qualified.prospectiveRecovery ?? null), 'PROSPECTIVE_AUTHORIZATION_ARTIFACT_MISMATCH');
   requireThat(Buffer.isBuffer(trustedArchive) && archive.equals(trustedArchive),
     'CANDIDATE_NOT_QUALIFIED_GIT_SOURCE');
 }
@@ -565,6 +644,13 @@ export function createAuditWriter(identity, emit) {
       'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256', 'schemaFirstEvidenceSha256', 'recoveryMode',
       'authorizationId', 'evidenceSha256', 'inventorySha256', 'evidenceArtifactId', 'vercelSourceProof'])
       if (row[key] !== undefined) known[key] = row[key];
+    if (identity.prospectiveRecovery) {
+      known.prospectiveRecovery = { baselineRunId: identity.prospectiveRecovery.boundary.captureRunId,
+        baselineDigest: identity.prospectiveRecovery.boundary.digest,
+        authorizationDigest: identity.prospectiveRecovery.authorization.digest,
+        historicalReleaseRunId: prospectiveRecovery.incompleteReleaseRunId,
+        historicalReleaseStatus: 'incomplete' };
+    }
     emit({ ...row, ...Object.fromEntries(releaseIdentityFields.map(key => [key, identity[key]])),
       ...(identity.memberRelease !== undefined ? { memberRelease: identity.memberRelease } : {}), ...known });
   };
@@ -680,14 +766,15 @@ function validateReleaseRun(run) {
 async function releaseProductionJob(api, run, attempt) {
   const page = await releaseApi(api)(`/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100`);
   const jobs = page.jobs;
-  requireThat(page.total_count === jobs?.length && jobs.length === 3 &&
-    new Set(jobs.map(j => j.name)).size === 3 &&
+  requireThat(page.total_count === jobs?.length && [3, 4].includes(jobs.length) &&
+    new Set(jobs.map(j => j.name)).size === jobs.length &&
     jobs.every(j => j.run_id === run.id && j.run_attempt === attempt && j.status === 'completed'),
   'PRIOR_RELEASE_EXECUTION_UNVERIFIABLE');
   const candidate = jobs.find(j => j.name === 'Qualify immutable source candidate');
   const admission = jobs.find(j => [admissionJobName, 'Verify independent authorization before provider access'].includes(j.name));
+  const baseline = jobs.find(j => j.name === 'Capture prospective provider baseline');
   const production = jobs.find(j => ['Unattended recovery release', 'Authorized recovery release'].includes(j.name));
-  requireThat(candidate && admission && production &&
+  requireThat(candidate && admission && production && (jobs.length === 3 || baseline) &&
     (production.conclusion !== 'success' || (candidate.conclusion === 'success' && admission.conclusion === 'success')),
     'PRIOR_RELEASE_EXECUTION_UNVERIFIABLE');
   return production;
@@ -763,6 +850,7 @@ export async function evidencePlan(api, candidate, policy) {
   let continuation, partialRenderContinuation, acknowledgedBackend, readinessRenderContinuation;
   const historicalReconciliations = [];
   const priorFailedRuns = [];
+  let prospectiveHistoricalRelease;
   for (const run of runs.filter(r => r.id !== current.id &&
     r.run_number > (latestObserved?.run_number ?? 0))) {
     // A failed prior run may have submitted a request whose history is not visible
@@ -775,6 +863,12 @@ export async function evidencePlan(api, candidate, policy) {
       // Qualification-only success is already authenticated above. Preserve it
       // as a successful check with no deployment, not as a failed run/predecessor.
       if (past?.conclusion === 'success' && production.conclusion === 'skipped') continue;
+      if (candidate.prospectiveRecovery && String(run.id) === prospectiveRecovery.incompleteReleaseRunId) {
+        const classified = classifyPinnedIncompleteAttempt(past, attempt, production, productionDeployStep(production.name));
+        (prospectiveHistoricalRelease ??= { runId: String(run.id), outcome: 'incomplete', attempts: [] })
+          .attempts.push(classified);
+        continue;
+      }
       if (external && candidate.memberRelease === undefined && String(run.id) === partialReleaseRunId && attempt === 1) {
         const proof = await reconcilePartialRelease(api, run, past, production, candidate, targets);
         if (candidate.sha === readinessCandidateSha) acknowledgedBackend = readinessStartingBackend(candidate, proof);
@@ -826,6 +920,14 @@ export async function evidencePlan(api, candidate, policy) {
       }
     }
   }
+  if (candidate.prospectiveRecovery) {
+    const incomplete = runs.find(run => String(run.id) === prospectiveRecovery.incompleteReleaseRunId);
+    requireThat(incomplete && incomplete.status === 'completed' && incomplete.conclusion === 'failure' &&
+      prospectiveHistoricalRelease?.runId === prospectiveRecovery.incompleteReleaseRunId &&
+      prospectiveHistoricalRelease.attempts.length === incomplete.run_attempt &&
+      prospectiveHistoricalRelease.attempts.every((row, index) => row.runAttempt === index + 1),
+    'PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED');
+  }
   requireThat(candidate.releaseRunAttempt <= 20, 'RELEASE_ATTEMPT_HISTORY_TOO_LARGE');
   const resumeChain = [];
   for (let attempt = 1; attempt < candidate.releaseRunAttempt; attempt++)
@@ -839,14 +941,15 @@ export async function evidencePlan(api, candidate, policy) {
     'MEMBER_RELEASE_ALREADY_DEPLOYED');
   requireThat(candidate.memberRelease === undefined || continuation, 'MEMBER_CONTINUATION_EVIDENCE_REQUIRED');
   return { policySha256: candidate.policySha256, verifiedReleases, priorFailedRuns,
+    ...(prospectiveHistoricalRelease ? { prospectiveHistoricalRelease } : {}),
     ...(partialRenderContinuation ? { partialRenderContinuation } : {}),
     ...(acknowledgedBackend ? { acknowledgedBackend } : {}),
     ...(readinessRenderContinuation ? { readinessRenderContinuation } : {}),
     ...(historicalReconciliations.length ? { historicalReconciliations } : {}),
     ...(continuation ? { memberContinuation: continuation } : {}),
     ...(memberReleases.length ? { memberReleases } : {}),
-    firstReleaseRecoveryEvidenceSha256: latest ? null : policy.firstReleaseRecovery.evidenceSha256,
-    baseline: latest ? await auditArtifact(api, latest, latest.run_attempt) : null,
+    firstReleaseRecoveryEvidenceSha256: candidate.prospectiveRecovery || latest ? null : policy.firstReleaseRecovery.evidenceSha256,
+    baseline: latest && !candidate.prospectiveRecovery ? await auditArtifact(api, latest, latest.run_attempt) : null,
     resume: resumeChain.at(-1) ?? null, resumeChain };
 }
 
@@ -1008,7 +1111,15 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     options.receiptRows ? validateResumeReceipt(options.receiptRows, qualified) : {};
   const schemaProof = await verifySchemaFirst(api, qualified, policy, readSource,
     options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now);
-  const firstRecovery = !plan.baseline ? validateFirstReleaseRecovery(
+  const prospective = qualified.prospectiveRecovery;
+  if (prospective) {
+    validateProspectiveBaseline(prospective.boundary, qualified.sha, options.now);
+    validateProspectiveAuthorization(prospective.authorization, prospective.boundary, {
+      sha: qualified.sha, releaseRunId: qualified.releaseRunId,
+      releaseRunAttempt: qualified.releaseRunAttempt, actorCreatedAt: prospective.authorization.approvedAt
+    }, policy, options.now);
+  }
+  const firstRecovery = !plan.baseline && !prospective ? validateFirstReleaseRecovery(
     options.recoveryReadback ?? approvedRecoveryReadback, qualified, policy, options.now, schemaProof) : null;
   requireThat(plan.firstReleaseRecoveryEvidenceSha256 === (firstRecovery?.evidenceSha256 ?? null),
     'FIRST_RELEASE_RECOVERY_PLAN_MISMATCH');
@@ -1025,6 +1136,11 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     evidenceSha256: options.admissionReceipt.evidenceSha256, inventorySha256: evidence.inventorySha256,
     evidenceArtifactId: evidence.artifact.id, ...(partial || readyReuse ? prior : {}), ...(schemaProof ? {
       schemaFirstEvidenceSha256: schemaProof.evidenceSha256, recoveryMode: schemaProof.recoveryMode } : {}) });
+  if (prospective) report({ phase: 'evidence-selected', prospectiveRecovery: {
+    baselineRunId: prospective.boundary.captureRunId, baselineDigest: prospective.boundary.digest,
+    authorizationDigest: prospective.authorization.digest,
+    historicalReleaseRunId: prospectiveRecovery.incompleteReleaseRunId,
+    historicalReleaseStatus: 'incomplete' } });
   const frontend = prepareFrontend(options.frontendArchive, qualified.sha, targets.vercel, policy.scope.frontend.publicBuildInputs);
   requireThat(!prior.vercelSourceProof || objectDigest(prior.vercelSourceProof) === objectDigest(frontend.proof), 'CONTRADICTORY_RESUME_RECEIPT');
   const servicePath = `/services/${targets.render.id}`;
@@ -1057,6 +1173,15 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       rows.push({ envVar });
     }
     validateRender(service, rows, cleanStart);
+    if (qualified.prospectiveRecovery) {
+      const payoutSetting = await api.render(`${servicePath}/env-vars/App__AutomaticPayouts__Enabled`);
+      requireThat(payoutSetting?.key === 'App__AutomaticPayouts__Enabled' && payoutSetting.value === 'false',
+        'PROSPECTIVE_AUTOMATIC_PAYOUTS_NOT_DISABLED');
+      rows.push({ envVar: payoutSetting });
+      requireThat(prospectiveDigest(rows.map(row =>
+        ({ key: row.envVar.key, value: row.envVar.value }))) ===
+        qualified.prospectiveRecovery.boundary.render.settingsDigest, 'PROSPECTIVE_RUNTIME_CONFIGURATION_CHANGED');
+    }
     if (qualified.sha === rootUnboundCandidateSha)
       requireThat(rows.some(r => r.envVar.key === 'Yoco__Mode' && r.envVar.value === 'live'), 'OWNER_RENDER_LIVE_CONFIGURATION_CHANGED');
   };
@@ -1102,7 +1227,10 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   // first rollout, select the current exact provider pair automatically. On a
   // partial retry use the original immutable baseline, never the advanced live SHA.
   let baselineProof;
-  if (plan.baseline) baselineProof = validateBaselineReceipt(options.baselineRows, plan.baseline, qualified);
+  if (prospective) baselineProof = { renderDeployId: prospective.boundary.render.deploymentId,
+    renderSha: prospective.boundary.render.sourceSha, vercelDeployId: prospective.boundary.vercel.deploymentId,
+    vercelSha: prospective.boundary.vercel.sourceSha, vercelSourceProvenance: 'GIT_SOURCE' };
+  else if (plan.baseline) baselineProof = validateBaselineReceipt(options.baselineRows, plan.baseline, qualified);
   else {
     const baselineRow = options.receiptRows?.find(row => row.phase === 'baseline-selected') ?? partial?.baseline ?? acknowledged?.recoveryBaseline;
     requireThat(!prior.renderDeployId || baselineRow, 'RESUME_BASELINE_RECEIPT_REQUIRED');
@@ -1110,7 +1238,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       baselineProof = { renderDeployId: baselineRow.baselineRenderDeployId, renderSha: baselineRow.baselineRenderSha,
         vercelDeployId: baselineRow.baselineVercelDeployId, vercelSha: baselineRow.baselineVercelSha,
         vercelSourceProvenance: baselineRow.baselineVercelSourceProvenance };
-      requireThat(baselineRow.firstReleaseRecoveryEvidenceSha256 === firstRecovery.evidenceSha256,
+      requireThat(firstRecovery && baselineRow.firstReleaseRecoveryEvidenceSha256 === firstRecovery.evidenceSha256,
         'FIRST_RELEASE_RECOVERY_RESUME_MISMATCH');
     } else {
       readScope('render-deploy-history');
@@ -1129,7 +1257,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
         baselineProof.vercelSourceProvenance = firstRecovery.frontendSourceProvenance;
       }
     }
-    requireThat(baselineProof.renderDeployId === firstRecovery.renderDeployId &&
+    if (firstRecovery) requireThat(baselineProof.renderDeployId === firstRecovery.renderDeployId &&
       baselineProof.renderSha === firstRecovery.renderSha && baselineProof.vercelDeployId === firstRecovery.vercelDeployId,
       'FIRST_RELEASE_RECOVERY_IDENTITY_MISMATCH');
     requireThat(/^dep-[a-z0-9]+$/.test(baselineProof.renderDeployId) &&
@@ -1200,12 +1328,15 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   requireThat(!(partial || readyReuse) || (live[0].id === prior.renderDeployId && live[0].commit?.id === qualified.sha),
     'RECONCILED_RENDER_NOT_UNIQUELY_LIVE');
   readScope('health');
-  validateHealth(await api.health(), live[0].commit.id);
+  const currentHealth = await api.health();
+  validateHealth(currentHealth, live[0].commit.id);
+  if (prospective) requireThat((currentHealth.body.result ?? currentHealth.body).paymentAvailability === 'Held',
+    'PROSPECTIVE_PAYMENT_FENCE_NOT_HELD');
   // First release: the legacy baseline has no readiness route. Its exact healthy
   // revision, normal configuration and verified rollback pair are still required.
   // Never interpret a failed/404 readiness response as bootstrap authorization.
   // Once a verified production predecessor exists, require readiness pre-mutation.
-  if (plan.baseline) await readProtectedReadiness(live[0].commit.id);
+  if (plan.baseline || prospective) await readProtectedReadiness(live[0].commit.id);
   requireThat(renderDeploys.every(x => !activeRender.has(x.status) || x.id === prior.renderDeployId),
     'CONCURRENT_RENDER_DEPLOYMENT');
   let render = prior.renderDeployId ? renderDeploys.find(x => x.id === prior.renderDeployId) : undefined;
@@ -1421,15 +1552,17 @@ export async function requireDeploymentAttestation(authorization, qualified, { r
 
 export async function validateAdmissionJob(api, qualified) {
   const page = await api.executor(`/actions/runs/${qualified.releaseRunId}/attempts/${qualified.releaseRunAttempt}/jobs?per_page=100`);
-  requireThat(page.total_count === page.jobs?.length && page.jobs.length === 3 &&
-    new Set(page.jobs.map(job => job.name)).size === 3 &&
+  requireThat(page.total_count === page.jobs?.length && [3, 4].includes(page.jobs.length) &&
+    new Set(page.jobs.map(job => job.name)).size === page.jobs.length &&
     page.jobs.every(job => job.run_id === Number(qualified.releaseRunId) &&
       job.run_attempt === qualified.releaseRunAttempt), 'ADMISSION_JOB_EVIDENCE_UNVERIFIABLE');
   const candidate = page.jobs.find(job => job.name === 'Qualify immutable source candidate');
   const admission = page.jobs.find(job => job.name === admissionJobName);
   const production = page.jobs.find(job => job.name === 'Unattended recovery release');
+  const baseline = page.jobs.find(job => job.name === 'Capture prospective provider baseline');
   requireThat(candidate?.status === 'completed' && candidate.conclusion === 'success' &&
     admission?.status === 'completed' && admission.conclusion === 'success' &&
+    (page.jobs.length === 3 || baseline?.status === 'completed' && baseline.conclusion === 'skipped') &&
     production?.status === 'in_progress', 'ADMISSION_JOB_NOT_SUCCESSFUL');
 }
 
@@ -1449,17 +1582,18 @@ export async function main(env, options = {}) {
     appendFileSync(env.GITHUB_OUTPUT, `sha=${q.sha}\n`);
     return;
   }
-  let q;
+  let q, dispatchInputs;
   const sourceArchive = sha => execFileSync('git', ['-C', external ? env.SOURCE_DIR : '.',
     'archive', '--format=tar', sha], { maxBuffer: 100 * 1024 * 1024 });
   if (external) {
     requireThat(env.GITHUB_EVENT_NAME === 'workflow_dispatch', 'EXECUTOR_DISPATCH_REQUIRED');
     const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH));
-    const inputs = validateDispatchInputs(event.inputs);
-    const qualified = await qualify(api, inputs.ci_run_id);
-    requireThat(qualified.sha === inputs.sha && String(qualified.ciRunAttempt) === inputs.ci_run_attempt,
+    dispatchInputs = validateDispatchInputs(event.inputs);
+    const qualified = await qualify(api, dispatchInputs.ci_run_id);
+    requireThat(qualified.sha === dispatchInputs.sha && String(qualified.ciRunAttempt) === dispatchInputs.ci_run_attempt,
       'CI_EVENT_PROVENANCE_MISMATCH');
-    q = freezeCandidate(qualified, env, policy, inputs.qualificationOnly, inputs.releaseMode);
+    q = freezeCandidate(qualified, env, policy, dispatchInputs.qualificationOnly, dispatchInputs.releaseMode,
+      dispatchInputs.prospectiveMode);
     requireThat(execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim() === q.executorSha,
       'EXECUTOR_CHECKOUT_MISMATCH');
   } else {
@@ -1481,6 +1615,9 @@ export async function main(env, options = {}) {
     verifyMemberSource(env.SOURCE_DIR, q);
     await verifyMemberAuthority(api, q, env, options.now);
   }
+  const prospectiveProof = q.prospectiveMode === 'authorize' ? await loadProspectiveRecovery(api, dispatchInputs, q,
+    await api.executor(`/actions/runs/${q.releaseRunId}`), policy, options.now) : null;
+  if (prospectiveProof) q = Object.freeze({ ...q, prospectiveRecovery: prospectiveProof });
   if (mode === 'candidate') {
     // Detect accidental reviewer/wait gates before entering the environment job.
     await validateInfrastructure(api, q, policy);
@@ -1489,7 +1626,36 @@ export async function main(env, options = {}) {
     writeFileSync(`${env.CANDIDATE_DIR}/source.tar`, archive);
     writeFileSync(`${env.CANDIDATE_DIR}/candidate.json`, JSON.stringify({ ...q,
       sourceSha256: createHash('sha256').update(archive).digest('hex') }, null, 2) + '\n');
+    if (prospectiveProof) writeFileSync(`${env.CANDIDATE_DIR}/prospective-recovery.json`,
+      JSON.stringify(prospectiveProof) + '\n', { flag: 'wx', mode: 0o600 });
     appendFileSync(env.GITHUB_OUTPUT, `sha=${q.sha}\nqualification_only=${q.qualificationOnly}\n`);
+    appendFileSync(env.GITHUB_OUTPUT, `prospective_mode=${q.prospectiveMode ?? 'none'}\n`);
+    return;
+  }
+  if (mode === 'capture-baseline') {
+    requireThat(q.prospectiveMode === 'capture-baseline' && q.qualificationOnly,
+      'PROSPECTIVE_BASELINE_MUST_BE_READ_ONLY');
+    verifyCandidate(JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/candidate.json`)), q,
+      readFileSync(`${env.CANDIDATE_DIR}/source.tar`), sourceArchive(q.sha));
+    policyDigest(policy);
+    const captureSource = options.readSourceDigest ?? (path => gitSourceDigest(env.SOURCE_DIR, q.sha, path));
+    await verifyGitHubEvidence(api, q, policy, captureSource, options.now);
+    await validateInfrastructure(api, q, policy);
+    await validateCandidateProvenance(api, q);
+    const run = await api.executor(`/actions/runs/${q.releaseRunId}`);
+    validateReleaseRun(run);
+    requireThat(String(run.id) === q.releaseRunId && run.run_attempt === q.releaseRunAttempt &&
+      run.status === 'in_progress' && run.head_sha === q.executorSha &&
+      run.actor?.login === prospectiveRecovery.owner.login && run.actor?.id === prospectiveRecovery.owner.id,
+    'PROSPECTIVE_BASELINE_CONTEXT_REQUIRED');
+    const repository = await api.gh('');
+    const boundary = await captureProspectiveBaseline(api, q, run, { validateRender,
+      validateVercel, validateHealth, deploymentHistory, repositoryId: repository.id, now: options.now });
+    requireThat(typeof env.PROSPECTIVE_BASELINE_OUTPUT === 'string', 'PROSPECTIVE_BASELINE_OUTPUT_REQUIRED');
+    writeFileSync(env.PROSPECTIVE_BASELINE_OUTPUT, JSON.stringify(boundary, null, 2) + '\n',
+      { flag: 'wx', mode: 0o600 });
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY,
+      `Prospective recovery baseline captured read-only.\n\n- Target SHA: \`${boundary.targetSha}\`\n- Render deployment: \`${boundary.render.deploymentId}\` (${boundary.render.sourceSha}, ${boundary.render.status})\n- API: ${boundary.health.status}; database/Redis/key store healthy; payments ${boundary.health.paymentAvailability}\n- Vercel deployment: \`${boundary.vercel.deploymentId}\` (${boundary.vercel.sourceSha}, ${boundary.vercel.state})\n- Baseline SHA-256: \`${boundary.digest}\`\n- Historical release \`${boundary.historicalReleaseRunId}\` remains incomplete.\n`);
     return;
   }
   requireThat(mode === 'deploy' || mode === 'admit', 'RELEASE_MODE_INVALID');
@@ -1498,6 +1664,12 @@ export async function main(env, options = {}) {
   verifyCandidate(JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/candidate.json`)), q,
     readFileSync(`${env.CANDIDATE_DIR}/source.tar`),
     trustedSourceArchive);
+  if (prospectiveProof) {
+    let stored;
+    try { stored = JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/prospective-recovery.json`, 'utf8')); }
+    catch { throw new ReleaseFailure('PROSPECTIVE_AUTHORIZATION_ARTIFACT_REQUIRED'); }
+    requireThat(objectDigest(stored) === objectDigest(prospectiveProof), 'PROSPECTIVE_AUTHORIZATION_ARTIFACT_MISMATCH');
+  }
   policyDigest(policy);
   const readSource = options.readSourceDigest ?? (path => gitSourceDigest(env.SOURCE_DIR, q.sha, path));
   const evidence = await verifyGitHubEvidence(api, q, policy, readSource, options.now);

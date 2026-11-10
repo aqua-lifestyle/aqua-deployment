@@ -80,13 +80,16 @@ test('production job requires the validated false output, never raw qualificatio
   assert.match(workflow, /qualification_only: \$\{\{ steps\.candidate\.outputs\.qualification_only \}\}/);
   const production = workflow.split('\n  production:\n')[1];
   const condition = production.split('\n').find(line => line.trim().startsWith('if:')).trim();
-  assert.equal(condition, "if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' }}");
+  assert.equal(condition, "if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' && needs.candidate.outputs.prospective_mode != 'capture-baseline' }}");
   // The exact workflow expression permits only the controller's literal false.
   for (const output of ['true', '', 'unknown', undefined]) assert.notEqual(output, 'false');
-  const beforeProduction = workflow.split('\n  production:\n')[0];
-  assert.doesNotMatch(beforeProduction, /environment:/);
-  assert.deepEqual([...beforeProduction.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),
-    ['AQGREEN_EVIDENCE_READ_TOKEN', 'AQGREEN_EVIDENCE_READ_TOKEN', 'AQGREEN_EVIDENCE_READ_TOKEN']);
+  const beforeBaseline = workflow.split('\n  baseline:\n')[0];
+  const admission = workflow.split('\n  admission:\n')[1].split('\n  production:\n')[0];
+  assert.doesNotMatch(beforeBaseline, /environment:/);
+  assert.doesNotMatch(admission, /environment:|secrets\.(RENDER_API_KEY|VERCEL_TOKEN)/);
+  assert.deepEqual([...beforeBaseline.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]), ['AQGREEN_EVIDENCE_READ_TOKEN']);
+  assert.deepEqual([...admission.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),
+    ['AQGREEN_EVIDENCE_READ_TOKEN','AQGREEN_EVIDENCE_READ_TOKEN']);
 });
 
 test('qualification dispatch executes normal candidate/admission, retains a purpose-bound receipt and rejects deploy', async () => {
