@@ -103,12 +103,13 @@ export async function readGitHubArtifact(api, owner, descriptor, filename) {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-export async function verifyGitHubEvidence(api, qualified, policy, readSourceDigest, now = Date.now) {
+async function verifyGitHubEvidenceCore(api, qualified, policy, readSourceDigest, now, enforceFreshness) {
   await verifyApprovedDefinitions(policy, readSourceDigest);
   const run = await api.gh(`/actions/runs/${qualified.ciRunId}`);
   const time = now(), completed = Date.parse(run.updated_at);
   check(Number.isFinite(time) && Number.isFinite(completed) && completed <= time + 30_000 &&
-    completed >= time - policy.authorization.maxCiAgeSeconds * 1000, 'CI_EVIDENCE_STALE_OR_UNDATED');
+    (!enforceFreshness || completed >= time - policy.authorization.maxCiAgeSeconds * 1000),
+  'CI_EVIDENCE_STALE_OR_UNDATED');
   check(run.id === Number(qualified.ciRunId) && run.run_attempt === qualified.ciRunAttempt &&
     run.head_sha === qualified.sha && run.status === 'completed' && run.conclusion === 'success' &&
     run.event === 'push' && run.head_branch === 'main' && run.path === '.github/workflows/ci.yml' &&
@@ -138,6 +139,16 @@ export async function verifyGitHubEvidence(api, qualified, policy, readSourceDig
     policySha256: qualified.policySha256, inventorySha256: inventoryDigest,
     artifact, reportSha256: sha256(bytes), testsVerified: result.cases };
 }
+
+// Read-only prospective baseline capture still requires a real, timestamped,
+// immutable CI record and exact artifact integrity. It intentionally does not
+// apply the deployment freshness window; deployment admission uses the strict
+// verifier below and retains the existing policy age bound.
+export const verifyGitHubEvidenceForCapture = (api, qualified, policy, readSourceDigest, now = Date.now) =>
+  verifyGitHubEvidenceCore(api, qualified, policy, readSourceDigest, now, false);
+
+export const verifyGitHubEvidence = (api, qualified, policy, readSourceDigest, now = Date.now) =>
+  verifyGitHubEvidenceCore(api, qualified, policy, readSourceDigest, now, true);
 
 const receiptBindings = ['repository', 'sha', 'ciRunId', 'ciRunAttempt', 'executorRepository', 'executorSha',
   'releaseRunId', 'releaseRunAttempt', 'policySha256', 'environment', 'profile',

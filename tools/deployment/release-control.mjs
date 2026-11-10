@@ -13,7 +13,7 @@ import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseD
 import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateMigrationDelta,
   SchemaFirstDenied, isCleanStartSchemaKind, completedMigration55PolicyKind } from './commission-schema-first.mjs';
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
-  gitSourceDigest, verifyGitHubEvidence, createGitHubAdmission, validateGitHubAdmission,
+  gitSourceDigest, verifyGitHubEvidence, verifyGitHubEvidenceForCapture, createGitHubAdmission, validateGitHubAdmission,
   readGitHubArtifact, readAuditFile, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
 import { HistoricalReconciliationDenied, isReconciledHistoricalRun, validateHistoricalContext,
   validateHistoricalArtifact, validateHistoricalAudit } from './historical-release-reconciliation.mjs';
@@ -1647,7 +1647,7 @@ export async function main(env, options = {}) {
     policyDigest(policy);
     const captureSource = options.readSourceDigest ?? (path => gitSourceDigest(env.SOURCE_DIR, q.sha, path));
     markBaselinePhase('github-evidence');
-    await verifyGitHubEvidence(api, q, policy, captureSource, options.now);
+    await verifyGitHubEvidenceForCapture(api, q, policy, captureSource, options.now);
     markBaselinePhase('infrastructure-validation');
     await validateInfrastructure(api, q, policy);
     markBaselinePhase('candidate-provenance');
