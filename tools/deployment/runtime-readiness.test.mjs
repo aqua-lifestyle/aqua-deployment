@@ -122,6 +122,13 @@ test('OIDC stays within the protected baseline and provider release jobs',()=>{
   assert.match(baseline,/AQGREEN_EVIDENCE_READ_TOKEN: \$\{\{ secrets\.AQGREEN_EVIDENCE_READ_TOKEN \}\}/);
   assert.match(baseline,/prospective_mode == 'capture-baseline'/);
   assert.match(baseline,/node tools\/deployment\/release-control\.mjs capture-baseline/);
+  assert.match(baseline,/D10_RUNTIME_EVIDENCE_OUTPUT: \$\{\{ runner\.temp \}\}\/d10-runtime-evidence\.json/);
+  const runtimeArtifact=baseline.slice(baseline.indexOf('Retain authenticated D10 runtime evidence independently'),
+    baseline.indexOf('id: upload'));
+  assert.match(runtimeArtifact,/if: always\(\)/);
+  assert.match(runtimeArtifact,/name: d10-runtime-readiness-\$\{\{ inputs\.sha \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
+  assert.match(runtimeArtifact,/if-no-files-found: ignore/);
+  assert.match(runtimeArtifact,/retention-days: 90/);
   assert.match(production,/id-token: write/);assert.match(production,/environment: production-release/);
   assert.match(production,/qualification_only == 'false'/);
   assert.match(production,/prospective_mode != 'capture-baseline'/);

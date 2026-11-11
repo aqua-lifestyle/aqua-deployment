@@ -1641,6 +1641,7 @@ export async function main(env, options = {}) {
   if (mode === 'capture-baseline') {
     requireThat(q.prospectiveMode === 'capture-baseline' && q.qualificationOnly,
       'PROSPECTIVE_BASELINE_MUST_BE_READ_ONLY');
+    requireThat(typeof env.D10_RUNTIME_EVIDENCE_OUTPUT === 'string', 'D10_RUNTIME_EVIDENCE_OUTPUT_REQUIRED');
     markBaselinePhase('candidate-validation');
     verifyCandidate(JSON.parse(readFileSync(`${env.CANDIDATE_DIR}/candidate.json`)), q,
       readFileSync(`${env.CANDIDATE_DIR}/source.tar`), sourceArchive(q.sha));
@@ -1663,7 +1664,10 @@ export async function main(env, options = {}) {
     const repository = await api.gh('');
     const boundary = await captureProspectiveBaseline(api, q, run, { validateRender,
       validateVercel, validateHealth, deploymentHistory, repositoryId: repository.id, now: options.now,
-      onPhase: markBaselinePhase });
+      onPhase: markBaselinePhase, onD10RuntimeEvidence: evidence => {
+        writeFileSync(env.D10_RUNTIME_EVIDENCE_OUTPUT, JSON.stringify(evidence, null, 2) + '\n',
+          { flag: 'wx', mode: 0o600 });
+      } });
     markBaselinePhase('baseline-artifact');
     requireThat(typeof env.PROSPECTIVE_BASELINE_OUTPUT === 'string', 'PROSPECTIVE_BASELINE_OUTPUT_REQUIRED');
     writeFileSync(env.PROSPECTIVE_BASELINE_OUTPUT, JSON.stringify(boundary, null, 2) + '\n',
