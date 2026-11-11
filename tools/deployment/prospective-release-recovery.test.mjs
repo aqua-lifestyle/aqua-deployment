@@ -3,8 +3,8 @@ import { test } from 'node:test';
 import { runtimeSettings } from './runtime-readiness.mjs';
 import { admissionJobName, ReleaseFailure, safeBaselineDiagnostic, targets, validateAdmissionJob, validateDispatchInputs } from './release-control.mjs';
 import { captureProspectiveBaseline, classifyPinnedIncompleteAttempt, createProspectiveAuthorization,
-  digest, ProspectiveBaselineDenied, prospectiveBaselinePhases, prospectiveRecovery, prospectiveSettingKeys, validateProspectiveAuthorization,
-  validateProspectiveBaseline } from './prospective-release-recovery.mjs';
+  digest, ProspectiveBaselineDenied, prospectiveBaselinePhases, prospectiveRecovery, prospectiveSettingKeys,
+  validateD10RuntimeEvidence, validateProspectiveAuthorization, validateProspectiveBaseline } from './prospective-release-recovery.mjs';
 
 const now = Date.parse('2026-11-09T18:00:00.000Z');
 const owner = { login: 'aqualifestyleclub', id: 307076734 };
@@ -100,15 +100,54 @@ test('read-only baseline requires exact authenticated D10 runtime bindings befor
     value => { value.body.version = 1; delete value.body.d10Bindings; },
     value => { value.body.d10Bindings.intendedBuildId = oldSha; }
   ]) {
-    const f = providerFixture();
+    const f = providerFixture(); let retained = false;
     f.api.readiness = async sourceSha => { const value = runtimeReadiness(sourceSha); alter(value); return value; };
-    await assert.rejects(captureProspectiveBaseline(f.api, candidate, run, validators));
+    await assert.rejects(captureProspectiveBaseline(f.api, candidate, run, { ...validators,
+      onD10RuntimeEvidence: () => { retained = true; } }));
+    assert.equal(retained, false);
     assert.deepEqual(f.calls, []);
   }
   const f = providerFixture();
   f.api.readiness = async () => { throw new Error('OIDC unavailable'); };
-  await assert.rejects(captureProspectiveBaseline(f.api, candidate, run, validators));
+  let retained = false;
+  await assert.rejects(captureProspectiveBaseline(f.api, candidate, run, { ...validators,
+    onD10RuntimeEvidence: () => { retained = true; } }));
+  assert.equal(retained, false);
   assert.deepEqual(f.calls, []);
+});
+
+test('validated D10 evidence is retained before Vercel checks and survives later Vercel failure', async () => {
+  const f = providerFixture();
+  f.api.vercel = async route => {
+    f.calls.push(['vercel', route, undefined]);
+    if (route === `/v9/projects/${targets.vercel.id}`) return { id: targets.vercel.id,
+      accountId: targets.vercel.teamId, name: targets.vercel.name, rootDirectory: targets.vercel.rootDirectory,
+      nodeVersion: '24.x', autoAssignCustomDomains: true, targets: { production: { id: 'dpl_current1' } } };
+    throw new Error('synthetic Vercel production record unavailable');
+  };
+  let retained;
+  await assert.rejects(captureProspectiveBaseline(f.api, candidate, run, { ...validators,
+    onD10RuntimeEvidence: evidence => { retained = evidence; } }), /synthetic Vercel production record unavailable/);
+  assert.ok(retained, 'authenticated D10 evidence is emitted before Vercel validation');
+  const expected = { applicationSha: sha, applicationCiRunId: candidate.ciRunId,
+    applicationCiRunAttempt: candidate.ciRunAttempt, captureRunId: String(run.id),
+    captureRunAttempt: run.run_attempt, executorSha, };
+  assert.equal(validateD10RuntimeEvidence(retained, expected, now), retained);
+  assert.deepEqual(retained.runtimeReadiness, runtimeReadiness(sha).body);
+  assert.ok(f.calls.findIndex(([provider]) => provider === 'readiness') <
+    f.calls.findIndex(([provider]) => provider === 'vercel'));
+
+  for (const [alter, expectation] of [
+    [evidence => { evidence.applicationSha = oldSha; }, /PROSPECTIVE_D10_RUNTIME_EVIDENCE_UNVERIFIABLE/],
+    [evidence => { evidence.runtimeReadiness.d10Bindings.intendedBuildId = oldSha; }, /PROSPECTIVE_D10_RUNTIME_EVIDENCE_UNVERIFIABLE/],
+    [evidence => { evidence.captureRunAttempt++; }, /PROSPECTIVE_D10_RUNTIME_EVIDENCE_UNVERIFIABLE/],
+    [evidence => { evidence.digest = '0'.repeat(64); }, /PROSPECTIVE_D10_RUNTIME_EVIDENCE_DIGEST_MISMATCH/]
+  ]) {
+    const corrupted = structuredClone(retained); alter(corrupted);
+    assert.throws(() => validateD10RuntimeEvidence(corrupted, expected, now), expectation);
+  }
+  assert.throws(() => validateD10RuntimeEvidence(retained, { ...expected, executorSha: oldSha }, now),
+    /PROSPECTIVE_D10_RUNTIME_EVIDENCE_UNVERIFIABLE/);
 });
 
 test('baseline denial keeps only the allowlisted code and fixed phase for safe diagnosis', async () => {

@@ -23,7 +23,8 @@ export const prospectiveBaselinePhases = Object.freeze([
 const prospectiveBaselineFailureCodes = new Set([
   'PROSPECTIVE_AUTHORIZATION_DIGEST_MISMATCH', 'PROSPECTIVE_BASELINE_CONTEXT_REQUIRED',
   'PROSPECTIVE_BASELINE_DIGEST_MISMATCH', 'PROSPECTIVE_BASELINE_UNVERIFIABLE',
-  'PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED', 'PROSPECTIVE_FINANCIAL_FENCE_NOT_HELD',
+  'PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED', 'PROSPECTIVE_D10_RUNTIME_EVIDENCE_DIGEST_MISMATCH',
+  'PROSPECTIVE_D10_RUNTIME_EVIDENCE_UNVERIFIABLE', 'PROSPECTIVE_FINANCIAL_FENCE_NOT_HELD',
   'PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED', 'PROSPECTIVE_OWNER_AUTHORIZATION_REQUIRED',
   'PROSPECTIVE_PAYMENT_FENCE_NOT_HELD', 'PROSPECTIVE_RENDER_BASELINE_UNVERIFIABLE',
   'PROSPECTIVE_RENDER_OPERATION_PENDING', 'PROSPECTIVE_RUNTIME_SETTING_UNVERIFIED',
@@ -45,6 +46,53 @@ const canonical = value => value && typeof value === 'object' ?
   (Array.isArray(value) ? value.map(canonical) :
     Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))) : value;
 export const digest = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+
+export function createD10RuntimeEvidence(runtimeReadiness, candidate, run, now = Date.now()) {
+  try { validateReadiness(runtimeReadiness, candidate?.sha); }
+  catch { deny('PROSPECTIVE_RUNTIME_READINESS_UNVERIFIED', 'runtime-readiness'); }
+  if (candidate.sha !== prospectiveRecovery.targetSha || runtimeReadiness.body.version !== 2 ||
+      !runtimeReadiness.body.d10Bindings || !positiveId(candidate.ciRunId) ||
+      !Number.isSafeInteger(candidate.ciRunAttempt) || candidate.ciRunAttempt < 1 ||
+      !positiveId(String(run?.id)) || !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1 ||
+      run.head_sha !== candidate.executorSha || run.actor?.login !== prospectiveRecovery.owner.login ||
+      run.actor?.id !== prospectiveRecovery.owner.id || !Number.isFinite(now))
+    deny('PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED', 'runtime-readiness');
+  const body = { contract: 'aqua.d10-runtime-readiness-evidence', version: 1,
+    applicationSha: candidate.sha, applicationCiRunId: candidate.ciRunId,
+    applicationCiRunAttempt: candidate.ciRunAttempt, captureRunId: String(run.id),
+    captureRunAttempt: run.run_attempt, executorSha: candidate.executorSha,
+    capturedByLogin: run.actor.login, capturedById: run.actor.id,
+    capturedAt: new Date(now).toISOString(), runtimeReadiness: runtimeReadiness.body };
+  return Object.freeze({ ...body, digest: digest(body) });
+}
+
+export function validateD10RuntimeEvidence(evidence, expected, now = Date.now()) {
+  const keys = ['contract', 'version', 'applicationSha', 'applicationCiRunId', 'applicationCiRunAttempt',
+    'captureRunId', 'captureRunAttempt', 'executorSha', 'capturedByLogin', 'capturedById',
+    'capturedAt', 'runtimeReadiness', 'digest'];
+  if (!evidence || Object.keys(evidence).sort().join(',') !== keys.sort().join(',') ||
+      evidence.contract !== 'aqua.d10-runtime-readiness-evidence' || evidence.version !== 1 ||
+      evidence.applicationSha !== expected?.applicationSha || evidence.applicationSha !== prospectiveRecovery.targetSha ||
+      evidence.applicationCiRunId !== expected?.applicationCiRunId || !positiveId(evidence.applicationCiRunId) ||
+      evidence.applicationCiRunAttempt !== expected?.applicationCiRunAttempt ||
+      !Number.isSafeInteger(evidence.applicationCiRunAttempt) || evidence.applicationCiRunAttempt < 1 ||
+      evidence.captureRunId !== expected?.captureRunId || !positiveId(evidence.captureRunId) ||
+      evidence.captureRunAttempt !== expected?.captureRunAttempt ||
+      !Number.isSafeInteger(evidence.captureRunAttempt) || evidence.captureRunAttempt < 1 ||
+      evidence.executorSha !== expected?.executorSha || !sha.test(evidence.executorSha ?? '') ||
+      evidence.capturedByLogin !== prospectiveRecovery.owner.login || evidence.capturedById !== prospectiveRecovery.owner.id ||
+      !Number.isFinite(Date.parse(evidence.capturedAt)) || !Number.isFinite(now) ||
+      Date.parse(evidence.capturedAt) > now + 30_000 ||
+      !evidence.runtimeReadiness || !digestPattern.test(evidence.digest ?? ''))
+    deny('PROSPECTIVE_D10_RUNTIME_EVIDENCE_UNVERIFIABLE', 'baseline-validation');
+  try { validateReadiness({ status: 200, body: evidence.runtimeReadiness }, evidence.applicationSha); }
+  catch { deny('PROSPECTIVE_D10_RUNTIME_EVIDENCE_UNVERIFIABLE', 'baseline-validation'); }
+  if (evidence.runtimeReadiness.version !== 2 || !evidence.runtimeReadiness.d10Bindings)
+    deny('PROSPECTIVE_D10_RUNTIME_EVIDENCE_UNVERIFIABLE', 'baseline-validation');
+  const { digest: supplied, ...body } = evidence;
+  if (digest(body) !== supplied) deny('PROSPECTIVE_D10_RUNTIME_EVIDENCE_DIGEST_MISMATCH', 'baseline-validation');
+  return Object.freeze(evidence);
+}
 
 export const prospectiveSettingKeys = Object.freeze([...Object.keys(runtimeSettings), 'App__AutomaticPayouts__Enabled']);
 const heldSettings = Object.freeze({
@@ -151,7 +199,7 @@ export function createProspectiveAuthorization(baseline, release, now = Date.now
 
 export async function captureProspectiveBaseline(api, candidate, run, options) {
   const { validateRender, validateVercel, validateHealth, deploymentHistory, now = Date.now(),
-    onPhase = () => {} } = options;
+    onPhase = () => {}, onD10RuntimeEvidence = () => {} } = options;
   let phase = 'release-context';
   const setPhase = next => {
     if (!prospectiveBaselinePhases.includes(next)) throw new Error('PROSPECTIVE_BASELINE_DIAGNOSTIC_INVALID');
@@ -170,6 +218,8 @@ export async function captureProspectiveBaseline(api, candidate, run, options) {
   catch { reject('PROSPECTIVE_RUNTIME_READINESS_UNVERIFIED'); }
   if (runtimeReadiness.body.version !== 2 || !runtimeReadiness.body.d10Bindings)
     reject('PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED');
+  const d10RuntimeEvidence = createD10RuntimeEvidence(runtimeReadiness, candidate, run, now);
+  onD10RuntimeEvidence(d10RuntimeEvidence);
   const settings = [];
   setPhase('render-settings');
   for (const key of prospectiveSettingKeys) {

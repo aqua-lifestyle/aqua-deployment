@@ -142,8 +142,17 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           SOURCE_DIR: ${{ runner.temp }}/source-git
           CANDIDATE_DIR: ${{ runner.temp }}/candidate
+          D10_RUNTIME_EVIDENCE_OUTPUT: ${{ runner.temp }}/d10-runtime-evidence.json
           PROSPECTIVE_BASELINE_OUTPUT: ${{ runner.temp }}/report.json
         run: node tools/deployment/release-control.mjs capture-baseline
+      - name: Retain authenticated D10 runtime evidence independently
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: d10-runtime-readiness-${{ inputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/d10-runtime-evidence.json
+          if-no-files-found: ignore
+          retention-days: 90
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         id: upload
         with:
