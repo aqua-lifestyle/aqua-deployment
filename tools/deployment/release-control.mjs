@@ -34,6 +34,8 @@ import { verifyHeldRecovery } from './held-recovery-reconciliation.mjs';
 import { verifyOwnerRenderRedeployment, validateOwnerRenderProof } from './root-unbound-render-reconciliation.mjs';
 import { prospectiveRecovery, captureProspectiveBaseline, createProspectiveAuthorization,
   validateProspectiveAuthorization, validateProspectiveBaseline,
+  validateProspectiveFrontendComparison,
+  validatePinnedHistoricalIncidentEvidence,
   classifyPinnedIncompleteAttempt, ProspectiveBaselineDenied, prospectiveBaselinePhases,
   digest as prospectiveDigest } from './prospective-release-recovery.mjs';
 
@@ -204,6 +206,15 @@ export async function loadProspectiveRecovery(api, inputs, qualified, releaseRun
     boundary = JSON.parse(bytes.toString('utf8'));
   } catch { throw new ReleaseFailure('PROSPECTIVE_BASELINE_ARTIFACT_UNVERIFIABLE'); }
   validateProspectiveBaseline(boundary, qualified.sha, now);
+  const frontendComparison = await api.gh(`/compare/${boundary.frontend.comparisonBaseSha}...${qualified.sha}`);
+  const frontendDelta = validateProspectiveFrontendComparison(frontendComparison,
+    boundary.frontend.comparisonBaseSha, qualified.sha);
+  requireThat(frontendDelta.totalCommits === boundary.frontend.totalCommits &&
+    frontendDelta.changedFileCount === boundary.frontend.changedFileCount &&
+    frontendDelta.changedFilesSha256 === boundary.frontend.changedFilesSha256 &&
+    frontendDelta.frontendChanged === boundary.frontend.frontendChanged &&
+    boundary.frontend.reuseBaseline === !frontendDelta.frontendChanged,
+  'PROSPECTIVE_BASELINE_IDENTITY_MISMATCH');
   requireThat(boundary.captureRunId === String(run.id) && boundary.captureRunAttempt === run.run_attempt &&
     boundary.executorSha === run.head_sha && boundary.ciRunId === qualified.ciRunId &&
     boundary.ciRunAttempt === qualified.ciRunAttempt && boundary.digest === inputs.recoveryBaselineSha256,
@@ -593,7 +604,25 @@ export function clients(env, fetcher = fetch, reportGitHubRead = row => console.
     web: async () => {
       try { const r = await fetcher(targets.vercel.productionUrl, { redirect: 'error',
         signal: AbortSignal.timeout(30_000), headers: { 'Cache-Control': 'no-cache' } });
-        requireThat(r.status === 200, 'WEB_READINESS_FAILED');
+        return r.status;
+      } catch { throw new ReleaseFailure('WEB_READINESS_FAILED'); }
+    },
+    webHealth: async sha => {
+      try {
+        const url = new URL('/api/backend/api/health', targets.vercel.productionUrl);
+        const response = await fetcher(url.href, { redirect: 'error', signal: AbortSignal.timeout(15_000),
+          headers: { 'Cache-Control': 'no-store' } });
+        if (response.status !== 200) throw new Error();
+        const body = await response.json();
+        const health = body?.result ?? body;
+        const result = { status: health?.status, buildId: health?.buildId,
+          databaseStatus: health?.databaseStatus, redisStatus: health?.redisStatus,
+          dataProtectionKeyStoreStatus: health?.dataProtectionKeyStoreStatus,
+          paymentAvailability: health?.paymentAvailability };
+        if (result.status !== 'Healthy' || result.buildId !== sha || result.databaseStatus !== 'Healthy' ||
+            result.redisStatus !== 'Healthy' || result.dataProtectionKeyStoreStatus !== 'Healthy' ||
+            result.paymentAvailability !== 'Held') throw new Error();
+        return result;
       } catch { throw new ReleaseFailure('WEB_READINESS_FAILED'); }
     }
   };
@@ -643,7 +672,8 @@ export function createAuditWriter(identity, emit) {
       'startingRenderDeployId', 'startingRenderSha', 'startingBackendBindingSha256',
       'baselineRenderDeployId', 'baselineVercelDeployId', 'baselineRenderSha', 'baselineVercelSha',
       'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256', 'schemaFirstEvidenceSha256', 'recoveryMode',
-      'authorizationId', 'evidenceSha256', 'inventorySha256', 'evidenceArtifactId', 'vercelSourceProof'])
+      'authorizationId', 'evidenceSha256', 'inventorySha256', 'evidenceArtifactId', 'vercelSourceProof',
+      'vercelSourceProvenance', 'vercelBaselineReused'])
       if (row[key] !== undefined) known[key] = row[key];
     if (identity.prospectiveRecovery) {
       known.prospectiveRecovery = { baselineRunId: identity.prospectiveRecovery.boundary.captureRunId,
@@ -673,7 +703,7 @@ export function validateResumeReceipt(rows, frozen) {
     attempt = row.releaseRunAttempt;
     requireThat(['evidence-selected', 'baseline-selected', 'admitted', 'render-requesting', 'render-requested',
       'render-ready', 'render-reconciled', 'vercel-files-requesting', 'vercel-files-uploaded', 'vercel-requesting', 'vercel-requested', 'verified', 'failed',
-      'provider-read'].includes(row.phase),
+      'vercel-reused', 'provider-read'].includes(row.phase),
       'RESUME_RECEIPT_UNVERIFIABLE');
     requireThat(row.phase !== 'provider-read' || providerReadScopes.has(row.scope), 'RESUME_RECEIPT_UNVERIFIABLE');
     requireThat(row.phase !== 'verified', 'RELEASE_ALREADY_VERIFIED');
@@ -722,7 +752,8 @@ export function validateResumeReceipt(rows, frozen) {
       'renderOriginRunId', 'renderOriginExecutorSha',
       'startingRenderDeployId', 'startingRenderSha', 'startingBackendBindingSha256',
       'baselineRenderDeployId', 'baselineRenderSha', 'baselineVercelDeployId', 'baselineVercelSha',
-      'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256', 'schemaFirstEvidenceSha256', 'recoveryMode']) {
+      'baselineVercelSourceProvenance', 'firstReleaseRecoveryEvidenceSha256', 'schemaFirstEvidenceSha256', 'recoveryMode',
+      'vercelSourceProvenance', 'vercelBaselineReused']) {
       if (row[key] === undefined) continue;
       requireThat(known[key] === undefined || known[key] === row[key], 'CONTRADICTORY_RESUME_RECEIPT');
       known[key] = row[key];
@@ -733,8 +764,10 @@ export function validateResumeReceipt(rows, frozen) {
   requireThat(pending.size === 0, 'AMBIGUOUS_PRIOR_REQUEST_REQUIRES_RECONCILIATION');
   for (const provider of ['render', 'vercel']) {
     const id = known[`${provider}DeployId`], attempt = known[`${provider}ReleaseRunAttempt`];
+    const reusedLegacy = provider === 'vercel' && known.vercelBaselineReused === true &&
+      ['GIT_SOURCE','UNVERIFIED_LEGACY'].includes(known.vercelSourceProvenance);
     requireThat(id === undefined ? attempt === undefined :
-      (positiveAttempt(attempt) && attempt < frozen.releaseRunAttempt &&
+      ((positiveAttempt(attempt) && attempt < frozen.releaseRunAttempt || reusedLegacy && attempt === undefined) &&
         (provider === 'render' ? /^dep-[a-z0-9]+$/ : /^dpl_[A-Za-z0-9]+$/).test(id)),
     'RESUME_RECEIPT_UNVERIFIABLE');
   }
@@ -865,7 +898,29 @@ export async function evidencePlan(api, candidate, policy) {
       // as a successful check with no deployment, not as a failed run/predecessor.
       if (past?.conclusion === 'success' && production.conclusion === 'skipped') continue;
       if (candidate.prospectiveRecovery && String(run.id) === prospectiveRecovery.incompleteReleaseRunId) {
-        const classified = classifyPinnedIncompleteAttempt(past, attempt, production, productionDeployStep(production.name));
+        const incident = candidate.prospectiveRecovery.boundary.historicalIncident;
+        validatePinnedHistoricalIncidentEvidence(incident);
+        const observed = incident.attempts[attempt - 1];
+        requireThat(observed && observed.runAttempt === attempt && observed.runConclusion === past?.conclusion &&
+          observed.productionConclusion === production.conclusion && past.head_sha === incident.executorSha,
+        'PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED');
+        let classified;
+        if (attempt === 1) classified = classifyPinnedIncompleteAttempt(past, attempt, production,
+          productionDeployStep(production.name), incident);
+        else {
+          requireThat(attempt === 2 || attempt === 3, 'PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED');
+          if (attempt === 2) requireThat(production.conclusion === 'failure' &&
+            production.steps?.filter(step => step.conclusion === 'failure').length === 1 &&
+            production.steps.find(step => step.conclusion === 'failure')?.name === prospectiveRecovery.historicalMutationStep,
+          'PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED');
+          else requireThat(production.conclusion === 'skipped', 'PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED');
+          classified = Object.freeze({ runId: prospectiveRecovery.incompleteReleaseRunId,
+            outcome: 'incomplete', runAttempt: attempt, runConclusion: past.conclusion,
+            productionConclusion: production.conclusion, executorSha: past.head_sha,
+            auditArtifacts: incident.auditArtifacts.attempt1 === 'unavailable' &&
+              incident.auditArtifacts.attempt2 === 'unavailable' ? 'unavailable' : 'unexpected' });
+          requireThat(classified.auditArtifacts === 'unavailable', 'PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED');
+        }
         (prospectiveHistoricalRelease ??= { runId: String(run.id), outcome: 'incomplete', attempts: [] })
           .attempts.push(classified);
         continue;
@@ -980,12 +1035,25 @@ export function validateBaselineReceipt(rows, descriptor, candidate) {
       (external ? row.executorSha === descriptor.sha : row.sha === descriptor.sha) && row.policySha256 === candidate.policySha256,
     'BASELINE_RECEIPT_PROVENANCE_MISMATCH');
   }
-  requireThat(last.phase === 'verified' && last.renderSha === last.sha && last.vercelSha === last.sha && rows.filter(r => r.phase === 'verified').length === 1 &&
+  const verifiedVercel = last.vercelSha === last.sha || (last.vercelBaselineReused === true &&
+    last.vercelSourceProvenance === 'GIT_SOURCE' && shaPattern.test(last.vercelSha ?? '') &&
+    last.baselineVercelSourceProvenance === 'GIT_SOURCE') ||
+    (last.vercelSha === undefined && last.vercelSourceProvenance === 'UNVERIFIED_LEGACY' &&
+      last.vercelBaselineReused === true && last.baselineVercelSourceProvenance === 'UNVERIFIED_LEGACY');
+  requireThat(last.phase === 'verified' && last.renderSha === last.sha && verifiedVercel &&
+    rows.filter(r => r.phase === 'verified').length === 1 &&
     /^dep-[a-z0-9]+$/.test(last.renderDeployId) && /^dpl_[A-Za-z0-9]+$/.test(last.vercelDeployId) &&
-    ['renderReleaseRunAttempt', 'vercelReleaseRunAttempt'].every(key =>
-      positiveAttempt(last[key]) && last[key] <= last.releaseRunAttempt), 'VERIFIED_BASELINE_RECEIPT_REQUIRED');
+    positiveAttempt(last.renderReleaseRunAttempt) && last.renderReleaseRunAttempt <= last.releaseRunAttempt &&
+    (last.vercelBaselineReused === true ? last.vercelReleaseRunAttempt === undefined :
+      positiveAttempt(last.vercelReleaseRunAttempt) && last.vercelReleaseRunAttempt <= last.releaseRunAttempt),
+    'VERIFIED_BASELINE_RECEIPT_REQUIRED');
   for (const key of ['renderDeployId', 'vercelDeployId', 'renderReleaseRunAttempt', 'vercelReleaseRunAttempt'])
     requireThat(rows.every(row => row[key] === undefined || row[key] === last[key]), 'CONTRADICTORY_BASELINE_RECEIPT');
+  if (last.vercelBaselineReused === true)
+    requireThat(last.vercelSourceProvenance === last.baselineVercelSourceProvenance &&
+      ['GIT_SOURCE','UNVERIFIED_LEGACY'].includes(last.vercelSourceProvenance) && rows.every(row =>
+        row.baselineVercelSourceProvenance === undefined || row.baselineVercelSourceProvenance === last.baselineVercelSourceProvenance),
+      'VERIFIED_BASELINE_RECEIPT_REQUIRED');
   if (last.renderReconciliation) {
     validatePartialRenderOrigin(last, targets);
     requireThat(rows.every(row => ['renderOriginRunId', 'renderOriginExecutorSha', 'renderReconciliation'].every(key =>
@@ -1021,7 +1089,9 @@ export function validateBaselineReceipt(rows, descriptor, candidate) {
       objectDigest(row.ownerRenderRedeploy) === objectDigest(last.ownerRenderRedeploy)), 'CONTRADICTORY_BASELINE_RECEIPT');
   } else requireThat(rows.every(row => row.ownerRenderRedeploy === undefined), 'VERIFIED_BASELINE_RECEIPT_REQUIRED');
   return Object.freeze({ renderDeployId: last.renderDeployId, renderSha: last.sha,
-    vercelDeployId: last.vercelDeployId, vercelSha: last.sha, origin: last });
+    vercelDeployId: last.vercelDeployId, ...(last.vercelSha ? { vercelSha: last.vercelSha } : {}),
+    vercelSourceProvenance: last.vercelSourceProvenance ?? 'GIT_SOURCE',
+    vercelBaselineReused: last.vercelBaselineReused === true, origin: last });
 }
 
 export async function waitFor(read, state, good, pending, options) {
@@ -1210,6 +1280,9 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     try {
       readScope('readiness'); const response = await api.readiness(sha); validateReadiness(response, sha);
       requireThat(sha !== qualified.sha || ![postResetCandidateSha,minimumLiveCandidateSha,d10OneTimeCandidateSha,verifiedHoldCandidateSha,unusedExpiryCandidateSha].includes(qualified.sha) || response.body.version === 2, 'D10_NATIVE_READINESS_REQUIRED');
+      if (prospective && sha === qualified.sha)
+        requireThat(response.body.version === 2 && response.body.d10Bindings,
+          'PROSPECTIVE_D10_RUNTIME_BINDINGS_REQUIRED');
       if (sha === qualified.sha && response.body.version === 2) {
         requireThat(!nativeBindings || objectDigest(nativeBindings) === objectDigest(response.body.d10Bindings), 'D10_RUNTIME_BINDINGS_CHANGED');
         nativeBindings = response.body.d10Bindings;
@@ -1224,13 +1297,53 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     readScope('web-readiness');
     return verifyObservedFileDeployment(api, web, proof, targets.vercel, meta, options.publicFetch);
   };
+  const verifyReusedFrontend = async expectedBackendSha => {
+    requireThat(prospective && prospective.boundary.frontend.reuseBaseline === true,
+      'PROSPECTIVE_LEGACY_FRONTEND_REUSE_NOT_AUTHORIZED');
+    readScope('vercel-project');
+    const currentProject = await api.vercel(projectPath);
+    validateVercel(currentProject, repository.id);
+    requireThat(currentProject.targets?.production?.id === baselineProof.vercelDeployId,
+      'VERCEL_BASELINE_DRIFT');
+    readScope('vercel-deployment');
+    const currentWeb = await api.vercel(`/v13/deployments/${baselineProof.vercelDeployId}`);
+    requireThat(currentWeb.id === baselineProof.vercelDeployId && currentWeb.projectId === targets.vercel.id &&
+      currentWeb.target === 'production' && currentWeb.readyState === 'READY' && !currentWeb.aliasError &&
+      (baselineProof.vercelSourceProvenance === 'UNVERIFIED_LEGACY' ?
+        (currentWeb.gitSource === undefined || currentWeb.gitSource === null) :
+        currentWeb.gitSource?.sha === baselineProof.vercelSha &&
+          String(currentWeb.gitSource?.repoId) === String(repository.id)),
+    'VERCEL_BASELINE_UNVERIFIABLE');
+    const host = new URL(targets.vercel.productionUrl).hostname;
+    readScope('vercel-aliases');
+    const mapping = await api.vercel(`/v2/deployments/${currentWeb.id}/aliases`);
+    const aliases = Array.isArray(mapping?.aliases) ? mapping.aliases.filter(row => row.alias === host) : [];
+    requireThat(aliases.length === 1 && !aliases[0].redirect &&
+      (aliases[0].deploymentId === undefined || aliases[0].deploymentId === currentWeb.id) &&
+      (aliases[0].projectId === undefined || aliases[0].projectId === targets.vercel.id),
+    'VERCEL_PUBLIC_ALIAS_NOT_BOUND_TO_DEPLOYMENT');
+    readScope('vercel-domain');
+    const domain = await api.vercel(`${projectPath}/domains/${host}`);
+    requireThat(domain.name === host && domain.projectId === targets.vercel.id && domain.verified === true,
+      'VERCEL_PUBLIC_DOMAIN_UNVERIFIED');
+    readScope('web-readiness');
+    requireThat(await api.web() === 200, 'WEB_READINESS_FAILED');
+    const health = await api.webHealth(expectedBackendSha);
+    requireThat(health?.status === 'Healthy' && health.buildId === expectedBackendSha &&
+      health.databaseStatus === 'Healthy' && health.redisStatus === 'Healthy' &&
+      health.dataProtectionKeyStoreStatus === 'Healthy' && health.paymentAvailability === 'Held',
+    'WEB_BACKEND_COMPATIBILITY_FAILED');
+    return currentWeb;
+  };
   // A verified predecessor remains authoritative after the first rollout. On the
   // first rollout, select the current exact provider pair automatically. On a
   // partial retry use the original immutable baseline, never the advanced live SHA.
   let baselineProof;
   if (prospective) baselineProof = { renderDeployId: prospective.boundary.render.deploymentId,
     renderSha: prospective.boundary.render.sourceSha, vercelDeployId: prospective.boundary.vercel.deploymentId,
-    vercelSha: prospective.boundary.vercel.sourceSha, vercelSourceProvenance: 'GIT_SOURCE' };
+    ...(prospective.boundary.vercel.sourceSha ? { vercelSha: prospective.boundary.vercel.sourceSha } : {}),
+    vercelSourceProvenance: prospective.boundary.vercel.sourceProvenance,
+    vercelBaselineReused: prospective.boundary.frontend.reuseBaseline };
   else if (plan.baseline) baselineProof = validateBaselineReceipt(options.baselineRows, plan.baseline, qualified);
   else {
     const baselineRow = options.receiptRows?.find(row => row.phase === 'baseline-selected') ?? partial?.baseline ?? acknowledged?.recoveryBaseline;
@@ -1273,8 +1386,8 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   const baselineFields = { baselineRenderDeployId: baselineProof.renderDeployId,
     baselineVercelDeployId: baselineProof.vercelDeployId, baselineRenderSha: baselineProof.renderSha,
     ...(baselineProof.vercelSha !== undefined ? { baselineVercelSha: baselineProof.vercelSha } : {}),
-    ...(firstRecovery ? { baselineVercelSourceProvenance: baselineProof.vercelSourceProvenance,
-      firstReleaseRecoveryEvidenceSha256: firstRecovery.evidenceSha256 } : {}) };
+    ...(prospective || firstRecovery ? { baselineVercelSourceProvenance: baselineProof.vercelSourceProvenance } : {}),
+    ...(firstRecovery ? { firstReleaseRecoveryEvidenceSha256: firstRecovery.evidenceSha256 } : {}) };
   report({ phase: 'baseline-selected', ...baselineFields,
     ...(ownerBackend ? { ownerRenderRedeploy: ownerBackend } : {}), ...(acknowledged ? {
     startingRenderDeployId: readyReuse ? prior.renderDeployId : acknowledged.renderDeployId,
@@ -1295,7 +1408,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   requireThat(oldWeb.id === baselineProof.vercelDeployId && oldWeb.projectId === targets.vercel.id &&
     oldWeb.target === 'production' && oldWeb.readyState === 'READY' && !oldWeb.aliasError &&
     (firstRecovery?.kind === nativeRecoveryPolicyKind ? validNativeHeldFrontend(firstRecovery, oldWeb) :
-      firstRecovery && baselineProof.vercelSourceProvenance === 'UNVERIFIED_LEGACY' ?
+      baselineProof.vercelSourceProvenance === 'UNVERIFIED_LEGACY' ?
       oldWeb.gitSource === undefined || oldWeb.gitSource === null : baselineProof.origin?.vercelSourceProof ? true :
       oldWeb.gitSource?.sha === baselineProof.vercelSha && String(oldWeb.gitSource?.repoId) === String(repository.id)),
     'ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED');
@@ -1315,6 +1428,8 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       oldWeb.meta?.aquaCiRunId === origin.ciRunId && oldWeb.meta?.aquaCiRunAttempt === String(origin.ciRunAttempt),
     'ROLLBACK_FRONTEND_PROVENANCE_UNVERIFIED');
   }
+  if (prospective?.boundary.frontend.reuseBaseline === true)
+    await verifyReusedFrontend(baselineProof.renderSha);
   readScope('github-compare');
   const compare = await api.gh(`/compare/${baseline.commit.id}...${qualified.sha}`);
   requireThat(compare.status === 'ahead' || compare.status === 'identical', 'SOURCE_NOT_BASELINE_DESCENDANT');
@@ -1431,6 +1546,40 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   await readVercelVariables();
   requireThat(project.targets?.production?.id === baselineProof.vercelDeployId ||
     (existingVercel && project.targets?.production?.id === existingVercel.id), 'VERCEL_BASELINE_DRIFT');
+  if (prospective?.boundary.frontend.reuseBaseline === true) {
+    requireThat(!existingVercel && !prior.vercelDeployId, 'PROSPECTIVE_LEGACY_FRONTEND_REUSE_NOT_AUTHORIZED');
+    readScope('vercel-deploy-history');
+    const beforeReuse = await deploymentHistory(api, 'vercel');
+    requireThat(beforeReuse.every(x => !activeVercel.has(x.state ?? x.readyState) &&
+      x.meta?.aquaCiRunId !== qualified.ciRunId && x.meta?.aquaSourceSha !== qualified.sha),
+    'VERCEL_CHANGED_BEFORE_REQUEST');
+    await verifyReusedFrontend(qualified.sha);
+    report({ phase: 'vercel-reused', vercelDeployId: baselineProof.vercelDeployId,
+      vercelSourceProvenance: baselineProof.vercelSourceProvenance, vercelBaselineReused: true,
+      ...(baselineProof.vercelSha ? { vercelSha: baselineProof.vercelSha } : {}) });
+    await guard();
+    await readRender();
+    readScope('health');
+    validateHealth(await api.health(), qualified.sha);
+    await readProtectedReadiness(qualified.sha);
+    readScope('render-deploy-history');
+    const finalRender = await deploymentHistory(api, 'render');
+    requireThat(finalRender.filter(x => x.status === 'live').length === 1 &&
+      finalRender.some(x => x.id === render.id && x.status === 'live' && x.commit?.id === qualified.sha) &&
+      finalRender.every(x => !activeRender.has(x.status)), 'RENDER_CHANGED_BEFORE_VERIFICATION');
+    await readRender();
+    const finalWeb = await verifyReusedFrontend(qualified.sha);
+    readScope('vercel-deploy-history');
+    const finalVercel = await deploymentHistory(api, 'vercel');
+    requireThat(finalVercel.every(x => !activeVercel.has(x.state ?? x.readyState) &&
+      x.meta?.aquaCiRunId !== qualified.ciRunId && x.meta?.aquaSourceSha !== qualified.sha) &&
+      finalWeb.id === baselineProof.vercelDeployId, 'VERCEL_CHANGED_BEFORE_VERIFICATION');
+    report({ phase: 'verified', sha: qualified.sha, renderSha: render.commit.id,
+      ...(baselineProof.vercelSha ? { vercelSha: baselineProof.vercelSha } : {}),
+      vercelSourceProvenance: baselineProof.vercelSourceProvenance, vercelBaselineReused: true,
+      renderDeployId: render.id, vercelDeployId: finalWeb.id });
+    return;
+  }
   if (!existingVercel) {
     if (firstRecovery) {
       readScope('render-deploy');
@@ -1663,7 +1812,8 @@ export async function main(env, options = {}) {
     markBaselinePhase('repository-read');
     const repository = await api.gh('');
     const boundary = await captureProspectiveBaseline(api, q, run, { validateRender,
-      validateVercel, validateHealth, deploymentHistory, repositoryId: repository.id, now: options.now,
+      validateVercel, validateHealth, deploymentHistory, repositoryId: repository.id,
+      vercelTarget: targets.vercel, now: options.now,
       onPhase: markBaselinePhase, onD10RuntimeEvidence: evidence => {
         writeFileSync(env.D10_RUNTIME_EVIDENCE_OUTPUT, JSON.stringify(evidence, null, 2) + '\n',
           { flag: 'wx', mode: 0o600 });
@@ -1673,7 +1823,7 @@ export async function main(env, options = {}) {
     writeFileSync(env.PROSPECTIVE_BASELINE_OUTPUT, JSON.stringify(boundary, null, 2) + '\n',
       { flag: 'wx', mode: 0o600 });
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY,
-      `Prospective recovery baseline captured read-only.\n\n- Target SHA: \`${boundary.targetSha}\`\n- Render deployment: \`${boundary.render.deploymentId}\` (${boundary.render.sourceSha}, ${boundary.render.status})\n- API: ${boundary.health.status}; database/Redis/key store healthy; payments ${boundary.health.paymentAvailability}\n- Vercel deployment: \`${boundary.vercel.deploymentId}\` (${boundary.vercel.sourceSha}, ${boundary.vercel.state})\n- Baseline SHA-256: \`${boundary.digest}\`\n- Historical release \`${boundary.historicalReleaseRunId}\` remains incomplete.\n`);
+      `Prospective recovery baseline captured read-only.\n\n- Target SHA: \`${boundary.targetSha}\`\n- Render deployment: \`${boundary.render.deploymentId}\` (${boundary.render.sourceSha}, ${boundary.render.status})\n- API: ${boundary.health.status}; database/Redis/key store healthy; payments ${boundary.health.paymentAvailability}\n- Vercel deployment: \`${boundary.vercel.deploymentId}\` (${boundary.vercel.sourceSha ?? 'source-unverified legacy'}, ${boundary.vercel.state})\n- Baseline SHA-256: \`${boundary.digest}\`\n- Historical release \`${boundary.historicalIncident.runId}\` remains incomplete; original audit artifacts remain unavailable.\n`);
     return;
   }
   requireThat(mode === 'deploy' || mode === 'admit', 'RELEASE_MODE_INVALID');
