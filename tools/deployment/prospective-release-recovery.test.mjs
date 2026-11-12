@@ -237,6 +237,23 @@ test('baseline denies non-healthy or incompatible frontend, wrong source, incomp
 });
 
 test('verified frontend comparison is complete and detects changes on both sides of a rename', () => {
+  // GitHub's authenticated compare response has base_commit and an ordered
+  // commits array, but no top-level head_commit property.
+  const githubCompare = { status: 'ahead', base_commit: { sha: baselineSha },
+    merge_base_commit: { sha: baselineSha }, ahead_by: 2, behind_by: 0, total_commits: 2,
+    commits: [{ sha: 'c'.repeat(40) }, { sha: targetSha }], files: [
+      { filename: 'AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenV2WeeklyCommissionReadiness.cs',
+        status: 'modified', additions: 2, deletions: 1, changes: 3 },
+      { filename: 'AqualLifeStyle/9.4.2/aspnet-core/test/AqualLifeStyle.Tests/Commissions/AQGreenV2WeeklyCommissionReadinessRegistrationTests.cs',
+        status: 'added', additions: 34, deletions: 0, changes: 34 }
+    ] };
+  const githubShape = validateProspectiveFrontendComparison(githubCompare, baselineSha, targetSha);
+  assert.equal(githubShape.frontendChanged, false);
+  assert.equal(githubShape.changedFileCount, 2);
+  assert.throws(() => validateProspectiveFrontendComparison({ ...githubCompare,
+    commits: [{ sha: 'c'.repeat(40) }, { sha: 'd'.repeat(40) }] }, baselineSha, targetSha),
+  /PROSPECTIVE_FRONTEND_SOURCE_COMPARISON_UNVERIFIABLE/);
+
   const renamedIntoFrontend = { filename: 'AqualLifeStyle/9.4.2/aqua-frontend/app/page.tsx',
     previous_filename: 'legacy/page.tsx', status: 'renamed', additions: 1, deletions: 1, changes: 2 };
   const renamedOutOfFrontend = { filename: 'legacy/page.tsx',

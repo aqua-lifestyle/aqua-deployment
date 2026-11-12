@@ -143,7 +143,7 @@ const frontendRoot = 'AqualLifeStyle/9.4.2/aqua-frontend/';
 export function validateProspectiveFrontendComparison(compare, fromSha, targetSha) {
   const files = compare?.files;
   if (!compare || !['ahead', 'identical'].includes(compare.status) ||
-      compare.base_commit?.sha !== fromSha || compare.head_commit?.sha !== targetSha ||
+      compare.base_commit?.sha !== fromSha ||
       !Number.isSafeInteger(compare.ahead_by) || !Number.isSafeInteger(compare.behind_by) ||
       compare.behind_by !== 0 || !Number.isSafeInteger(compare.total_commits) ||
       compare.total_commits < 0 || compare.total_commits > 250 || !Array.isArray(files) || files.length >= 300 ||
