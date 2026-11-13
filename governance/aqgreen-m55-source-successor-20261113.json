@@ -1,0 +1,116 @@
+{
+  "contract": "aqua.completed-m55-exact-source-successor",
+  "version": 1,
+  "application": {
+    "repository": "aqua-lifestyle/aqua-lifestyle",
+    "pullRequest": 130,
+    "reviewedHead": "c29a0b3250968b194a362a711f91de421d1a53ba",
+    "mergeCommit": "b8d86e5e60997483423b273d5f426c08b411f573",
+    "ciRunId": "43191377577",
+    "ciRunAttempt": 2,
+    "ciEvent": "push/main",
+    "ciConclusion": "success",
+    "mandatoryJobCount": 17
+  },
+  "previousBinding": {
+    "candidateSha": "e03087ffd0e4f6edd03c62030f3ce17a93280448",
+    "recordPath": "governance/unused-expiry-release-20261108.json",
+    "recordSha256": "19728918520eb3b4fc33e40545a476b3abedbb6b1ceb225414843ee205177bfa"
+  },
+  "policySha256": "717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840",
+  "sourceManifestSha256": "2bd8822e666ad66a21b3ffbe7dd96c02d6d4af84d9b0743010ac2bc5ad3ba459",
+  "sourceComparison": {
+    "baseCandidateSha": "e03087ffd0e4f6edd03c62030f3ce17a93280448",
+    "previouslyServingSha": "08580d837adb90e022a30ad11ba4fda332d138da",
+    "targetSha": "b8d86e5e60997483423b273d5f426c08b411f573",
+    "guardPathsChangedSincePreviousBinding": [
+      "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Core/Domain/AQGreen/AQGreenD10Commissioning.cs"
+    ],
+    "guardPathsUnchangedSincePreviousBinding": [
+      "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenCleanStartRootAppService.cs",
+      "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenD10ProductionSelectors.cs",
+      "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/ApplicationRecoveryMiddleware.cs",
+      "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/AQGreenD10OperatorEvidenceSource.cs"
+    ],
+    "basis": "Authenticated Git object comparison plus SHA-256 of exact commit contents; this is a five-guard-path comparison, not a claim that the complete application diff contains only one file"
+  },
+  "m55HistoricalBinding": {
+    "carryForwardRecordPath": "governance/completed-m55-candidate-carry-forward-20261103.json",
+    "carryForwardRecordSha256": "086721f085a7ac99396481aae80c2bb4416a648938b33e338de7722ec0ac2f60",
+    "operationSourceSha": "a4755801ce89868d7791422f3c983363ab76bf30",
+    "completedEvidenceSha256": "d1d656089dc187fa9d9cb25b3581494e70d5e9544e9961dd119026112dbc209e",
+    "reviewedMigrationSha256": "1f45ef7b67fa6eae747ca70edfed05679ef63cf4cfe2f2cf308b9d31b8c1faea",
+    "historicalMiddlewarePath": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/ApplicationRecoveryMiddleware.cs",
+    "historicalMiddlewareOperationSourceSha256": "0ebc961ae83640ad00a3e368ed6eb40fde413bf22c4623665f18967552b32322",
+    "historicalMiddlewareCandidateSha256": "e39cacea3bec6fe765d794d053cb9d21019a8164302cf3a9a987bc3253e8b00f",
+    "originalOperationEvidenceModified": false,
+    "historicalObservationTimesRefreshed": false,
+    "databaseOperationAuthorized": false,
+    "financialActivationAuthorized": false,
+    "productionDeploymentAuthorized": false
+  },
+  "sourceBindings": [
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenCleanStartRootAppService.cs",
+      "manifestSha256": "3b8b8206217579238cb1f43e49f57f3f9cf9b275e81a55352c471719f060f7b8",
+      "previousCandidateSha256": "5b2e7372a465c81068da6da008101d706a37cf2d63b872ef3a7c62a460c8c09b",
+      "candidateSha256": "5b2e7372a465c81068da6da008101d706a37cf2d63b872ef3a7c62a460c8c09b",
+      "priorBindingRecordSha256": "3e1c64fc3cf7eb165f06ce1d1eb6ae137a9e36fa971531889e7a9c442c3b1857"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenD10ProductionSelectors.cs",
+      "manifestSha256": "5d144c4767c549623a8c5d3165f38d214ca918f3862fdacd6e20e817aa7c9cda",
+      "previousCandidateSha256": "db65d546eb220a2f355150676ec713ee28bb8cb9f30d3712bb4e134e8486c152",
+      "candidateSha256": "db65d546eb220a2f355150676ec713ee28bb8cb9f30d3712bb4e134e8486c152",
+      "priorBindingRecordSha256": "19728918520eb3b4fc33e40545a476b3abedbb6b1ceb225414843ee205177bfa"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Core/Domain/AQGreen/AQGreenD10Commissioning.cs",
+      "manifestSha256": "9357589085e0f6749b8de32d7483a4e8af525272e6cb592319b8984b54c86502",
+      "previousCandidateSha256": "c3d0a71c7fde3dfc213832f5c539a18eb07b337f10c8de64c397aaedc84c6128",
+      "candidateSha256": "1ee77672731a4f427a3003008cf6c75422e8a6915e01441816a896d56fca98a8",
+      "priorBindingRecordSha256": "19728918520eb3b4fc33e40545a476b3abedbb6b1ceb225414843ee205177bfa",
+      "applicationPullRequest": 129
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/ApplicationRecoveryMiddleware.cs",
+      "manifestSha256": "0ebc961ae83640ad00a3e368ed6eb40fde413bf22c4623665f18967552b32322",
+      "historicalM55CandidateSha256": "e39cacea3bec6fe765d794d053cb9d21019a8164302cf3a9a987bc3253e8b00f",
+      "previousCandidateSha256": "3c57877be5bec0a4e9368ce6cc79771e338fa7e1116beab2fc9b215f79b764b3",
+      "candidateSha256": "3c57877be5bec0a4e9368ce6cc79771e338fa7e1116beab2fc9b215f79b764b3",
+      "priorBindingRecordSha256": "8034825088571991480d6563749268ab477828d23a85c63c34508def1dae6b56"
+    },
+    {
+      "path": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Web.Host/Startup/AQGreenD10OperatorEvidenceSource.cs",
+      "manifestSha256": "7128bd0670f261c1df7e1193dcdb5337b1308c0d363cf05b101b65e5c3994048",
+      "previousCandidateSha256": "cc4d39599c2d6587e66c0ba1d88f6073694a7bc20dd26afeda5a45d365000c7e",
+      "candidateSha256": "cc4d39599c2d6587e66c0ba1d88f6073694a7bc20dd26afeda5a45d365000c7e",
+      "priorBindingRecordSha256": "3e1c64fc3cf7eb165f06ce1d1eb6ae137a9e36fa971531889e7a9c442c3b1857"
+    }
+  ],
+  "ownerAcceptance": {
+    "repository": "aqua-lifestyle/aqua-lifestyle",
+    "pullRequest": 129,
+    "reviewEventId": 5829338879,
+    "reviewer": {
+      "login": "aqualifestyleclub",
+      "id": 307076734
+    },
+    "githubReviewState": "COMMENTED",
+    "reviewBody": "Reviewed and Accepted",
+    "reviewedCommitSha": "8fde889db71f20a44569a02911dbd956f27aa7cb",
+    "submittedAt": "2026-11-09T16:48:40Z",
+    "reviewedPath": "AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Core/Domain/AQGreen/AQGreenD10Commissioning.cs",
+    "reviewedPathSha256": "1ee77672731a4f427a3003008cf6c75422e8a6915e01441816a896d56fca98a8",
+    "acceptanceInterpretation": "Owner-accepted comment under explicit owner direction; GitHub's recorded state remains COMMENTED and is not relabeled APPROVED"
+  },
+  "scope": {
+    "kind": "code-only-held-deployment",
+    "migration55Rerun": false,
+    "historicalEvidenceRewritten": false,
+    "providerMutationAuthorized": false,
+    "financialActivationAuthorized": false,
+    "productionDeploymentAuthorized": false,
+    "automaticPayoutsEnabled": false
+  }
+}

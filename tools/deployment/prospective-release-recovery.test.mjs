@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { cleanStartRuntimeSettings } from './runtime-readiness.mjs';
-import { schemaSource, verifySchemaFirst, validateCompletedCandidateCarryForward } from './commission-schema-first.mjs';
+import { schemaSource, verifySchemaFirst } from './commission-schema-first.mjs';
+import { validateWeeklyReadinessFixCandidate } from './aqgreen-m55-source-successor.mjs';
 import { admissionJobName, ReleaseFailure, safeBaselineDiagnostic, targets, validateAdmissionJob,
   validateDispatchInputs, evidencePlan, policyDigest, standingPolicy } from './release-control.mjs';
 import { captureProspectiveBaseline, classifyPinnedIncompleteAttempt, createProspectiveAuthorization,
@@ -340,7 +341,12 @@ test('qualification-only candidate cannot enter production; capture remains read
 });
 
 test('exact weekly-readiness successor reuses completed Migration 55 evidence without authorizing new DDL', async () => {
-  const carry = validateCompletedCandidateCarryForward();
+  const q = { sha: targetSha, ciRunId: candidate.ciRunId, ciRunAttempt: candidate.ciRunAttempt,
+    policySha256: policyDigest(standingPolicy), qualificationOnly: true, memberRelease: undefined,
+    repository: targets.repository, executorRepository: targets.executor.repository,
+    environment: targets.environment, profile: targets.profile, renderServiceId: targets.render.id,
+    vercelProjectId: targets.vercel.id, vercelTeamId: targets.vercel.teamId };
+  const carry = validateWeeklyReadinessFixCandidate(q).completedCarry;
   const baseline = standingPolicy.firstReleaseRecovery.baseline.renderSha;
   const migrationCompare = { status: 'ahead', files: schemaSource.migrationFiles.map(pin => ({
     filename: pin.path, status: pin.status })) };
@@ -351,19 +357,21 @@ test('exact weekly-readiness successor reuses completed Migration 55 evidence wi
     throw new Error(`Unexpected schema comparison ${route}`);
   } };
   const readSource = async path => {
+    const sourceOverride = carry.sourceOverrides.find(pin => pin.path === path);
+    if (sourceOverride) return sourceOverride.candidateSha256;
     if (path === carry.guardOverride.path) return carry.guardOverride.candidateSha256;
     return [...schemaSource.migrationFiles, ...schemaSource.holdSources, ...schemaSource.cleanStartSources]
       .find(pin => pin.path === path)?.sha256;
   };
-  assert.equal(await verifySchemaFirst(api, { sha: targetSha, qualificationOnly: true },
+  assert.equal(await verifySchemaFirst(api, q,
     standingPolicy, readSource, undefined, true, () => now), null);
   assert.deepEqual(await api.gh(`/compare/${baseline}...${targetSha}`), migrationCompare);
-  await assert.rejects(verifySchemaFirst(api, { sha: 'c'.repeat(40), qualificationOnly: true },
+  await assert.rejects(verifySchemaFirst(api, { ...q, sha: 'c'.repeat(40) },
     standingPolicy, readSource, undefined, true, () => now), /COMPLETED_M55_EXACT_SCOPE_REQUIRED/);
   const alteredApi = { gh: async route => route === `/compare/${baseline}...${targetSha}` ? {
     status: 'ahead', files: [...migrationCompare.files, { filename: 'AqualLifeStyle/9.4.2/aspnet-core/src/X/Migrations/Unauthorized.cs',
       status: 'added' }] } : { status: 'ahead', files: [] } };
-  await assert.rejects(verifySchemaFirst(alteredApi, { sha: targetSha, qualificationOnly: true },
+  await assert.rejects(verifySchemaFirst(alteredApi, q,
     standingPolicy, readSource, undefined, true, () => now), /SCHEMA_MIGRATION_NOT_APPROVED/);
 });
 
