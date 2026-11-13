@@ -1850,10 +1850,11 @@ export async function main(env, options = {}) {
     const plan = await evidencePlan(api, q, policy);
     const schemaProof = q.memberRelease === undefined ? await verifySchemaFirst(api, q, policy, readSource,
       options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now) : null;
-    // Provider credentials remain unavailable here. The named operator's original
-    // eligibility/compatibility readback must be approved with this executor SHA.
-    // Qualification-only execution never constitutes production authorization.
-    if (q.memberRelease === undefined && !q.qualificationOnly && !plan.baseline)
+    // Match deploy's recovery selection. prospectiveProof comes only from the
+    // authenticated baseline and separate owner authorization loaded above.
+    // Otherwise retain the original eligibility/compatibility readback; provider
+    // credentials remain unavailable and qualification cannot authorize deployment.
+    if (q.memberRelease === undefined && !q.qualificationOnly && !plan.baseline && !prospectiveProof)
       validateFirstReleaseRecovery(options.recoveryReadback ?? approvedRecoveryReadback, q, policy, options.now, schemaProof);
     const receipt = createGitHubAdmission(q, policy, evidence, options.now);
     requireThat(typeof env.AQUA_ADMISSION_RECEIPT_OUTPUT === 'string', 'ADMISSION_OUTPUT_REQUIRED');
