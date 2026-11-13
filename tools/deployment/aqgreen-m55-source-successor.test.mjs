@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { objectDigest, sha256 } from './github-evidence.mjs';
+import { objectDigest, sha256, verifyGitHubEvidence } from './github-evidence.mjs';
 import { approvedSchemaReadback, schemaSource, verifySchemaFirst } from './commission-schema-first.mjs';
 import { standingPolicy } from './release-control.mjs';
 import { validateCompletedCandidateCarryForward } from './commission-schema-first.mjs';
 import {
   validateWeeklyReadinessFixCandidate, validAqGreenOwnerAcceptance,
-  weeklyReadinessFixCandidateSha, weeklyReadinessFixRecordDigest
+  weeklyReadinessFixCandidateSha, weeklyReadinessFixRecordDigest,
+  validateWeeklyReadinessCiRefresh, weeklyReadinessCiRefreshDigest
 } from './aqgreen-m55-source-successor.mjs';
+import { fixture as evidenceFixture } from './fixtures/provider.mjs';
 
 const bindingBytes = () => readFileSync(new URL('../../governance/aqgreen-m55-source-successor-20261113.json', import.meta.url));
 const m55Bytes = () => readFileSync(new URL('../../governance/completed-m55-candidate-carry-forward-20261103.json', import.meta.url));
@@ -136,4 +138,52 @@ test('candidate, CI attempt, source record, and authorized owner-review provenan
   }
   assert.equal(validAqGreenOwnerAcceptance(r.ownerAcceptance,
     r.sourceBindings.filter(row => row.path !== r.ownerAcceptance.reviewedPath)), false);
+});
+
+test('exact CI refresh carries attempt 3 without rewriting source bindings or completed M55 evidence', async () => {
+  const f = fixture(), original = bindingBytes(), m55 = m55Bytes();
+  const refresh = validateWeeklyReadinessCiRefresh();
+  const current = { ...q(), ciRunAttempt: 3 };
+  const selected = validateWeeklyReadinessFixCandidate(current);
+  assert.equal(sha256(readFileSync(new URL('../../governance/aqgreen-ci-refresh-43191377577-3.json', import.meta.url))),
+    weeklyReadinessCiRefreshDigest);
+  assert.equal(selected.ciRefresh.ci.runAttempt, 3);
+  assert.equal(selected.application.ciRunAttempt, 2, 'original binding remains historical');
+  assert.equal(refresh.sourceSuccessorRecordSha256, weeklyReadinessFixRecordDigest);
+  assert.deepEqual(selected.completedCarry, f.carry);
+  const proof = await verifySchemaFirst(f.api, current, standingPolicy, f.read, approvedSchemaReadback, false);
+  assert.equal(proof.initialSourceSha, f.carry.operationSourceSha);
+  assert.deepEqual(bindingBytes(), original); assert.deepEqual(m55Bytes(), m55);
+  const payout = schemaSource.holdSources.find(pin => pin.path.endsWith('/AQGreenSalesEvidencePayoutGuard.cs'));
+  await assert.rejects(verifySchemaFirst(f.api, current, standingPolicy,
+    async path => path === payout.path ? '0'.repeat(64) : f.read(path), approvedSchemaReadback, false),
+  /SCHEMA_OR_PAYOUT_GUARD_SOURCE_CHANGED/);
+});
+
+test('CI refresh never admits another run, future attempt, source, policy or edited refresh record', () => {
+  const current = { ...q(), ciRunAttempt: 3 };
+  for (const edit of [value => { value.ciRunId = '43191377578'; }, value => { value.ciRunAttempt = 4; },
+    value => { value.sha = 'a'.repeat(40); }, value => { value.policySha256 = '0'.repeat(64); },
+    value => { value.vercelTeamId = 'other'; }]) {
+    const value = { ...current }; edit(value);
+    assert.throws(() => validateWeeklyReadinessFixCandidate(value), /AQGREEN_SOURCE_SUCCESSOR_EXACT_SCOPE_REQUIRED/);
+  }
+  const changed = validateWeeklyReadinessCiRefresh(); changed.ci.runAttempt = 4;
+  assert.throws(() => validateWeeklyReadinessCiRefresh(Buffer.from(JSON.stringify(changed))), /AQGREEN_CI_REFRESH_RECORD_CHANGED/);
+});
+
+test('exact refresh retains live CI freshness, current-attempt and push provenance enforcement', async () => {
+  const refresh = validateWeeklyReadinessCiRefresh(), f = evidenceFixture();
+  const completed = Date.parse(refresh.ci.completedAt), current = { ...q(), ciRunAttempt: 3 };
+  const run = { id: Number(current.ciRunId), run_attempt: 3, head_sha: current.sha, status: 'completed', conclusion: 'success',
+    event: 'push', head_branch: 'main', path: '.github/workflows/ci.yml', updated_at: refresh.ci.completedAt,
+    repository: { full_name: current.repository }, head_repository: { full_name: current.repository } };
+  const api = { gh: async route => { assert.equal(route, `/actions/runs/${current.ciRunId}`); return run; } };
+  await assert.rejects(verifyGitHubEvidence(api, q(), standingPolicy, f.readSourceDigest, () => completed + 1000),
+    /CI_EVIDENCE_CONTEXT_MISMATCH/);
+  await assert.rejects(verifyGitHubEvidence(api, current, standingPolicy, f.readSourceDigest, () => completed + 86401_000),
+    /CI_EVIDENCE_STALE_OR_UNDATED/);
+  run.event = 'workflow_dispatch';
+  await assert.rejects(verifyGitHubEvidence(api, current, standingPolicy, f.readSourceDigest, () => completed + 1000),
+    /CI_EVIDENCE_CONTEXT_MISMATCH/);
 });

@@ -21,11 +21,39 @@ const priorBindingRecordUrls = new Map([
 const targets = JSON.parse(readFileSync(targetsUrl, 'utf8'));
 export const weeklyReadinessFixCandidateSha = 'b8d86e5e60997483423b273d5f426c08b411f573';
 export const weeklyReadinessFixRecordDigest = '79d94ccc21c380bc96b848f3df84deb31f506dc2db3b6b2d5bec353d8c7fd184';
+export const weeklyReadinessCiRefreshDigest = '4332006fc8d9fd9506dd2c745d9d21979b0e1faf12488cf6ff3cd91872fe85f3';
 
 const check = (ok, code) => { if (!ok) throw new ReadinessReleaseDenied(code); };
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) &&
   Object.keys(v).sort().join() === [...keys].sort().join();
 const hex = (value, size) => typeof value === 'string' && new RegExp(`^[a-f0-9]{${size}}$`).test(value);
+
+// One reviewed CI-only refresh of the same immutable source. The original
+// successor and M55 records remain historical; runtime CI/age checks still read
+// GitHub and never borrow this record's completion time to renew evidence.
+export function validateWeeklyReadinessCiRefresh(bytes = readFileSync(
+  new URL('../../governance/aqgreen-ci-refresh-43191377577-3.json', import.meta.url))) {
+  check(Buffer.isBuffer(bytes) && sha256(bytes) === weeklyReadinessCiRefreshDigest,
+    'AQGREEN_CI_REFRESH_RECORD_CHANGED');
+  const r = JSON.parse(bytes), ci = r.ci, control = r.workflowControl;
+  check(r.contract === 'aqua.exact-source-ci-refresh' && r.version === 1 &&
+    r.applicationSha === weeklyReadinessFixCandidateSha &&
+    r.sourceSuccessorRecordPath === 'governance/aqgreen-m55-source-successor-20261113.json' &&
+    r.sourceSuccessorRecordSha256 === weeklyReadinessFixRecordDigest &&
+    sha256(readFileSync(recordUrl)) === r.sourceSuccessorRecordSha256 &&
+    r.previousCi.runId === '43191377577' && r.previousCi.runAttempt === 2 &&
+    ci.repository === targets.repository && ci.runId === '43191377577' && ci.runAttempt === 3 &&
+    ci.sourceSha === r.applicationSha && ci.event === 'push' && ci.branch === 'main' &&
+    ci.workflowPath === '.github/workflows/ci.yml' && ci.workflowName === 'Continuous integration' &&
+    ci.status === 'completed' && ci.conclusion === 'success' && ci.mandatoryJobCount === 17 &&
+    control.originalState === 'active' && control.restoredState === 'active' && control.ciState === 'active' &&
+    control.fullRerunRequests === 1 &&
+    control.applicationReleaseRunIdsSha256Before === control.applicationReleaseRunIdsSha256After &&
+    control.executorRunIdsSha256Before === control.executorRunIdsSha256After &&
+    r.scope.kind === 'exact-ci-attempt-only' && Object.entries(r.scope).every(([key, value]) => key === 'kind' || value === false),
+  'AQGREEN_CI_REFRESH_SCOPE_REQUIRED');
+  return r;
+}
 const sourcePaths = [
   'AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenCleanStartRootAppService.cs',
   'AqualLifeStyle/9.4.2/aspnet-core/src/AqualLifeStyle.Application/ProgrammeParticipations/AQGreenD10ProductionSelectors.cs',
@@ -95,6 +123,8 @@ export function validateWeeklyReadinessFixCandidate(q, bytes = readFileSync(reco
     'AQGREEN_SOURCE_SUCCESSOR_RECORD_CHANGED');
   const r = JSON.parse(bytes);
   const application = r.application;
+  const ciRefresh = q?.ciRunId === application.ciRunId && q?.ciRunAttempt === application.ciRunAttempt ?
+    null : validateWeeklyReadinessCiRefresh();
   check(exact(r, ['contract', 'version', 'application', 'previousBinding', 'policySha256',
     'sourceManifestSha256', 'sourceComparison', 'm55HistoricalBinding', 'sourceBindings',
     'ownerAcceptance', 'scope']) &&
@@ -107,7 +137,8 @@ export function validateWeeklyReadinessFixCandidate(q, bytes = readFileSync(reco
     application.ciRunAttempt === 2 && application.ciEvent === 'push/main' &&
     application.ciConclusion === 'success' && application.mandatoryJobCount === 17 &&
     q?.sha === weeklyReadinessFixCandidateSha && q.sha === application.mergeCommit &&
-    q.ciRunId === application.ciRunId && q.ciRunAttempt === application.ciRunAttempt &&
+    q.ciRunId === (ciRefresh?.ci.runId ?? application.ciRunId) &&
+    q.ciRunAttempt === (ciRefresh?.ci.runAttempt ?? application.ciRunAttempt) &&
     q.policySha256 === r.policySha256 && typeof q.qualificationOnly === 'boolean' && q.memberRelease === undefined &&
     q.repository === application.repository && q.executorRepository === targets.executor.repository &&
     q.environment === targets.environment && q.profile === targets.profile &&
@@ -206,6 +237,6 @@ export function validateWeeklyReadinessFixCandidate(q, bytes = readFileSync(reco
   const updatedGuard = { ...carry.guardOverride,
     candidateSha256: bindings.find(binding => binding.path === carry.guardOverride.path)?.candidateSha256 ??
       carry.guardOverride.candidateSha256 };
-  return { ...r, completedCarry: { ...carry, candidateSha: q.sha,
+  return { ...r, ...(ciRefresh ? { ciRefresh } : {}), completedCarry: { ...carry, candidateSha: q.sha,
     sourceOverrides: updatedSources, guardOverride: updatedGuard } };
 }

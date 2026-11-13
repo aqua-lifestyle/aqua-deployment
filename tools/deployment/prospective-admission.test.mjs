@@ -17,7 +17,7 @@ import { fixture, runnerEnv, zipFixture } from './fixtures/provider.mjs';
 // Synthetic authenticated-API responses, not retained production observations.
 // Only the inert git archive boundary is substituted. main(), prospective
 // authentication, ZIP/digest checks, history, schema and receipt validators run.
-function admissionFixture(t, { prospective = true, at = Date.parse('2026-11-13T07:00:00Z'), predecessor = false } = {}) {
+function admissionFixture(t, { prospective = true, at = Date.parse('2026-11-13T07:00:00Z'), predecessor = false, ciAttempt = 2 } = {}) {
   t.mock.method(Date, 'now', () => at);
   const dir = mkdtempSync(join(tmpdir(), 'aqua-prospective-admission-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -40,11 +40,11 @@ function admissionFixture(t, { prospective = true, at = Date.parse('2026-11-13T0
     SOURCE_DIR: sourceDir, CANDIDATE_DIR: candidateDir, GITHUB_OUTPUT: join(dir, 'output'),
     RELEASE_REPORT: join(dir, 'audit.jsonl'), AQUA_ADMISSION_RECEIPT_OUTPUT: join(dir, 'admission.json') };
   delete env.RENDER_API_KEY; delete env.VERCEL_TOKEN;
-  const inputs = { ci_run_id: '43191377577', ci_run_attempt: '2', sha: prospectiveRecovery.targetSha,
+  const inputs = { ci_run_id: '43191377577', ci_run_attempt: String(ciAttempt), sha: prospectiveRecovery.targetSha,
     qualification_only: 'false', ...(prospective ? { prospective_mode: 'authorize',
       recovery_baseline_run_id: '5001' } : {}) };
   const q = freezeCandidate({ version: 1, repository: targets.repository, sha: inputs.sha,
-    ciRunId: inputs.ci_run_id, ciRunAttempt: 2, ciUrl: 'https://github.com/example/ci' }, env,
+    ciRunId: inputs.ci_run_id, ciRunAttempt: ciAttempt, ciUrl: 'https://github.com/example/ci' }, env,
   standingPolicy, false, 'full', prospective ? 'authorize' : 'none');
   f.state.candidate = q;
   const carry = validateWeeklyReadinessFixCandidate(q).completedCarry;
@@ -103,8 +103,8 @@ function admissionFixture(t, { prospective = true, at = Date.parse('2026-11-13T0
   inputs.recovery_baseline_sha256 = boundary.digest;
   if (!prospective) delete inputs.recovery_baseline_sha256;
   const report = structuredClone(f.state.report);
-  report.context = { kind: 'ci', repository: q.repository, sha: q.sha, runId: q.ciRunId, runAttempt: 2 };
-  const ci = { id: Number(q.ciRunId), run_attempt: 2, repository: { full_name: q.repository },
+  report.context = { kind: 'ci', repository: q.repository, sha: q.sha, runId: q.ciRunId, runAttempt: ciAttempt };
+  const ci = { id: Number(q.ciRunId), run_attempt: ciAttempt, repository: { full_name: q.repository },
     head_repository: { full_name: q.repository }, event: 'push', head_branch: 'main', head_sha: q.sha,
     path: '.github/workflows/ci.yml', name: 'Continuous integration', status: 'completed', conclusion: 'success',
     updated_at: new Date(at - 3000).toISOString() };
@@ -120,7 +120,7 @@ function admissionFixture(t, { prospective = true, at = Date.parse('2026-11-13T0
     renderReleaseRunAttempt: 1, vercelReleaseRunAttempt: 1 }];
   const artifactBytes = id => id === '7890' ? zipFixture('report.json', JSON.stringify(report)) : id === '8001' ?
     zipFixture('report.json', JSON.stringify(boundary)) : zipFixture('release-report.jsonl', JSON.stringify(priorRows[0]) + '\n');
-  const artifact = id => ({ id: Number(id), name: id === '7890' ? `mandatory-security-${q.sha}-${q.ciRunId}-2` :
+  const artifact = id => ({ id: Number(id), name: id === '7890' ? `mandatory-security-${q.sha}-${q.ciRunId}-${ciAttempt}` :
     id === '8001' ? `prospective-recovery-baseline-${q.sha}-5001-1` : 'production-release-audit-5001-1',
   expired: false, size_in_bytes: artifactBytes(id).length, digest: 'sha256:' + sha256(artifactBytes(id)),
   workflow_run: { id: id === '7890' ? ci.id : capture.id, repository_id: id === '7890' ? 789 : 987,
@@ -211,6 +211,16 @@ test('main(admit) selects authenticated prospective recovery and writes a produc
   assert.equal(f.sourceReads.filter(path => path.endsWith('/AQGreenSalesEvidencePayoutGuard.cs')).length, 1);
   assert.equal(objectDigest(approvedSchemaReadback), historical); assert.equal(objectDigest(approvedRecoveryReadback), legacy);
   assert.equal(f.posts.length, 0);
+});
+
+test('main(admit) accepts the exact refreshed CI attempt and binds the receipt to attempt 3', async t => {
+  const f = admissionFixture(t, { ciAttempt: 3, at: Date.parse('2026-11-13T11:35:00Z') });
+  await f.prepare();
+  await f.admit({ get recoveryReadback() { assert.fail('refresh cannot switch recovery purpose'); } });
+  const receipt = JSON.parse(readFileSync(f.env.AQUA_ADMISSION_RECEIPT_OUTPUT));
+  assert.equal(receipt.sha, prospectiveRecovery.targetSha);
+  assert.equal(receipt.ciRunId, '43191377577'); assert.equal(receipt.ciRunAttempt, 3);
+  assert.equal(receipt.qualificationOnly, false); assert.equal(f.posts.length, 0);
 });
 
 for (const [name, edit, code] of [
