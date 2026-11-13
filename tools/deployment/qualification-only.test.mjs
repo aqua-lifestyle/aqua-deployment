@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { validateDispatchInputs, freezeCandidate, standingPolicy, verifyCandidate, validatePolicy,
   deploy, main, evidencePlan, admissionJobName, targets } from './release-control.mjs';
 import { createGitHubAdmission, validateGitHubAdmission, verifyGitHubEvidence, sha256 } from './github-evidence.mjs';
@@ -80,7 +81,7 @@ test('production job requires the validated false output, never raw qualificatio
   assert.match(workflow, /qualification_only: \$\{\{ steps\.candidate\.outputs\.qualification_only \}\}/);
   const production = workflow.split('\n  production:\n')[1];
   const condition = production.split('\n').find(line => line.trim().startsWith('if:')).trim();
-  assert.equal(condition, "if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' && needs.candidate.outputs.prospective_mode != 'capture-baseline' }}");
+  assert.equal(condition, "if: ${{ !cancelled() && needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' && needs.candidate.outputs.prospective_mode != 'capture-baseline' }}");
   // The exact workflow expression permits only the controller's literal false.
   for (const output of ['true', '', 'unknown', undefined]) assert.notEqual(output, 'false');
   const beforeBaseline = workflow.split('\n  baseline:\n')[0];
@@ -90,6 +91,54 @@ test('production job requires the validated false output, never raw qualificatio
   assert.deepEqual([...beforeBaseline.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]), ['AQGREEN_EVIDENCE_READ_TOKEN']);
   assert.deepEqual([...admission.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),
     ['AQGREEN_EVIDENCE_READ_TOKEN','AQGREEN_EVIDENCE_READ_TOKEN']);
+});
+
+// Evaluate the workflow's fixed JS-compatible expression, including GitHub's
+// documented implicit success() when no status function is present. This is an
+// offline condition regression, not an execution of GitHub's job scheduler.
+function productionEligible(options = {}) {
+  const { candidate = 'success', admission = 'success', baseline = 'skipped',
+    prospective = 'authorize', cancelled = false } = options;
+  const qualification = Object.hasOwn(options, 'qualification') ? options.qualification : 'false';
+  const workflow = readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  const production = workflow.split('\n  production:\n')[1];
+  assert.match(production, /^    needs: \[candidate, admission\]$/m);
+  const expression = production.match(/^    if: \$\{\{ (.+) \}\}$/m)?.[1];
+  assert.ok(expression, 'evaluate the actual production job condition');
+  const explicitStatus = /\b(?:always|cancelled|failure|success)\s*\(/.test(expression);
+  return runInNewContext(explicitStatus ? expression : `success() && (${expression})`, {
+    needs: { candidate: { result: candidate, outputs: { qualification_only: qualification, prospective_mode: prospective } },
+      admission: { result: admission } },
+    cancelled: () => cancelled,
+    success: () => !cancelled && [candidate, admission, baseline].every(result => result === 'success')
+  }, { timeout: 100 });
+}
+
+test('production condition allows successful admission after the intentional baseline skip', () => {
+  assert.equal(productionEligible(), true);
+  assert.equal(productionEligible({ baseline: 'success' }), true);
+  assert.equal(productionEligible({ prospective: 'none' }), true, 'retain the existing legacy production path');
+});
+
+test('production condition still denies every unsuccessful required dependency', () => {
+  for (const dependency of ['candidate', 'admission'])
+    for (const result of ['failure', 'skipped', 'cancelled', ''])
+      assert.equal(productionEligible({ [dependency]: result }), false, `${dependency}: ${result}`);
+});
+
+test('production condition rejects qualification-only and absent or unknown qualification outputs', () => {
+  for (const qualification of ['true', '', 'unknown', null, undefined])
+    assert.equal(productionEligible({ qualification }), false, String(qualification));
+});
+
+test('production condition rejects baseline capture even if both required jobs appear successful', () => {
+  assert.equal(productionEligible({ prospective: 'capture-baseline', baseline: 'success' }), false);
+  assert.equal(productionEligible({ prospective: 'capture-baseline' }), false);
+});
+
+test('production condition rejects cancellation even with successful admission and production purpose', () => {
+  assert.equal(productionEligible({ cancelled: true }), false);
+  assert.equal(productionEligible({ cancelled: true, baseline: 'success' }), false);
 });
 
 test('qualification dispatch executes normal candidate/admission, retains a purpose-bound receipt and rejects deploy', async () => {
