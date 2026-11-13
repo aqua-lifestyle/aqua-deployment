@@ -16,7 +16,7 @@ import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   gitSourceDigest, verifyGitHubEvidence, verifyGitHubEvidenceForCapture, createGitHubAdmission, validateGitHubAdmission,
   readGitHubArtifact, readAuditFile, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
 import { HistoricalReconciliationDenied, isReconciledHistoricalRun, validateHistoricalContext,
-  validateHistoricalArtifact, validateHistoricalAudit } from './historical-release-reconciliation.mjs';
+  validateHistoricalArtifact, validateHistoricalAudit, selectTargetFailure } from './historical-release-reconciliation.mjs';
 import { partialReleaseRunId, reconcilePartialRelease, partialRenderReuse,
   validatePartialRenderOrigin } from './partial-release-reconciliation.mjs';
 import { readinessCandidateSha, readinessStartingBackend, validateReadinessStartingBackend,
@@ -1190,6 +1190,18 @@ export async function deploy(api, qualified, policy, report, options = {}) {
       releaseRunAttempt: qualified.releaseRunAttempt, actorCreatedAt: prospective.authorization.approvedAt
     }, policy, options.now);
   }
+  const targetFailure = selectTargetFailure(plan.historicalReconciliations, qualified, targets);
+  const isReconciledTargetFailure = row => targetFailure && row.id === targetFailure.renderDeployId &&
+    row.commit?.id === targetFailure.sourceSha && row.status === targetFailure.terminalState;
+  const checkTargetFailureHistory = rows => {
+    if (!targetFailure) return;
+    requireThat(rows.filter(row => row.id === targetFailure.renderDeployId).length === 1 &&
+      rows.some(isReconciledTargetFailure) && new Set(rows.map(row => row.id)).size === rows.length &&
+      rows.filter(row => row.status === 'live').length === 1 && rows.some(row =>
+        row.id === targetFailure.baseline.renderDeployId && row.commit?.id === targetFailure.baseline.renderSha &&
+        row.status === 'live') && rows.every(row => !activeRender.has(row.status)),
+    'RECONCILED_TARGET_FAILURE_STATE_CHANGED');
+  };
   const firstRecovery = !plan.baseline && !prospective ? validateFirstReleaseRecovery(
     options.recoveryReadback ?? approvedRecoveryReadback, qualified, policy, options.now, schemaProof) : null;
   requireThat(plan.firstReleaseRecoveryEvidenceSha256 === (firstRecovery?.evidenceSha256 ?? null),
@@ -1205,7 +1217,8 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   };
   report({ phase: 'evidence-selected', authorizationId: options.admissionReceipt.authorizationId,
     evidenceSha256: options.admissionReceipt.evidenceSha256, inventorySha256: evidence.inventorySha256,
-    evidenceArtifactId: evidence.artifact.id, ...(partial || readyReuse ? prior : {}), ...(schemaProof ? {
+    evidenceArtifactId: evidence.artifact.id, ...(targetFailure ? { reconciledTargetFailure: targetFailure } : {}),
+    ...(partial || readyReuse ? prior : {}), ...(schemaProof ? {
       schemaFirstEvidenceSha256: schemaProof.evidenceSha256, recoveryMode: schemaProof.recoveryMode } : {}) });
   if (prospective) report({ phase: 'evidence-selected', prospectiveRecovery: {
     baselineRunId: prospective.boundary.captureRunId, baselineDigest: prospective.boundary.digest,
@@ -1436,6 +1449,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   validateMigrationDelta(compare, !!schemaProof);
   readScope('render-deploy-history');
   const renderDeploys = await deploymentHistory(api, 'render');
+  checkTargetFailureHistory(renderDeploys);
   const live = renderDeploys.filter(x => x.status === 'live');
   const startingRenderId = ownerBackend?.renderDeployId ?? acknowledged?.renderDeployId ?? baselineProof.renderDeployId;
   const startingRenderSha = ownerBackend?.renderSha ?? acknowledged?.renderSha ?? baselineProof.renderSha;
@@ -1458,7 +1472,7 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   let render = prior.renderDeployId ? renderDeploys.find(x => x.id === prior.renderDeployId) : undefined;
   requireThat(!prior.renderDeployId || (render && render.commit?.id === qualified.sha),
     'RENDER_RECEIPT_DEPLOYMENT_MISMATCH');
-  requireThat(renderDeploys.every(x => x.commit?.id !== qualified.sha || x.id === prior.renderDeployId),
+  requireThat(renderDeploys.every(x => x.commit?.id !== qualified.sha || x.id === prior.renderDeployId || isReconciledTargetFailure(x)),
     'RENDER_PROVENANCE_RECEIPT_REQUIRED');
   readScope('vercel-deploy-history');
   const vercelDeploys = await deploymentHistory(api, 'vercel');
@@ -1507,10 +1521,11 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     await readRender();
     readScope('render-deploy-history');
     const latestRender = await deploymentHistory(api, 'render');
+    checkTargetFailureHistory(latestRender);
     requireThat(latestRender.filter(x => x.status === 'live').length === 1 &&
       latestRender.some(x => x.id === startingRenderId && x.status === 'live' &&
         x.commit?.id === startingRenderSha) && latestRender.every(x => !activeRender.has(x.status)) &&
-      latestRender.every(x => x.commit?.id !== qualified.sha), 'RENDER_CHANGED_BEFORE_REQUEST');
+      latestRender.every(x => x.commit?.id !== qualified.sha || isReconciledTargetFailure(x)), 'RENDER_CHANGED_BEFORE_REQUEST');
     if (firstRecovery) {
       readScope('render-deploy');
       const baseline = await api.render(`${servicePath}/deploys/${firstRecovery.renderDeployId}`);

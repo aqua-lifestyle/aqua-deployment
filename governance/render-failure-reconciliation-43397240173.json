@@ -1,0 +1,67 @@
+{
+  "contract": "aqua.exact-acknowledged-render-failure-reconciliation",
+  "version": 1,
+  "authorityOrigin": "Explicit owner instruction to prepare one narrowly scoped executor PR recognizing this acknowledged terminal failure; protected owner review and merge required. No release, retry, rollback or activation authority is granted by this record.",
+  "run": {
+    "runId": "43397240173",
+    "runNumber": 79,
+    "attempt": 1,
+    "executorSha": "e71cee36feb355b1a4a1ca67f87fe58ff1d68c1f",
+    "actor": { "login": "aqualifestyleclub", "id": 307076734 },
+    "originalConclusion": "failure",
+    "artifactId": "14023492669",
+    "archiveSha256": "1b257d64a3041c5ee173edd9acd24f9bff7c02542116c8e3ac780f4455e29a6d",
+    "reportSha256": "5e03e580401f0e9f1b04f1b5b457e00c812bd6f95a31bd076fbfdf0c5d9ade5b",
+    "rowsSha256": "7aca2f75c74738d631569592062a12b1091866119755fb919ccd52008d3efd22",
+    "rowCount": 28,
+    "terminalFailureCode": "PROVIDER_DEPLOYMENT_FAILED_INSPECT_RELEASE_REPORT"
+  },
+  "originalIdentity": {
+    "version": 4,
+    "repository": "aqua-lifestyle/aqua-lifestyle",
+    "sha": "b8d86e5e60997483423b273d5f426c08b411f573",
+    "ciRunId": "43191377577",
+    "ciRunAttempt": 2,
+    "policySha256": "717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840",
+    "environment": "production-release",
+    "profile": "normal-integrated",
+    "renderServiceId": "srv-d9f0k8e1a83c73d8n1b0",
+    "vercelProjectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "vercelTeamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+    "executorRepository": "aqua-lifestyle/aqua-deployment"
+  },
+  "renderOperation": {
+    "deployId": "dep-dbrd3ktg1s2s738587v0",
+    "sourceSha": "b8d86e5e60997483423b273d5f426c08b411f573",
+    "state": "update_failed",
+    "effect": "REQUEST_ACKNOWLEDGED_AND_TERMINAL_FAILURE_VERIFIED",
+    "createdAt": "2026-11-13T09:01:07.102687Z",
+    "finishedAt": "2026-11-13T09:03:47.280072Z",
+    "originalPostHttpStatus": null
+  },
+  "baseline": {
+    "renderDeployId": "dep-dbpdd488v5cc73durumg",
+    "renderSha": "08580d837adb90e022a30ad11ba4fda332d138da",
+    "vercelDeployId": "dpl_9gLkJk4TBHxcjK6LkKVE14eZ533x"
+  },
+  "retainedProviderReadback": {
+    "provenance": "Sanitized facts from the authenticated GET-only reconciliation and final held-configuration verification, transcribed with their actual observation times. These are historical observations, not renewed live-state proof.",
+    "failedDeploymentObservedAt": "2026-11-13T10:07:50.499425+00:00",
+    "failedDeploymentState": "update_failed",
+    "historyObservedAt": "2026-11-13T10:07:52.405282+00:00",
+    "historyComplete": true,
+    "deploymentCount": 130,
+    "uniqueLiveBaseline": true,
+    "activeDeployments": 0,
+    "healthObservedAt": "2026-11-13T10:07:53.150406+00:00",
+    "healthStatus": "Healthy",
+    "paymentAvailability": "Held"
+  },
+  "vercelEffect": "NO_MUTATION_INITIATED_BY_THIS_ATTEMPT",
+  "databaseWriteAbsence": "NOT_ESTABLISHED_BY_DEPLOYMENT_FAILURE_OR_HEALTH",
+  "originalFailureRewritten": false,
+  "mutationFree": false,
+  "successfulFullReleasePredecessor": false,
+  "retryOrContinuationAuthority": false,
+  "deploymentAuthority": false
+}
