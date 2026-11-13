@@ -9,6 +9,7 @@ import { minimumLiveCandidateSha, validateMinimumLiveCandidate } from './minimum
 import { d10OneTimeCandidateSha, validateD10OneTimeCandidate } from './d10-one-time-release.mjs';
 import { verifiedHoldCandidateSha, validateVerifiedHoldCandidate } from './verified-hold-release.mjs';
 import { unusedExpiryCandidateSha, validateUnusedExpiryCandidate } from './unused-expiry-release.mjs';
+import { weeklyReadinessFixCandidateSha, validateWeeklyReadinessFixCandidate } from './aqgreen-m55-source-successor.mjs';
 
 // Executor-owned pins from the frozen, CI-qualified application. No candidate
 // manifest, dispatch input or migration command can extend this exception.
@@ -20,10 +21,6 @@ const fixedTargets = JSON.parse(readFileSync(new URL('./targets.json', import.me
 const completedAuthorityBytes = readFileSync(new URL('../../governance/completed-m55-amendment-authority-20261102.json', import.meta.url));
 const completedOperationBytes = readFileSync(new URL('../../governance/aqgreen-clean-start-actual-20261102.json', import.meta.url));
 const carryCandidateSha = '1b748dfdaf3b63fb9dcc42f781ab79d5c39ca503';
-// Exact application successor that only repairs weekly-worker DI registration.
-// It retains the completed Migration 55 carry-forward; the usual pinned-source
-// and zero-new-migration checks below remain mandatory for this SHA.
-const weeklyReadinessFixCandidateSha = 'b8d86e5e60997483423b273d5f426c08b411f573';
 const carryRecordSha256 = '086721f085a7ac99396481aae80c2bb4416a648938b33e338de7722ec0ac2f60';
 export const completedMigration55PolicyKind = 'commission-invalidation-clean-start-completed-m55-v1';
 export const isCleanStartSchemaKind = kind =>
@@ -103,9 +100,10 @@ function validateCompletedMigration55Scope(q, policy) {
         compatibility.guardOverride.path === original.guardOverride.path &&
         compatibility.guardOverride.operationSourceSha256 === original.guardOverride.operationSourceSha256,
       'COMPLETED_M55_CARRY_FORWARD_SCOPE_REQUIRED');
+    } else if (q?.sha === weeklyReadinessFixCandidateSha) {
+      compatibility = validateWeeklyReadinessFixCandidate(q).completedCarry;
     } else {
-      check(q?.sha === carryCandidateSha || q?.sha === weeklyReadinessFixCandidateSha,
-        'COMPLETED_M55_EXACT_SCOPE_REQUIRED');
+      check(q?.sha === carryCandidateSha, 'COMPLETED_M55_EXACT_SCOPE_REQUIRED');
       compatibility = validateCompletedCandidateCarryForward();
     }
   }
