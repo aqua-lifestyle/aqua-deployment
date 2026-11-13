@@ -137,6 +137,13 @@ export function classifyPinnedIncompleteAttempt(run, attempt, production, deploy
     auditArtifacts: 'unavailable', producerAuditDigest: null });
 }
 
+export function selectPinnedHistoricalRenderDeployment(renderHistory) {
+  const matches = renderHistory.filter(row => row.id === prospectiveRecovery.historicalRenderDeploymentId);
+  if (matches.length !== 1 || matches[0].commit?.id !== prospectiveRecovery.historicalApplicationSha)
+    deny('PROSPECTIVE_HISTORICAL_PROVIDER_OUTCOME_UNVERIFIABLE', 'historical-release');
+  return matches[0];
+}
+
 const sortedDigest = value => digest(value);
 const frontendRoot = 'AqualLifeStyle/9.4.2/aqua-frontend/';
 
@@ -215,14 +222,13 @@ async function readHistoricalIncident(api, renderHistory, vercelHistory, now) {
     item.name === `production-release-audit-${id}-${attempt}`));
   if (!Array.isArray(artifacts?.artifacts) || artifacts.total_count !== artifacts.artifacts.length || !missingAuditNames)
     deny('PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED', 'historical-release');
-  const matchingRender = renderHistory.filter(row => row.commit?.id === prospectiveRecovery.historicalApplicationSha);
+  const matchingRender = selectPinnedHistoricalRenderDeployment(renderHistory);
   const render = await api.render(`/services/${prospectiveRecovery.renderServiceId}/deploys/${prospectiveRecovery.historicalRenderDeploymentId}`);
   const renderCreatedAt = Date.parse(render?.createdAt ?? render?.created_at);
   const attemptOne = await api.executor(`/actions/runs/${id}/attempts/1`);
   const attemptOneCreatedAt = Date.parse(attemptOne?.created_at);
   const attemptOneUpdatedAt = Date.parse(attemptOne?.updated_at);
-  if (matchingRender.length !== 1 || matchingRender[0].id !== prospectiveRecovery.historicalRenderDeploymentId ||
-      matchingRender[0].status !== 'deactivated' || render.id !== prospectiveRecovery.historicalRenderDeploymentId ||
+  if (matchingRender.status !== 'deactivated' || render.id !== prospectiveRecovery.historicalRenderDeploymentId ||
       render.commit?.id !== prospectiveRecovery.historicalApplicationSha || render.status !== 'deactivated' ||
       !Number.isFinite(renderCreatedAt) || !Number.isFinite(attemptOneCreatedAt) ||
       !Number.isFinite(attemptOneUpdatedAt) || attemptOneUpdatedAt < attemptOneCreatedAt ||

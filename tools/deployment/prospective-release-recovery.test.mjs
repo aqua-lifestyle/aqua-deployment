@@ -6,6 +6,7 @@ import { admissionJobName, ReleaseFailure, safeBaselineDiagnostic, targets, vali
   validateDispatchInputs, evidencePlan, policyDigest, standingPolicy } from './release-control.mjs';
 import { captureProspectiveBaseline, classifyPinnedIncompleteAttempt, createProspectiveAuthorization,
   digest, ProspectiveBaselineDenied, prospectiveBaselinePhases, prospectiveRecovery, prospectiveSettingKeys,
+  selectPinnedHistoricalRenderDeployment,
   validateD10RuntimeEvidence, validatePinnedHistoricalIncidentEvidence, validateProspectiveAuthorization,
   validateProspectiveBaseline, validateProspectiveFrontendComparison } from './prospective-release-recovery.mjs';
 
@@ -311,6 +312,17 @@ test('only the exact historical incident with authenticated provider evidence is
     production, prospectiveRecovery.historicalMutationStep, incident, now), /PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED/);
   assert.throws(() => classifyPinnedIncompleteAttempt(historical, 2, production,
     prospectiveRecovery.historicalMutationStep, incident, now), /PROSPECTIVE_HISTORICAL_RELEASE_STATE_CHANGED/);
+});
+
+test('historical Render evidence selects the pinned deployment when the same SHA has another deployment', () => {
+  const pinned = { id: prospectiveRecovery.historicalRenderDeploymentId,
+    commit: { id: prospectiveRecovery.historicalApplicationSha } };
+  const other = { id: 'dep-dborrlbbc2fs73d1rig0', commit: { id: prospectiveRecovery.historicalApplicationSha } };
+  assert.equal(selectPinnedHistoricalRenderDeployment([pinned, other]), pinned);
+  assert.throws(() => selectPinnedHistoricalRenderDeployment([other]),
+    /PROSPECTIVE_HISTORICAL_PROVIDER_OUTCOME_UNVERIFIABLE/);
+  assert.throws(() => selectPinnedHistoricalRenderDeployment([pinned, { ...pinned }]),
+    /PROSPECTIVE_HISTORICAL_PROVIDER_OUTCOME_UNVERIFIABLE/);
 });
 
 test('qualification-only candidate cannot enter production; capture remains read-only', () => {
