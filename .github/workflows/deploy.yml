@@ -230,7 +230,7 @@ jobs:
       pull-requests: read
       id-token: write
     needs: [candidate, admission]
-    if: ${{ needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' && needs.candidate.outputs.prospective_mode != 'capture-baseline' }}
+    if: ${{ !cancelled() && needs.candidate.result == 'success' && needs.admission.result == 'success' && needs.candidate.outputs.qualification_only == 'false' && needs.candidate.outputs.prospective_mode != 'capture-baseline' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production-release
