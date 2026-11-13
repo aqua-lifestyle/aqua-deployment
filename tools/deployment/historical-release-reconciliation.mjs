@@ -17,6 +17,103 @@ const pins = Object.freeze({
   'held-frontend-source-evidence-20261029.json': '7195d016e7f881c37a1a25a7a9352aa485083e344061ad8beb4a873b7d960b7c'
 });
 const failedRenderDigest = 'da3ab4875cc0c608c675f8588565318d2cf922e4056f4e93c867154c90f8b5f6';
+export const reconciledTargetFailureRunId = '43397240173';
+const targetFailureDigest = '6ccba9e307bc303f47ddd7d555c1f64681249bb733c9536636fc33a57a755972';
+
+export function validateTargetFailureRecord(bytes = readFileSync(
+  new URL('../../governance/render-failure-reconciliation-43397240173.json', import.meta.url))) {
+  check(Buffer.isBuffer(bytes) && sha256(bytes) === targetFailureDigest, 'TARGET_FAILURE_RECORD_CHANGED');
+  const r = JSON.parse(bytes);
+  check(r.contract === 'aqua.exact-acknowledged-render-failure-reconciliation' && r.version === 1 &&
+    r.run.runId === reconciledTargetFailureRunId && r.run.attempt === 1 && r.run.originalConclusion === 'failure' &&
+    r.renderOperation.sourceSha === r.originalIdentity.sha && r.renderOperation.state === 'update_failed' &&
+    r.renderOperation.originalPostHttpStatus === null && r.vercelEffect === 'NO_MUTATION_INITIATED_BY_THIS_ATTEMPT' &&
+    r.databaseWriteAbsence === 'NOT_ESTABLISHED_BY_DEPLOYMENT_FAILURE_OR_HEALTH' &&
+    ['originalFailureRewritten', 'mutationFree', 'successfulFullReleasePredecessor',
+      'retryOrContinuationAuthority', 'deploymentAuthority'].every(key => r[key] === false),
+  'TARGET_FAILURE_RECORD_INVALID');
+  return r;
+}
+
+function validateTargetFailureCandidate(q, targets) {
+  const r = validateTargetFailureRecord(), i = r.originalIdentity, b = q.prospectiveRecovery?.boundary;
+  check(q.qualificationOnly === false && q.memberRelease === undefined && q.prospectiveMode === 'authorize' &&
+    q.releaseRunAttempt === 1 && q.releaseRunId !== r.run.runId && q.executorSha !== r.run.executorSha &&
+    ['repository', 'sha', 'policySha256', 'environment', 'profile', 'executorRepository',
+      'renderServiceId', 'vercelProjectId', 'vercelTeamId'].every(key => q[key] === i[key]) &&
+    targets.repository === i.repository && targets.executor?.repository === i.executorRepository &&
+    targets.render.id === i.renderServiceId && targets.vercel.id === i.vercelProjectId &&
+    targets.vercel.teamId === i.vercelTeamId && b?.targetSha === q.sha &&
+    b.render?.deploymentId === r.baseline.renderDeployId && b.render.sourceSha === r.baseline.renderSha &&
+    b.vercel?.deploymentId === r.baseline.vercelDeployId, 'TARGET_FAILURE_CANDIDATE_OR_BASELINE_CHANGED');
+  return r;
+}
+
+function targetFailureProof(r) {
+  return { runId: r.run.runId, runAttempt: 1, executorSha: r.run.executorSha,
+    artifactId: r.run.artifactId, archiveSha256: r.run.archiveSha256, rowsSha256: r.run.rowsSha256,
+    originalConclusion: 'failure', terminalFailureCode: r.run.terminalFailureCode,
+    outcome: 'ACKNOWLEDGED_TERMINAL_RENDER_FAILURE_NO_VERCEL_REQUEST',
+    renderDeployId: r.renderOperation.deployId, sourceSha: r.renderOperation.sourceSha,
+    terminalState: r.renderOperation.state, baseline: r.baseline, reconciliationSha256: targetFailureDigest,
+    mutationFree: false, successfulFullReleasePredecessor: false,
+    retryOrContinuationAuthority: false, replayAuthority: false, deploymentAuthority: false };
+}
+
+function validateTargetFailureContext(run, attempt, production, candidate, targets) {
+  const r = validateTargetFailureCandidate(candidate, targets), p = r.run, i = r.originalIdentity;
+  check(String(run.id) === p.runId && run.run_number === p.runNumber && run.run_attempt === 1 && attempt === 1 &&
+    run.head_sha === p.executorSha && run.status === 'completed' && run.conclusion === 'failure' &&
+    run.actor?.login === p.actor.login && run.actor?.id === p.actor.id &&
+    run.repository?.full_name === i.executorRepository && run.head_repository?.full_name === i.executorRepository &&
+    run.head_branch === 'main' && run.event === 'workflow_dispatch' && run.path === '.github/workflows/deploy.yml' &&
+    run.name === 'Qualified production executor' && production.name === 'Unattended recovery release' &&
+    production.run_id === run.id && production.run_attempt === 1 && production.status === 'completed' &&
+    production.conclusion === 'failure' && production.steps?.filter(step => step.conclusion === 'failure').length === 1 &&
+    production.steps.find(step => step.conclusion === 'failure').name ===
+      'Revalidate policy, provenance, providers and recovery before automatic deployment', 'TARGET_FAILURE_EXECUTION_CHANGED');
+  return p;
+}
+
+function validateTargetFailureArtifact(pin, descriptor, metadata) {
+  const r = validateTargetFailureRecord(), p = r.run;
+  check(objectDigest(pin) === objectDigest(p) && descriptor.runId === p.runId && descriptor.runAttempt === 1 &&
+    descriptor.sha === p.executorSha && descriptor.artifactId === p.artifactId && String(metadata.id) === p.artifactId &&
+    metadata.name === `production-release-audit-${p.runId}-1` && metadata.expired === false &&
+    metadata.digest === 'sha256:' + p.archiveSha256 && metadata.workflow_run?.id === Number(p.runId) &&
+    metadata.workflow_run.head_sha === p.executorSha && metadata.workflow_run.repository_id === 1423239668 &&
+    metadata.workflow_run.head_repository_id === 1423239668, 'TARGET_FAILURE_ORIGINAL_ARTIFACT_REQUIRED');
+}
+
+function validateTargetFailureAudit(rows, descriptor, pin, targets) {
+  const r = validateTargetFailureRecord(), p = r.run;
+  check(objectDigest(pin) === objectDigest(p) && descriptor.runId === p.runId && descriptor.runAttempt === 1 &&
+    descriptor.sha === p.executorSha && descriptor.artifactId === p.artifactId &&
+    Array.isArray(rows) && rows.length === p.rowCount && objectDigest(rows) === p.rowsSha256 &&
+    targets.render.id === r.originalIdentity.renderServiceId && targets.vercel.id === r.originalIdentity.vercelProjectId,
+  'TARGET_FAILURE_ORIGINAL_AUDIT_REQUIRED');
+  const expected = { ...r.originalIdentity, releaseRunId: p.runId, releaseRunAttempt: 1, executorSha: p.executorSha };
+  const phases = name => rows.filter(row => row.phase === name);
+  check(rows.every(row => Object.entries(expected).every(([key, value]) => row[key] === value)) &&
+    phases('render-requesting').length === 1 && phases('render-requested').length === 1 &&
+    phases('render-requested')[0].renderDeployId === r.renderOperation.deployId &&
+    rows.findIndex(row => row.phase === 'render-requesting') < rows.findIndex(row => row.phase === 'render-requested') &&
+    rows.at(-1).phase === 'failed' && rows.at(-1).code === p.terminalFailureCode && phases('failed').length === 1 &&
+    !rows.some(row => row.phase === 'verified' || row.phase === 'render-ready' || row.phase.startsWith('vercel-')),
+  'TARGET_FAILURE_EFFECT_CHANGED');
+  return targetFailureProof(r);
+}
+
+// Only an authenticated historical proof can select this exception. It never
+// supplies prior.renderDeployId or permits reusing/retrying the failed operation.
+export function selectTargetFailure(reconciliations, candidate, targets) {
+  const matches = (reconciliations ?? []).filter(row => row.runId === reconciledTargetFailureRunId);
+  if (!matches.length) return null;
+  const r = validateTargetFailureCandidate(candidate, targets);
+  check(matches.length === 1 && objectDigest(matches[0]) === objectDigest(targetFailureProof(r)),
+    'TARGET_FAILURE_PROOF_CHANGED');
+  return matches[0];
+}
 // Only the renewed recovery-evidence policy for the already accepted candidate.
 // Original reconciliation/audit policy hashes remain immutable historical facts.
 const renewedRecoveryPolicy = Object.freeze({
@@ -156,10 +253,11 @@ export function validateReconciliationRecords(bytes = Object.fromEntries(Object.
 }
 
 export function isReconciledHistoricalRun(runId) {
-  return ['40850715880', '40883686654', '41527223264', '41822854444', '41868204651'].includes(String(runId));
+  return ['40850715880', '40883686654', '41527223264', '41822854444', '41868204651', reconciledTargetFailureRunId].includes(String(runId));
 }
 
 export function validateHistoricalContext(run, attempt, production, candidate, targets) {
+  if (String(run.id) === reconciledTargetFailureRunId) return validateTargetFailureContext(run, attempt, production, candidate, targets);
   if (['41822854444','41868204651'].includes(String(run.id))) return validateReadinessFailureContext(run, attempt, production, candidate);
   if (String(run.id) === '41527223264') return validateFailedRenderContext(run, attempt, production, candidate, targets);
   const record = validateReconciliationRecords(), p = record.heldPair;
@@ -191,6 +289,7 @@ export function validateHistoricalContext(run, attempt, production, candidate, t
 }
 
 export function validateHistoricalArtifact(pin, descriptor, metadata) {
+  if (pin.runId === reconciledTargetFailureRunId) return validateTargetFailureArtifact(pin, descriptor, metadata);
   if (['41822854444','41868204651'].includes(pin.runId)) return validateReadinessFailureArtifact(pin, descriptor, metadata);
   if (pin.runId === '41527223264') return validateFailedRenderArtifact(pin, descriptor, metadata);
   const record = validateReconciliationRecords();
@@ -202,6 +301,7 @@ export function validateHistoricalArtifact(pin, descriptor, metadata) {
 }
 
 export function validateHistoricalAudit(rows, descriptor, pin, targets) {
+  if (pin.runId === reconciledTargetFailureRunId) return validateTargetFailureAudit(rows, descriptor, pin, targets);
   if (['41822854444','41868204651'].includes(pin.runId)) return validateReadinessFailureAudit(rows, descriptor, pin);
   if (pin.runId === '41527223264') return validateFailedRenderAudit(rows, descriptor, pin, targets);
   const record = validateReconciliationRecords(), p = record.heldPair;
