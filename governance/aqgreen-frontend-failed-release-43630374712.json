@@ -1,0 +1,84 @@
+{
+  "contract": "aqua.frontend-failed-release-read-only-reconciliation",
+  "version": 1,
+  "originalExecution": {
+    "repository": "aqua-lifestyle/aqua-deployment",
+    "runId": "43630374712",
+    "runNumber": 82,
+    "runAttempt": 1,
+    "executorSha": "085808bd918309592d372388889fda80401a1b46",
+    "actor": { "login": "Xolani-M", "id": 86495928 },
+    "conclusion": "failure",
+    "productionJobId": "132555880732",
+    "productionJobConclusion": "failure",
+    "failedStep": "Revalidate policy, provenance, providers and recovery before automatic deployment"
+  },
+  "originalAudit": {
+    "artifactId": "14128261978",
+    "artifactName": "production-release-audit-43630374712-1",
+    "archiveSha256": "c471733ef4d2bd47f006a38339ee4f377e283f155f40e41271afec72077baf43",
+    "reportSha256": "14adb3dd0f7a4c22d4a0908db26a3fbdeffe285736e9cfd2c0171730d290c746",
+    "rowsSha256": "f42bcd7bbe44d67b8797360d2b1350092360ec6609560d6c592605c8c4016bfe",
+    "phases": [
+      "evidence-selected", "frontend-baseline-selected", "frontend-classified",
+      "frontend-vercel-files-requesting", "frontend-vercel-files-uploaded",
+      "frontend-vercel-requesting", "frontend-vercel-requested", "failed"
+    ],
+    "terminalFailureCode": "VERCEL_EFFECTIVE_BUILD_INPUTS_UNVERIFIABLE"
+  },
+  "qualifiedSource": {
+    "repository": "aqua-lifestyle/aqua-lifestyle",
+    "sha": "fb4d7e509db2f5c8de68df44ea978995a5c455fb",
+    "ciRunId": "43597833117",
+    "ciRunAttempt": 1,
+    "policySha256": "717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840",
+    "frontendRelease": "6b2d9aaeaf30adab12b16f1b0b4d4e9a073987ca195fac8df7ddb7ce006732b7",
+    "releaseIdentity": "c66073b8524e685de05b249fbf949e3772b695fa6830a9dfbc4402243db97d75",
+    "sourceManifestSha256": "9f6c4e127dc2b4a5c861a2e9a99c4ea31e7a32316f182a98f89ba7ca58643a00",
+    "fileSourceProofSha256": "732189396f6d91b8f6d25a02b8475344db0ed00ca5a7caf25e040022b00df351"
+  },
+  "observedVercel": {
+    "observedAt": "2026-11-14T19:53:29.652Z",
+    "deploymentId": "dpl_EXC25PZxFuuWzeV3Vud5F3PgkmfE",
+    "originalBaselineDeploymentId": "dpl_9gLkJk4TBHxcjK6LkKVE14eZ533x",
+    "projectId": "prj_6qL1e43KhsWrRshY5GxdmGl3HGMz",
+    "teamId": "team_Hc3BWfhTLfwLzwbgbtaasBUY",
+    "target": "production",
+    "state": "READY",
+    "productionUrl": "https://www.aqualifestyleclub.co.za",
+    "aliasStable": true,
+    "providerEnvironmentShape": "names-only arrays",
+    "configurationEvidence": "compiled-literals-from-frozen-public-env-module",
+    "publicBuildInputs": {
+      "NEXT_PUBLIC_ABP_API_URL": "https://aqualifestyle-api.onrender.com",
+      "NEXT_PUBLIC_DEFAULT_TENANT_NAME": "Default"
+    },
+    "compiledAssets": [{
+      "path": "/_next/static/immutable/chunks/0s12mk07bw_o6.js",
+      "sha256": "3921ea950a90dec02d2dcc14669d7eba78718c982ff601309905bb8fab928cc3",
+      "bytes": 21285
+    }]
+  },
+  "observedBackend": {
+    "observedAt": "2026-11-14T19:53:43.862Z",
+    "renderDeployId": "dep-dbru710n74is738ah8bg",
+    "renderSha": "b8d86e5e60997483423b273d5f426c08b411f573",
+    "health": "Healthy",
+    "paymentAvailability": "Available",
+    "commissioningEnabled": true,
+    "weeklyCommissionsEnabled": true,
+    "financialOperationsEnabled": true,
+    "backgroundJobsEnabled": false,
+    "automaticPayoutsEnabled": false,
+    "entryMonthlyObligationsEnabled": false
+  },
+  "scope": {
+    "kind": "read-only-original-provider-effect",
+    "originalRunRemainsFailed": true,
+    "successfulReleaseReceiptCreated": false,
+    "newVercelDeploymentAuthorized": false,
+    "renderMutationAuthorized": false,
+    "financialOrD10ChangeAuthorized": false,
+    "realCustomerPaymentVerified": false
+  }
+}

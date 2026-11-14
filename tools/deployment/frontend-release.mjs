@@ -3,7 +3,7 @@
 import { objectDigest, sha256 } from './github-evidence.mjs';
 import { normalRuntimeSettings, cleanStartRuntimeSettings } from './runtime-readiness.mjs';
 import { approvedPublicInputs, prepareFrontend, fileDeploymentBody,
-  validateFileDeployment, validateFrontendProof, verifyObservedFileDeployment } from './vercel-source.mjs';
+  validateFrontendProof, verifyObservedFileDeployment } from './vercel-source.mjs';
 import { frontendReleaseRecordDigest, frontendSuccessorCandidateSha,
   validateAqGreenFrontendSuccessor, validateFrontendSuccessorIdentity } from './aqgreen-frontend-source-successor.mjs';
 
@@ -201,8 +201,10 @@ export async function deployFrontendRelease(api, q, report, options) {
   }, x => x.readyState, 'READY', activeWeb, options);
   check(web.id === requested.id && web.readyState === 'READY' && !web.aliasError,
     'FRONTEND_DEPLOYMENT_UNVERIFIABLE');
-  const project = await readProject(web.id);
-  validateFileDeployment(web, frontend.proof, targets.vercel, meta, project.rootDirectory);
+  await readProject(web.id);
+  // Vercel may report only env/build.env names. The existing observed verifier
+  // authenticates readable values OR the alias-bound compiled public inputs;
+  // a values-only check here would reject before that equivalent proof runs.
   const observation = await verifyObservedFileDeployment(api, web, frontend.proof,
     targets.vercel, meta, options.publicFetch);
   await verifyBackendUnchanged();
@@ -211,9 +213,13 @@ export async function deployFrontendRelease(api, q, report, options) {
   check(proxy?.status === 'Healthy' && proxy.buildId === proof.renderSha &&
     proxy.paymentAvailability === state, 'FRONTEND_BACKEND_STATE_CHANGED');
   const finalWeb = await api.vercel(`/v13/deployments/${web.id}`);
-  validateFileDeployment(finalWeb, frontend.proof, targets.vercel, meta, (await readProject(web.id)).rootDirectory);
+  await readProject(web.id);
+  const finalObservation = await verifyObservedFileDeployment(api, finalWeb, frontend.proof,
+    targets.vercel, meta, options.publicFetch);
   check(finalWeb.readyState === 'READY' && !finalWeb.aliasError &&
-    observation.deploymentId === web.id && observation.aliasStable === true,
+    [observation, finalObservation].every(row => row.deploymentId === web.id &&
+      row.aliasStable === true && row.sourceProofSha256 === objectDigest(frontend.proof)) &&
+    objectDigest(finalObservation.observedPublicInputs) === objectDigest(observation.observedPublicInputs),
   'FRONTEND_DEPLOYMENT_UNVERIFIABLE');
   const endHistory = await deploymentHistory(api, 'vercel');
   check(endHistory.every(row => !activeWeb.has(row.state ?? row.readyState)) &&
