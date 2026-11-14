@@ -177,7 +177,8 @@ function continuationFixture(successor = false, reuse = false) {
   };
   f.api.health = async () => ({ status: 200, recovery: null, body: { status: 'Healthy',
     buildId: reuse || f.state.newRender?.status === 'live' ? active.sha : common.sha,
-    environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy', dataProtectionKeyStoreStatus: 'Healthy' } });
+    environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy',
+    dataProtectionKeyStoreStatus: 'Healthy', paymentAvailability: 'Held' } });
   f.execute = async (options = {}) => {
     const now = () => f.state.clock;
     const evidence = await verifyGitHubEvidence(f.api, f.state.candidate, f.state.policy, f.readSourceDigest, now);
@@ -363,7 +364,7 @@ test('financial holds, unhealthy state and protected OIDC failure remain pre-Ver
     f => f.api.readiness = async () => { throw Error('synthetic OIDC failure'); },
     f => f.api.readiness = async () => ({ status: 200, body: { buildId: common.sha, status: 'Ready' } })]) {
     const f = continuationFixture(); edit(f);
-    await assert.rejects(f.execute(), /RUNTIME_CONFIGURATION|API_REVISION|PROTECTED_RUNTIME/);
+    await assert.rejects(f.execute(), /RUNTIME_CONFIGURATION|API_REVISION|PROTECTED_RUNTIME|POST_NORMAL_BACKEND_RELEASE_REQUIRES_SEPARATE_AUTHORIZATION/);
     assert.equal(f.posts.length, 0); assert.equal(f.state.uploads.length, 0);
   }
 });

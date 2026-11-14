@@ -8,6 +8,9 @@ import { AttestationDenied, verifyPrototypeAttestation } from './authorization-a
 import { VercelSourceDenied, approvedPublicInputs, prepareFrontend, validateFrontendProof, fileDeploymentBody,
   validateFileDeployment, validateFileDeploymentSource, verifyObservedFileDeployment } from './vercel-source.mjs';
 import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validateReadiness, validateD10Bindings } from './runtime-readiness.mjs';
+import { frontendReleaseMode, frontendReleaseRecordDigest, frontendSuccessorCandidateSha,
+  validateFrontendSuccessorIdentity } from './aqgreen-frontend-source-successor.mjs';
+import { FrontendReleaseDenied, deployFrontendRelease, validateFrontendReceipt } from './frontend-release.mjs';
 import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied, memberContinuation,
   validateMemberContinuation, validateMemberIdentity, verifyMemberSource, verifyMemberAuthority, validateMemberReceipt, deployMemberRelease } from './member-release.mjs';
 import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateMigrationDelta,
@@ -149,8 +152,9 @@ export function validateDispatchInputs(inputs) {
   const mode = Object.hasOwn(inputs, 'qualification_only') ? inputs.qualification_only : false;
   requireThat([true, false, 'true', 'false'].includes(mode), 'EXECUTOR_INPUT_INVALID');
   const releaseMode = Object.hasOwn(inputs, 'release_mode') ? inputs.release_mode : 'full';
-  requireThat(['full', memberPolicy.mode].includes(releaseMode) &&
-    (releaseMode === 'full' || inputs.sha === memberPolicy.frontendSha), 'EXECUTOR_INPUT_INVALID');
+  requireThat(['full', memberPolicy.mode, frontendReleaseMode].includes(releaseMode) &&
+    (releaseMode === 'full' || (releaseMode === memberPolicy.mode ?
+      inputs.sha === memberPolicy.frontendSha : inputs.sha === frontendSuccessorCandidateSha)), 'EXECUTOR_INPUT_INVALID');
   const prospectiveMode = inputs.prospective_mode ?? 'none';
   requireThat(['none', 'capture-baseline', 'authorize'].includes(prospectiveMode), 'EXECUTOR_INPUT_INVALID');
   if (prospectiveMode === 'capture-baseline') requireThat((mode === true || mode === 'true') &&
@@ -229,7 +233,7 @@ export async function loadProspectiveRecovery(api, inputs, qualified, releaseRun
 export function freezeCandidate(qualified, env, policy = standingPolicy, qualificationOnly = false,
   releaseMode = 'full', prospectiveMode = 'none') {
   requireThat(typeof qualificationOnly === 'boolean', 'EXECUTOR_INPUT_INVALID');
-  requireThat(['full', memberPolicy.mode].includes(releaseMode), 'EXECUTOR_INPUT_INVALID');
+  requireThat(['full', memberPolicy.mode, frontendReleaseMode].includes(releaseMode), 'EXECUTOR_INPUT_INVALID');
   requireThat(['none', 'capture-baseline', 'authorize'].includes(prospectiveMode) &&
     (prospectiveMode === 'none' || qualified.sha === prospectiveRecovery.targetSha && releaseMode === 'full'),
   'PROSPECTIVE_RECOVERY_SOURCE_MISMATCH');
@@ -244,6 +248,7 @@ export function freezeCandidate(qualified, env, policy = standingPolicy, qualifi
   const candidate = { ...qualified, version: external ? 4 : 3, qualificationOnly,
     ...(prospectiveMode !== 'none' ? { prospectiveMode } : {}),
     ...(releaseMode === memberPolicy.mode ? { memberRelease: memberPolicyDigest } : {}),
+    ...(releaseMode === frontendReleaseMode ? { frontendRelease: frontendReleaseRecordDigest } : {}),
     ...(external ? { executorRepository: execution.repository, executorSha: env.GITHUB_SHA } : {}), releaseRunId: env.GITHUB_RUN_ID,
     releaseRunAttempt: Number(env.GITHUB_RUN_ATTEMPT), policySha256: policyDigest(policy), ...targetIdentity };
   validateReleaseIdentity(candidate);
@@ -259,12 +264,14 @@ function validateReleaseIdentity(identity) {
     Object.entries(targetIdentity).every(([key, value]) => identity[key] === value),
   'RELEASE_IDENTITY_UNVERIFIABLE');
   if (identity.memberRelease !== undefined) validateMemberIdentity(identity);
+  if (identity.frontendRelease !== undefined) validateFrontendSuccessorIdentity(identity);
 }
 
 export function releaseKey(identity) {
   validateReleaseIdentity(identity);
   return createHash('sha256').update(JSON.stringify(
-    [...releaseIdentityFields, ...(identity.memberRelease !== undefined ? ['memberRelease'] : [])]
+    [...releaseIdentityFields, ...(identity.memberRelease !== undefined ? ['memberRelease'] : []),
+      ...(identity.frontendRelease !== undefined ? ['frontendRelease'] : [])]
       .map(key => [key, identity[key]]))).digest('hex');
 }
 
@@ -272,7 +279,8 @@ export function verifyCandidate(candidate, qualified, archive, trustedArchive) {
   validateReleaseIdentity(candidate);
   requireThat(typeof qualified.qualificationOnly === 'boolean' &&
     candidate.qualificationOnly === qualified.qualificationOnly &&
-    candidate.memberRelease === qualified.memberRelease, 'CANDIDATE_PURPOSE_MISMATCH');
+    candidate.memberRelease === qualified.memberRelease &&
+    candidate.frontendRelease === qualified.frontendRelease, 'CANDIDATE_PURPOSE_MISMATCH');
   for (const key of releaseIdentityFields)
     requireThat(candidate[key] === qualified[key], 'CANDIDATE_PROVENANCE_MISMATCH');
   requireThat(candidate.sourceSha256 === createHash('sha256').update(archive).digest('hex'),
@@ -607,7 +615,7 @@ export function clients(env, fetcher = fetch, reportGitHubRead = row => console.
         return r.status;
       } catch { throw new ReleaseFailure('WEB_READINESS_FAILED'); }
     },
-    webHealth: async sha => {
+    webHealth: async (sha, expectedAvailability = 'Held') => {
       try {
         const url = new URL('/api/backend/api/health', targets.vercel.productionUrl);
         const response = await fetcher(url.href, { redirect: 'error', signal: AbortSignal.timeout(15_000),
@@ -621,7 +629,7 @@ export function clients(env, fetcher = fetch, reportGitHubRead = row => console.
           paymentAvailability: health?.paymentAvailability };
         if (result.status !== 'Healthy' || result.buildId !== sha || result.databaseStatus !== 'Healthy' ||
             result.redisStatus !== 'Healthy' || result.dataProtectionKeyStoreStatus !== 'Healthy' ||
-            result.paymentAvailability !== 'Held') throw new Error();
+            result.paymentAvailability !== expectedAvailability) throw new Error();
         return result;
       } catch { throw new ReleaseFailure('WEB_READINESS_FAILED'); }
     }
@@ -683,7 +691,8 @@ export function createAuditWriter(identity, emit) {
         historicalReleaseStatus: 'incomplete' };
     }
     emit({ ...row, ...Object.fromEntries(releaseIdentityFields.map(key => [key, identity[key]])),
-      ...(identity.memberRelease !== undefined ? { memberRelease: identity.memberRelease } : {}), ...known });
+      ...(identity.memberRelease !== undefined ? { memberRelease: identity.memberRelease } : {}),
+      ...(identity.frontendRelease !== undefined ? { frontendRelease: identity.frontendRelease } : {}), ...known });
   };
 }
 
@@ -866,12 +875,18 @@ export async function evidencePlan(api, candidate, policy) {
   // no portable ticket: authenticate every completed release's immutable audit.
   // Deleted history, expired evidence or a previously deployed SHA denies even
   // when the caller supplies another CI run/attempt or dispatches a fresh run.
-  const verifiedReleases = [], memberReleases = [];
+  const verifiedReleases = [], memberReleases = [], frontendReleases = [];
   for (const past of successful) {
     const descriptor = await auditArtifact(api, past, past.run_attempt);
     const rows = await readReleaseAudit(api, descriptor);
     if (rows[0]?.memberRelease !== undefined) {
       memberReleases.push(validateMemberReceipt(rows, descriptor, targets));
+      continue;
+    }
+    if (rows[0]?.frontendRelease !== undefined) {
+      const receipt = validateFrontendReceipt(rows, descriptor, targets);
+      requireThat(receipt.sha !== candidate.sha, 'SOURCE_ALREADY_VERIFIED');
+      frontendReleases.push(receipt);
       continue;
     }
     latest ??= past;
@@ -1004,6 +1019,7 @@ export async function evidencePlan(api, candidate, policy) {
     ...(historicalReconciliations.length ? { historicalReconciliations } : {}),
     ...(continuation ? { memberContinuation: continuation } : {}),
     ...(memberReleases.length ? { memberReleases } : {}),
+    ...(frontendReleases.length ? { frontendReleases } : {}),
     firstReleaseRecoveryEvidenceSha256: candidate.prospectiveRecovery || latest ? null : policy.firstReleaseRecovery.evidenceSha256,
     baseline: latest && !candidate.prospectiveRecovery ? await auditArtifact(api, latest, latest.run_attempt) : null,
     resume: resumeChain.at(-1) ?? null, resumeChain };
@@ -1225,6 +1241,12 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     authorizationDigest: prospective.authorization.digest,
     historicalReleaseRunId: prospectiveRecovery.incompleteReleaseRunId,
     historicalReleaseStatus: 'incomplete' } });
+  if (qualified.frontendRelease !== undefined) {
+    return deployFrontendRelease(api, qualified, report, { ...options, guard, targets, plan,
+      policy, evidence, validateRender, validateVercel, validateHealth, validateBaselineReceipt,
+      deploymentHistory, waitFor, releaseKey,
+      validateAdmission: () => validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now) });
+  }
   const frontend = prepareFrontend(options.frontendArchive, qualified.sha, targets.vercel, policy.scope.frontend.publicBuildInputs);
   requireThat(!prior.vercelSourceProof || objectDigest(prior.vercelSourceProof) === objectDigest(frontend.proof), 'CONTRADICTORY_RESUME_RECEIPT');
   const servicePath = `/services/${targets.render.id}`;
@@ -1269,6 +1291,10 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     if (qualified.sha === rootUnboundCandidateSha)
       requireThat(rows.some(r => r.envVar.key === 'Yoco__Mode' && r.envVar.value === 'live'), 'OWNER_RENDER_LIVE_CONFIGURATION_CHANGED');
   };
+  readScope('health');
+  const beforeFullRelease = await api.health();
+  requireThat((beforeFullRelease.body.result ?? beforeFullRelease.body).paymentAvailability === 'Held',
+    'POST_NORMAL_BACKEND_RELEASE_REQUIRES_SEPARATE_AUTHORIZATION');
   await readRender();
   readScope('vercel-project');
   let project = await api.vercel(projectPath);
@@ -1910,7 +1936,8 @@ export function safeReleaseFailureCode(error) {
     error instanceof VercelSourceDenied || error instanceof FirstReleaseRecoveryDenied ||
     error instanceof SchemaFirstDenied || error instanceof MemberReleaseDenied ||
     error instanceof HistoricalReconciliationDenied || error instanceof PriorRunNotRecognized ||
-    error instanceof ReadinessReleaseDenied || error instanceof ProspectiveBaselineDenied) ?
+    error instanceof ReadinessReleaseDenied || error instanceof ProspectiveBaselineDenied ||
+    error instanceof FrontendReleaseDenied) ?
     error.message : 'UNEXPECTED_RELEASE_ERROR';
 }
 

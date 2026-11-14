@@ -161,7 +161,8 @@ export function createGitHubAdmission(qualified, policy, evidence, now = Date.no
   'ADMISSION_EVIDENCE_MISMATCH');
   const evidenceSha256 = objectDigest(evidence);
   const binding = Object.fromEntries([...receiptBindings,
-    ...(qualified.memberRelease !== undefined ? ['memberRelease'] : [])].map(k => [k, qualified[k]]));
+    ...(qualified.memberRelease !== undefined ? ['memberRelease'] : []),
+    ...(qualified.frontendRelease !== undefined ? ['frontendRelease'] : [])].map(k => [k, qualified[k]]));
   check(receiptBindings.every(k => binding[k] !== undefined), 'ADMISSION_BINDING_INCOMPLETE');
   const expiry = Math.min(time + policy.authorization.maxAdmissionAgeSeconds * 1000,
     Date.parse(evidence.completedAt) + policy.authorization.maxCiAgeSeconds * 1000);
