@@ -10,6 +10,7 @@ import { d10OneTimeCandidateSha, validateD10OneTimeCandidate } from './d10-one-t
 import { verifiedHoldCandidateSha, validateVerifiedHoldCandidate } from './verified-hold-release.mjs';
 import { unusedExpiryCandidateSha, validateUnusedExpiryCandidate } from './unused-expiry-release.mjs';
 import { weeklyReadinessFixCandidateSha, validateWeeklyReadinessFixCandidate } from './aqgreen-m55-source-successor.mjs';
+import { frontendSuccessorCandidateSha, validateAqGreenFrontendSuccessor } from './aqgreen-frontend-source-successor.mjs';
 
 // Executor-owned pins from the frozen, CI-qualified application. No candidate
 // manifest, dispatch input or migration command can extend this exception.
@@ -102,6 +103,8 @@ function validateCompletedMigration55Scope(q, policy) {
       'COMPLETED_M55_CARRY_FORWARD_SCOPE_REQUIRED');
     } else if (q?.sha === weeklyReadinessFixCandidateSha) {
       compatibility = validateWeeklyReadinessFixCandidate(q).completedCarry;
+    } else if (q?.sha === frontendSuccessorCandidateSha) {
+      compatibility = validateAqGreenFrontendSuccessor(q).completedCarry;
     } else {
       check(q?.sha === carryCandidateSha, 'COMPLETED_M55_EXACT_SCOPE_REQUIRED');
       compatibility = validateCompletedCandidateCarryForward();

@@ -10,6 +10,12 @@ export const runtimeSettings = Object.freeze({
 });
 export const cleanStartRuntimeSettings = Object.freeze({...runtimeSettings,
   App__AQGreenV2__Commissioning__AdmissionMode: ['CLEAN_START']});
+export const normalRuntimeSettings = Object.freeze({...runtimeSettings,
+  Yoco__Mode: ['live'], App__YocoCutover__Enabled: ['true'],
+  App__WeeklyCommissions__Enabled: ['true'], App__FinancialOperations__Enabled: ['true'],
+  App__AQGreenV2__Commissioning__Enabled: ['true'],
+  App__AQGreenV2__Commissioning__AdmissionMode: ['CLEAN_START'],
+  App__AutomaticPayouts__Enabled: ['false']});
 export const readinessUrl = 'https://aqualifestyle-api.onrender.com/api/deployment-readiness';
 const deny = code => { throw Error(code); };
 

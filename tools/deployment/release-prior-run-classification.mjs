@@ -99,10 +99,13 @@ export const mutationCapablePhases = Object.freeze(new Set([
   'member-readiness', 'member-baseline-selected', 'member-render-reconciled',
   'member-render-requesting', 'member-render-requested', 'member-handoff-sample',
   'member-render-ready', 'member-vercel-files-requesting', 'member-vercel-files-uploaded',
-  'member-vercel-requesting', 'member-vercel-requested', 'member-deployed']));
+  'member-vercel-requesting', 'member-vercel-requested', 'member-deployed',
+  'frontend-vercel-files-requesting', 'frontend-vercel-files-uploaded',
+  'frontend-vercel-requesting', 'frontend-vercel-requested', 'frontend-deployed']));
 
 const knownPhases = Object.freeze(new Set([
   'evidence-selected', 'baseline-selected', 'admitted', 'verified', 'failed', 'provider-read',
+  'frontend-baseline-selected', 'frontend-classified',
   ...mutationCapablePhases]));
 
 // Terminal codes reachable only after a mutation-capable call was initiated, or
@@ -116,7 +119,13 @@ export const reconciliationForbiddenCodes = Object.freeze(new Set([
 
 // Unknown terminal categories are not evidence of a read-only stop. Extend this
 // reviewed vocabulary explicitly when another failure category is established.
-const preMutationFailureCodes = new Set(['PROVIDER_READ_REJECTED', 'PROTECTED_RUNTIME_READINESS_FAILED', 'RENDER_BASELINE_DRIFT']);
+const preMutationFailureCodes = new Set(['PROVIDER_READ_REJECTED', 'PROTECTED_RUNTIME_READINESS_FAILED',
+  'RENDER_BASELINE_DRIFT', 'POST_NORMAL_BACKEND_RELEASE_REQUIRES_SEPARATE_AUTHORIZATION',
+  'FRONTEND_RELEASE_NO_RESUME', 'FRONTEND_BASELINE_PROVENANCE_MISMATCH',
+  'FRONTEND_ONLY_RELEASE_REQUIRES_SEPARATE_BACKEND_AUTHORIZATION',
+  'FRONTEND_BACKEND_STATE_CHANGED', 'FRONTEND_BACKEND_SETTINGS_CHANGED', 'FRONTEND_RENDER_DRIFT',
+  'FRONTEND_CONFIGURATION_UNVERIFIED', 'FRONTEND_INCUMBENT_ALIAS_DRIFT', 'FRONTEND_SOURCE_ALREADY_DEPLOYED',
+  'FRONTEND_EXECUTION_WINDOW_EXPIRED']);
 
 export const providerReadScopes = Object.freeze(new Set([
   'github-repository', 'github-compare', 'render-service', 'render-env', 'render-deploy-history',
@@ -152,7 +161,7 @@ function validatePriorAuditRows(rows, run, attempt, descriptor) {
     // Every retained row must describe the same exact execution identity.
     check(['repository', 'sha', 'ciRunId', 'ciRunAttempt', 'policySha256', 'environment', 'profile',
       'renderServiceId', 'vercelProjectId', 'vercelTeamId', 'executorRepository', 'executorSha',
-      'releaseRunId', 'releaseRunAttempt'].every(key => row[key] === baseline[key]),
+      'releaseRunId', 'releaseRunAttempt', 'frontendRelease'].every(key => row[key] === baseline[key]),
     'PRIOR_AUDIT_IDENTITY_CHANGED');
     check(knownPhases.has(row.phase), 'PRIOR_AUDIT_PHASE_UNRECOGNIZED');
     if (row.phase === 'provider-read') check(providerReadScopes.has(row.scope), 'PRIOR_AUDIT_READ_SCOPE_UNRECOGNIZED');

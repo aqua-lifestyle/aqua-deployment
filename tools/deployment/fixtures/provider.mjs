@@ -107,7 +107,7 @@ const publicVars = () => [
 ];
 const health = sha => ({ status: 200, recovery: null, body: { result: { status: 'Healthy',
   buildId: sha, environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy',
-  dataProtectionKeyStoreStatus: 'Healthy' } } });
+  dataProtectionKeyStoreStatus: 'Healthy', paymentAvailability: 'Held' } } });
 const immediate = { attempts: 3, pause: async () => {} };
 const signer = generateKeyPairSync('ed25519');
 const verifier = { identity: 'fixture-verifier', repository: 'UNCONFIGURED', workflow: 'UNCONFIGURED', revision: 'e'.repeat(40) };

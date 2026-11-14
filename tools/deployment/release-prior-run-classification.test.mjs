@@ -70,6 +70,25 @@ test('a complete PROVIDER_READ_REJECTED audit that never initiated a mutation is
       rowsSha256: objectDigest(rows), terminalFailureCode: 'PROVIDER_READ_REJECTED'});
 });
 
+test('frontend read-only stops are retryable but every upload or deployment phase requires reconciliation', () => {
+  const purpose = '6b2d9aaeaf30adab12b16f1b0b4d4e9a073987ca195fac8df7ddb7ce006732b7';
+  const baseline = { ...rows[0], frontendRelease: purpose };
+  const stopped = [baseline, { ...baseline, phase: 'frontend-baseline-selected' },
+    { ...baseline, phase: 'frontend-classified' },
+    { ...rows[1], frontendRelease: purpose, code: 'FRONTEND_BACKEND_STATE_CHANGED' }];
+  const input = { run: run(41494396970, { num: 12 }), attempt: 1,
+    production: failedJob(undefined, 'failure'), audit: audit({ rows: stopped }) };
+  assert.equal(recognize(input).terminalFailureCode, 'FRONTEND_BACKEND_STATE_CHANGED');
+  for (const phase of ['frontend-vercel-files-requesting', 'frontend-vercel-files-uploaded',
+    'frontend-vercel-requesting', 'frontend-vercel-requested', 'frontend-deployed']) {
+    const changed = structuredClone(input);
+    changed.audit.rows.splice(3, 0, { ...baseline, phase });
+    assert.throws(() => recognize(changed), /PRIOR_MUTATION_PHASE_REQUIRES_RECONCILIATION/);
+  }
+  const mixed = structuredClone(input); delete mixed.audit.rows[2].frontendRelease;
+  assert.throws(() => recognize(mixed), /PRIOR_AUDIT_IDENTITY_CHANGED/);
+});
+
 test('substituted, conflicting or incomplete audit evidence fails closed', () => {
   const cases = [
     ['head sha moved', {run: run(41494396970, {num: 12, sha: 'a'.repeat(40)}), attempt: 1, production: failedJob(undefined, 'failure'), audit: audit()}],
