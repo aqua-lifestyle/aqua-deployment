@@ -108,12 +108,13 @@ test('Normal settings preserve commissioning and financial holds', () => {
 
 // The archive comment is relabelled only for this controlled orchestration
 // fixture. The production entry authenticates the entire Git archive separately.
-function fixture(state = 'Available') {
+function fixture(state = 'Available', { namesOnly = false } = {}) {
   const source = frontendFixtureArchive(), archive = Buffer.from(source.archive);
   const offset = archive.indexOf(Buffer.from(source.sha)); assert.ok(offset >= 0);
   archive.write(frontendSuccessorCandidateSha, offset, 40, 'ascii');
   const s = { availability: state, alias: 'dpl_Legacy', servingId: 'dep-commissioned',
     uploads: 0, posts: [], audit: [], deployed: null, flipOnUpload: false, failedVercel: false,
+    compiledTenant: 'Default', changeCompiledOnFinalRead: false, compiledReadbacks: 0,
     vars: Object.fromEntries(Object.entries(state === 'Available' ? normalRuntimeSettings :
       cleanStartRuntimeSettings).map(([key, value]) => [key, value[0]])) };
   s.vars.App__AutomaticPayouts__Enabled = 'false';
@@ -129,7 +130,7 @@ function fixture(state = 'Available') {
     link: null, targets: { production: { id: s.alias } } });
   const inputRows = () => Object.entries({ NEXT_PUBLIC_ABP_API_URL: targets.vercel.publicApiUrl,
     NEXT_PUBLIC_DEFAULT_TENANT_NAME: targets.vercel.defaultTenantName }).map(([key, value]) =>
-    ({ key, value, type: 'plain', target: ['production'] }));
+    ({ key, value: namesOnly ? undefined : value, type: namesOnly ? 'encrypted' : 'plain', target: ['production'] }));
   const api = {
     gh: async route => {
       assert.equal(route, `/compare/${backend}...${frontendSuccessorCandidateSha}`);
@@ -147,7 +148,8 @@ function fixture(state = 'Available') {
       if (body) {
         assert.equal(path, '/v13/deployments'); s.posts.push(body);
         s.deployed = { ...body, id: 'dpl_New', projectId: targets.vercel.id,
-          target: 'production', readyState: 'BUILDING' };
+          target: 'production', readyState: 'BUILDING',
+          ...(namesOnly ? { env: Object.keys(body.env), build: { env: Object.keys(body.build.env) } } : {}) };
         return s.deployed;
       }
       if (path.startsWith('/v6/')) return { deployments: s.deployed ? [
@@ -180,7 +182,18 @@ function fixture(state = 'Available') {
       vercelDeployId: 'dpl_Legacy', vercelSourceProvenance: 'UNVERIFIED_LEGACY', origin: { sha: backend } }),
     deploymentHistory, waitFor, releaseKey, frontendArchive: archive,
     evidencePlan: { baseline: { runId: '123' }, resume: null }, baselineRows: [{}],
-    now, attempts: 2, pause: async () => {}, guard: async () => {}, validateAdmission: () => {} };
+    now, attempts: 2, pause: async () => {}, guard: async () => {}, validateAdmission: () => {},
+    publicFetch: async url => {
+      const path = new URL(url);
+      assert.equal(path.origin, targets.vercel.productionUrl);
+      if (path.pathname === '/login') {
+        s.compiledReadbacks++;
+        return new Response('<script src="/_next/static/chunks/public-env.js"></script>');
+      }
+      assert.equal(path.pathname, '/_next/static/chunks/public-env.js');
+      const tenant = s.changeCompiledOnFinalRead && s.compiledReadbacks > 1 ? 'Other' : s.compiledTenant;
+      return new Response(`schema.parse({NEXT_PUBLIC_ABP_API_URL:${JSON.stringify(targets.vercel.publicApiUrl)},NEXT_PUBLIC_DEFAULT_TENANT_NAME:${JSON.stringify(tenant)},NEXT_PUBLIC_MONITORING_ENDPOINT:undefined})`);
+    } };
   const report = createAuditWriter(q(), row => s.audit.push(row));
   report({ phase: 'evidence-selected', authorizationId: 'a'.repeat(64), evidenceSha256: 'b'.repeat(64),
     inventorySha256: 'c'.repeat(64), schemaFirstEvidenceSha256: 'd'.repeat(64), evidenceArtifactId: '123' });
@@ -206,6 +219,36 @@ test('Normal frontend release uploads only Vercel files; binds commissioned same
     const rows = structuredClone(f.s.audit); mutate(rows);
     assert.throws(() => validateFrontendReceipt(rows, descriptor, targets));
   }
+});
+
+test('names-only Vercel metadata is accepted only with observed alias-bound compiled public inputs', async () => {
+  const f = fixture('Available', { namesOnly: true });
+  await f.execute();
+  assert.equal(f.s.posts.length, 1);
+  assert.equal(f.s.compiledReadbacks, 2, 'final deployment must independently recheck compiled values');
+  assert.equal(f.s.audit.at(-1).phase, 'frontend-deployed');
+  assert.deepEqual(f.s.deployed.build.env, ['NEXT_PUBLIC_ABP_API_URL', 'NEXT_PUBLIC_DEFAULT_TENANT_NAME']);
+  for (const change of [x => x.s.compiledTenant = 'Other',
+    x => x.s.changeCompiledOnFinalRead = true]) {
+    const rejected = fixture('Available', { namesOnly: true }); change(rejected);
+    await assert.rejects(rejected.execute(), /VERCEL_EFFECTIVE_BUILD_INPUTS_UNVERIFIABLE/);
+    assert.equal(rejected.s.posts.length, 1);
+    assert.equal(rejected.s.audit.at(-1).phase, 'frontend-vercel-requested');
+    assert.ok(!rejected.s.audit.some(row => row.phase === 'frontend-deployed'));
+  }
+  const missing = fixture('Available', { namesOnly: true });
+  missing.options.publicFetch = async url => new Response(new URL(url).pathname === '/login' ?
+    '<script src="/_next/static/chunks/public-env.js"></script>' : 'no compiled public inputs');
+  await assert.rejects(missing.execute(), /VERCEL_COMPILED_PUBLIC_VALUES_MISSING_OR_CONFLICTING/);
+  assert.equal(missing.s.audit.at(-1).phase, 'frontend-vercel-requested');
+  const conflict = fixture('Available', { namesOnly: true }), read = conflict.api.vercel;
+  conflict.api.vercel = async (path, body) => {
+    const value = await read(path, body);
+    return path.endsWith('/dpl_New') ? { ...value,
+      env: { NEXT_PUBLIC_ABP_API_URL: 'https://foreign.example.invalid', NEXT_PUBLIC_DEFAULT_TENANT_NAME: 'Default' } } : value;
+  };
+  await assert.rejects(conflict.execute(), /VERCEL_EFFECTIVE_BUILD_INPUTS_UNVERIFIABLE/);
+  assert.equal(conflict.s.audit.at(-1).phase, 'frontend-vercel-requested');
 });
 
 test('Held and Normal are distinct fenced states; backend scope, drift and Vercel failures deny', async () => {

@@ -11,6 +11,8 @@ import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validat
 import { frontendReleaseMode, frontendReleaseRecordDigest, frontendSuccessorCandidateSha,
   validateFrontendSuccessorIdentity } from './aqgreen-frontend-source-successor.mjs';
 import { FrontendReleaseDenied, deployFrontendRelease, validateFrontendReceipt } from './frontend-release.mjs';
+import { FailedFrontendReleaseDenied, failedFrontendRunId,
+  validateFailedFrontendContext, validateFailedFrontendAudit } from './failed-frontend-release.mjs';
 import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied, memberContinuation,
   validateMemberContinuation, validateMemberIdentity, verifyMemberSource, verifyMemberAuthority, validateMemberReceipt, deployMemberRelease } from './member-release.mjs';
 import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateMigrationDelta,
@@ -875,7 +877,7 @@ export async function evidencePlan(api, candidate, policy) {
   // no portable ticket: authenticate every completed release's immutable audit.
   // Deleted history, expired evidence or a previously deployed SHA denies even
   // when the caller supplies another CI run/attempt or dispatches a fresh run.
-  const verifiedReleases = [], memberReleases = [], frontendReleases = [];
+  const verifiedReleases = [], memberReleases = [], frontendReleases = [], frontendReconciliations = [];
   for (const past of successful) {
     const descriptor = await auditArtifact(api, past, past.run_attempt);
     const rows = await readReleaseAudit(api, descriptor);
@@ -965,6 +967,18 @@ export async function evidencePlan(api, candidate, policy) {
         if (proof.renderContinuation === true) readinessRenderContinuation = proof;
         continue;
       }
+      if (external && String(run.id) === failedFrontendRunId) {
+        const pin = validateFailedFrontendContext(run, past, attempt, production, candidate, targets);
+        const descriptor = await auditArtifact(api, run, attempt);
+        const metadata = await releaseApi(api)(`/actions/artifacts/${descriptor.artifactId}`);
+        requireThat(metadata.digest === `sha256:${pin.originalAudit.archiveSha256}` &&
+          metadata.workflow_run?.repository_id === (await releaseApi(api)('')).id &&
+          metadata.workflow_run?.head_repository_id === metadata.workflow_run.repository_id,
+        'FAILED_FRONTEND_ORIGINAL_ARTIFACT_CHANGED');
+        frontendReconciliations.push(validateFailedFrontendAudit(
+          await readReleaseAudit(api, descriptor), descriptor, targets, pin));
+        continue;
+      }
       try {
         let audit;
         if (production.conclusion === 'failure' && !production.steps?.some(step =>
@@ -1020,6 +1034,7 @@ export async function evidencePlan(api, candidate, policy) {
     ...(continuation ? { memberContinuation: continuation } : {}),
     ...(memberReleases.length ? { memberReleases } : {}),
     ...(frontendReleases.length ? { frontendReleases } : {}),
+    ...(frontendReconciliations.length ? { frontendReconciliations } : {}),
     firstReleaseRecoveryEvidenceSha256: candidate.prospectiveRecovery || latest ? null : policy.firstReleaseRecovery.evidenceSha256,
     baseline: latest && !candidate.prospectiveRecovery ? await auditArtifact(api, latest, latest.run_attempt) : null,
     resume: resumeChain.at(-1) ?? null, resumeChain };
@@ -1937,7 +1952,7 @@ export function safeReleaseFailureCode(error) {
     error instanceof SchemaFirstDenied || error instanceof MemberReleaseDenied ||
     error instanceof HistoricalReconciliationDenied || error instanceof PriorRunNotRecognized ||
     error instanceof ReadinessReleaseDenied || error instanceof ProspectiveBaselineDenied ||
-    error instanceof FrontendReleaseDenied) ?
+    error instanceof FrontendReleaseDenied || error instanceof FailedFrontendReleaseDenied) ?
     error.message : 'UNEXPECTED_RELEASE_ERROR';
 }
 
