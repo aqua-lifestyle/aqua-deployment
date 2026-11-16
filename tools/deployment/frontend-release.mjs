@@ -147,18 +147,76 @@ const selectFrontendIncumbent = (options, q, incumbent) => {
   throw new FrontendReleaseDenied('FRONTEND_BASELINE_PROVENANCE_MISMATCH');
 };
 
+// One authenticated, read-only Vercel fence used both before a combined
+// release's first Render write and again before its frontend phase. The
+// incumbent is selected from current provider state, never from a prior audit
+// or public asset alone; those records only authenticate its provenance.
+const readFrontendProject = async (api, options, expected, clock = () => {}) => {
+  clock();
+  const { targets, validateVercel } = options;
+  const projectPath = `/v9/projects/${targets.vercel.id}`;
+  const host = new URL(targets.vercel.productionUrl).hostname;
+  const project = await api.vercel(projectPath);
+  try { validateVercel(project); }
+  catch { throw new FrontendReleaseDenied('FRONTEND_CONFIGURATION_UNVERIFIED'); }
+  check(project.targets?.production?.id === expected, 'FRONTEND_INCUMBENT_ALIAS_DRIFT');
+  const env = (await api.vercel(`/v10/projects/${targets.vercel.id}/env?decrypt=false`)).envs;
+  check(Array.isArray(env) && !env.some(row =>
+    /(?:BIRDAPIKEY|YOCOSECRETKEY|YOCOWEBHOOKSECRET|APPAQGREENV2COMMISSIONING(?:DECISION|VERIFIEDAUTHORITY|CLEANSTARTEVIDENCE)JSONBASE64|APPYOCOCUTOVERRECONCILIATIONJSONBASE64)$/.test(
+      String(row.key).replace(/[^A-Za-z0-9]/g, '').toUpperCase())), 'FRONTEND_CONFIGURATION_UNVERIFIED');
+  for (const [key, value] of Object.entries(approvedPublicInputs(targets.vercel))) {
+    const selected = env.filter(row => row.key === key && row.target?.includes('production'));
+    check(selected.length === 1 && !selected[0].gitBranch &&
+      (!['plain', 'system'].includes(selected[0].type) ||
+        selected[0].value === undefined || selected[0].value === value),
+    'FRONTEND_CONFIGURATION_UNVERIFIED');
+  }
+  const domain = await api.vercel(`${projectPath}/domains/${host}`);
+  const mapping = await api.vercel(`/v2/deployments/${expected}/aliases`);
+  check(domain.name === host && domain.projectId === targets.vercel.id && domain.verified === true &&
+    Array.isArray(mapping.aliases) && mapping.aliases.filter(row => row.alias === host && !row.redirect &&
+      (row.deploymentId === undefined || row.deploymentId === expected) &&
+      (row.projectId === undefined || row.projectId === targets.vercel.id)).length === 1,
+  'FRONTEND_INCUMBENT_ALIAS_DRIFT');
+  return project;
+};
+const readFrontendHistory = async (api, q, options) => {
+  const rows = await options.deploymentHistory(api, 'vercel');
+  check(rows.every(row => !activeWeb.has(row.state ?? row.readyState) &&
+    row.meta?.aquaCiRunId !== q.ciRunId && row.meta?.aquaSourceSha !== q.sha),
+  'FRONTEND_SOURCE_ALREADY_DEPLOYED');
+};
+export async function verifyFrontendIncumbent(api, q, options, expectedDeployId, clock) {
+  const { targets, validateVercel } = options;
+  const project = await api.vercel(`/v9/projects/${targets.vercel.id}`);
+  try { validateVercel(project); }
+  catch { throw new FrontendReleaseDenied('FRONTEND_CONFIGURATION_UNVERIFIED'); }
+  const vercelDeployId = project.targets?.production?.id;
+  check(typeof vercelDeployId === 'string' && /^dpl_[A-Za-z0-9]+$/.test(vercelDeployId),
+    'FRONTEND_INCUMBENT_UNRECOGNIZED');
+  check(expectedDeployId === undefined || vercelDeployId === expectedDeployId,
+    'FRONTEND_INCUMBENT_ALIAS_DRIFT');
+  const incumbent = await api.vercel(`/v13/deployments/${vercelDeployId}`);
+  check(incumbent.id === vercelDeployId && incumbent.projectId === targets.vercel.id &&
+    incumbent.target === 'production' && incumbent.readyState === 'READY' && !incumbent.aliasError,
+  'FRONTEND_BASELINE_PROVENANCE_MISMATCH');
+  const proof = selectFrontendIncumbent(options, q, incumbent);
+  await readFrontendProject(api, options, vercelDeployId, clock);
+  await readFrontendHistory(api, q, options);
+  return { vercelDeployId, vercelSourceProvenance: proof.vercelSourceProvenance };
+}
+
 // Shared deployment core for ordinary frontend-only releases and the frontend
 // phase of combined releases. The render fence, project fence, upload loop,
 // deployment request and observed-state verification are identical to the
 // pinned path; the render revision, incumbent provenance and delta
 // classification are provided by the entry.
 const runFrontendCore = async (api, q, report, options, phase) => {
-  const { targets, guard, validateRender, validateVercel, validateHealth, deploymentHistory,
+  const { targets, guard, validateRender, validateHealth, deploymentHistory,
     waitFor, releaseKey, policy } = options;
   const start = (options.now ?? Date.now)(), end = start + 40 * 60 * 1000;
   const clock = () => check((options.now ?? Date.now)() < end, 'FRONTEND_EXECUTION_WINDOW_EXPIRED');
-  const servicePath = `/services/${targets.render.id}`, projectPath = `/v9/projects/${targets.vercel.id}`;
-  const host = new URL(targets.vercel.productionUrl).hostname;
+  const servicePath = `/services/${targets.render.id}`;
   const backendRoot = 'AqualLifeStyle/9.4.2/aspnet-core/';
   const prefix = `${targets.vercel.rootDirectory}/`;
   const frontend = prepareFrontend(options.frontendArchive, q.sha, targets.vercel,
@@ -202,38 +260,8 @@ const runFrontendCore = async (api, q, report, options, phase) => {
     check(healthState === expected, 'FRONTEND_BACKEND_STATE_CHANGED');
     return { id: live[0].id, sha: servingSha, state: expected };
   };
-  const readProject = async expected => {
-    clock();
-    const project = await api.vercel(projectPath);
-    try { validateVercel(project); }
-    catch { throw new FrontendReleaseDenied('FRONTEND_CONFIGURATION_UNVERIFIED'); }
-    check(project.targets?.production?.id === expected, 'FRONTEND_INCUMBENT_ALIAS_DRIFT');
-    const env = (await api.vercel(`/v10/projects/${targets.vercel.id}/env?decrypt=false`)).envs;
-    check(Array.isArray(env) && !env.some(row =>
-      /(?:BIRDAPIKEY|YOCOSECRETKEY|YOCOWEBHOOKSECRET|APPAQGREENV2COMMISSIONING(?:DECISION|VERIFIEDAUTHORITY|CLEANSTARTEVIDENCE)JSONBASE64|APPYOCOCUTOVERRECONCILIATIONJSONBASE64)$/.test(
-        String(row.key).replace(/[^A-Za-z0-9]/g, '').toUpperCase())), 'FRONTEND_CONFIGURATION_UNVERIFIED');
-    for (const [key, value] of Object.entries(approvedPublicInputs(targets.vercel))) {
-      const selected = env.filter(row => row.key === key && row.target?.includes('production'));
-      check(selected.length === 1 && !selected[0].gitBranch &&
-        (!['plain', 'system'].includes(selected[0].type) ||
-          selected[0].value === undefined || selected[0].value === value),
-      'FRONTEND_CONFIGURATION_UNVERIFIED');
-    }
-    const domain = await api.vercel(`${projectPath}/domains/${host}`);
-    const mapping = await api.vercel(`/v2/deployments/${expected}/aliases`);
-    check(domain.name === host && domain.projectId === targets.vercel.id && domain.verified === true &&
-      Array.isArray(mapping.aliases) && mapping.aliases.filter(row => row.alias === host && !row.redirect &&
-        (row.deploymentId === undefined || row.deploymentId === expected) &&
-        (row.projectId === undefined || row.projectId === targets.vercel.id)).length === 1,
-    'FRONTEND_INCUMBENT_ALIAS_DRIFT');
-    return project;
-  };
-  const readHistory = async () => {
-    const rows = await deploymentHistory(api, 'vercel');
-    check(rows.every(row => !activeWeb.has(row.state ?? row.readyState) &&
-      row.meta?.aquaCiRunId !== q.ciRunId && row.meta?.aquaSourceSha !== q.sha),
-    'FRONTEND_SOURCE_ALREADY_DEPLOYED');
-  };
+  const readProject = expected => readFrontendProject(api, options, expected, clock);
+  const readHistory = () => readFrontendHistory(api, q, options);
   await guard();
   const initialHealth = await api.health();
   const healthBody = initialHealth.body.result ?? initialHealth.body;
@@ -269,21 +297,8 @@ const runFrontendCore = async (api, q, report, options, phase) => {
         files: files.map(file => ({ filename: file.filename, status: file.status,
           additions: file.additions, deletions: file.deletions, changes: file.changes })) }))) };
   }
-  let vercelDeployId = phase.vercelDeployId;
-  if (vercelDeployId === undefined) {
-    const project = await api.vercel(projectPath);
-    try { validateVercel(project); }
-    catch { throw new FrontendReleaseDenied('FRONTEND_CONFIGURATION_UNVERIFIED'); }
-    vercelDeployId = project.targets?.production?.id;
-    check(typeof vercelDeployId === 'string' && /^dpl_[A-Za-z0-9]+$/.test(vercelDeployId),
-      'FRONTEND_INCUMBENT_UNRECOGNIZED');
-  }
-  const incumbent = await api.vercel(`/v13/deployments/${vercelDeployId}`);
-  check(incumbent.id === vercelDeployId && incumbent.projectId === targets.vercel.id &&
-    incumbent.target === 'production' && incumbent.readyState === 'READY' && !incumbent.aliasError,
-  'FRONTEND_BASELINE_PROVENANCE_MISMATCH');
-  const incumbentProof = selectFrontendIncumbent(options, q, incumbent);
-  await readProject(vercelDeployId); await readHistory();
+  const incumbentProof = await verifyFrontendIncumbent(api, q, options, phase.vercelDeployId, clock);
+  const vercelDeployId = incumbentProof.vercelDeployId;
   audit({ phase: 'frontend-baseline-selected',
     baselineRenderDeployId: phase.baselineRenderDeployId ?? serving.id,
     baselineRenderSha: phase.baselineRenderSha ?? serving.sha,
@@ -551,6 +566,7 @@ export async function deployCombinedFrontendPhase(api, q, report, options, conte
     context.baselineRenderSha !== q.sha &&
     /^dep-[a-z0-9]+$/.test(context.renderDeployId ?? '') &&
     context.renderDeployId !== context.baselineRenderDeployId &&
+    /^dpl_[A-Za-z0-9]+$/.test(context.baselineVercelDeployId ?? '') &&
     context.paymentAvailability === 'Available',
   'COMBINED_FRONTEND_PHASE_UNVERIFIABLE');
   return runFrontendCore(api, q, report, options, {
@@ -558,6 +574,7 @@ export async function deployCombinedFrontendPhase(api, q, report, options, conte
     expectedState: context.paymentAvailability,
     baselineRenderDeployId: context.baselineRenderDeployId,
     baselineRenderSha: context.baselineRenderSha,
+    vercelDeployId: context.baselineVercelDeployId,
     classification: { frontendFiles: context.frontendFiles, backendFiles: context.backendFiles,
       sourceDeltaSha256: context.sourceDeltaSha256 },
     recordWebHealth: true });

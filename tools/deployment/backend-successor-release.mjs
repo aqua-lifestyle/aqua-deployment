@@ -11,7 +11,7 @@
 import { execFileSync } from 'node:child_process';
 import { objectDigest, sha256, validateArtifact, readGitHubArtifact } from './github-evidence.mjs';
 import { normalRuntimeSettings, validateD10Bindings, validateReadiness } from './runtime-readiness.mjs';
-import { deployCombinedFrontendPhase } from './frontend-release.mjs';
+import { deployCombinedFrontendPhase, verifyFrontendIncumbent } from './frontend-release.mjs';
 
 export const backendSuccessorMode = 'post-normal-backend-v1';
 // Combined release mode: one dispatch that performs the full backend successor
@@ -235,6 +235,19 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   const baselineSha = live[0].commit?.id;
   check(/^[a-f0-9]{40}$/.test(baselineSha ?? '') && predecessorBuildId === baselineSha,
     'BACKEND_COMMISSIONED_STATE_CHANGED');
+  // For the first combined successor, the authenticated full-release receipt
+  // identifies the commissioned Render deployment, not merely its commit. A
+  // later verified successor has a different legitimate live deployment and
+  // remains governed by its own receipt and the existing runtime fences.
+  if (q.combinedRelease !== undefined && options.evidencePlan?.baseline &&
+    !(options.evidencePlan.backendReleases?.length || options.evidencePlan.combinedReleases?.length)) {
+    check(Array.isArray(options.baselineRows) && typeof options.validateBaselineReceipt === 'function',
+      'BACKEND_RENDER_DRIFT');
+    const proof = options.validateBaselineReceipt(options.baselineRows, options.evidencePlan.baseline, q,
+      options.evidencePlan.baselinePolicyProof);
+    check(live[0].id === proof.renderDeployId && baselineSha === proof.renderSha,
+      'BACKEND_RENDER_DRIFT');
+  }
   const health = await api.health();
   try { validateHealth(health, baselineSha); }
   catch { throw new BackendSuccessorReleaseDenied('BACKEND_COMMISSIONED_STATE_CHANGED'); }
@@ -323,6 +336,11 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   audit({ phase: 'backend-classified', schemaTransition, backendFiles: backendFiles.length,
     frontendFiles: frontendFiles.length, migrationFiles: migrationFiles.length, sourceDeltaSha256,
     integrityArtifactId: descriptor.id, integrityArtifactSha256: descriptor.digest.slice(7), ...integrity });
+  // Qualify the *current* Vercel incumbent, project, public inputs and alias
+  // before staging either Render variable. The frontend phase repeats these
+  // reads and requires the same incumbent after the backend transition.
+  const incumbent = q.combinedRelease !== undefined ?
+    await verifyFrontendIncumbent(api, q, options) : null;
   // 3. Stage the successor input through the existing environment channel.
   const buildPayload = transition => {
     const payload = { contractVersion: successorContract, predecessorDecisionSha256: sha256(decisionBytes),
@@ -439,6 +457,7 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   if (q.combinedRelease !== undefined)
     await deployCombinedFrontendPhase(api, q, report, options, {
       baselineRenderDeployId: live[0].id, baselineRenderSha: baselineSha,
+      baselineVercelDeployId: incumbent.vercelDeployId,
       renderDeployId: finalDeployId, renderSha: q.sha, paymentAvailability: state,
       frontendFiles: frontendFiles.length, backendFiles: backendFiles.length, sourceDeltaSha256 });
 }
