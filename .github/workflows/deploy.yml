@@ -18,7 +18,7 @@ on:
         type: boolean
         default: false
       release_mode:
-        description: Full cutover, pinned schema-54 member pair, post-Normal frontend-only, or ordinary backend successor
+        description: Full cutover, pinned schema-54 member pair, post-Normal frontend-only, ordinary backend successor, or combined backend+frontend successor
         required: false
         type: choice
         default: full
@@ -27,6 +27,7 @@ on:
           - schema54-member-reads-v1
           - post-normal-frontend-v1
           - post-normal-backend-v1
+          - post-normal-backend-frontend-v1
       prospective_mode:
         description: None, capture a read-only baseline, or authorize the pinned prospective release
         required: false

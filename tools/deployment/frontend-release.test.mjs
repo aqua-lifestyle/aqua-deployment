@@ -11,6 +11,7 @@ import { normalRuntimeSettings, cleanStartRuntimeSettings } from './runtime-read
 import { schemaSource, approvedSchemaReadback, verifySchemaFirst } from './commission-schema-first.mjs';
 import { createGitHubAdmission, validateGitHubAdmission, inventoryDigest, sha256 } from './github-evidence.mjs';
 import { frontendFixtureArchive, runnerEnv, fixture as fullFixture } from './fixtures/provider.mjs';
+import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
 
 const backend = 'b8d86e5e60997483423b273d5f426c08b411f573';
 const now = () => Date.UTC(2026, 10, 14, 14);
@@ -60,7 +61,8 @@ test('dispatch, candidate, admission receipt and release identity cannot exchang
   const dispatch = { sha: frontendSuccessorCandidateSha, ci_run_id: '43597833117',
     ci_run_attempt: '1', release_mode: frontendReleaseMode };
   assert.equal(validateDispatchInputs(dispatch).releaseMode, frontendReleaseMode);
-  for (const change of [{ sha: backend }, { release_mode: 'other' },
+  assert.equal(validateDispatchInputs({ ...dispatch, sha: backend }).releaseMode, frontendReleaseMode);
+  for (const change of [{ release_mode: 'other' },
     { prospective_mode: 'authorize' }, { recovery_baseline_run_id: '1' }])
     assert.throws(() => validateDispatchInputs({ ...dispatch, ...change }));
   assert.equal(q().frontendRelease, frontendReleaseRecordDigest);
@@ -278,4 +280,168 @@ test('Held and Normal are distinct fenced states; backend scope, drift and Verce
   await assert.rejects(failure.execute(), /PROVIDER_DEPLOYMENT_FAILED_INSPECT_RELEASE_REPORT/);
   assert.equal(failure.s.posts.length, 1);
   assert.equal(failure.s.audit.some(row => row.phase === 'frontend-deployed'), false);
+});
+
+// Ordinary frontend-only releases: any qualified revision, delta anchored on
+// the live Render revision, incumbent provenance recognized from the pinned
+// reconciliation record or a prior frontend release receipt.
+function generalFixture(state = 'Available', { incumbent = 'record', files = null,
+  tamperIncumbent = false } = {}) {
+  const freshSha = 'c'.repeat(40), priorSha = 'e'.repeat(40);
+  const source = frontendFixtureArchive(), archive = Buffer.from(source.archive);
+  const offset = archive.indexOf(Buffer.from(source.sha)); assert.ok(offset >= 0);
+  archive.write(freshSha, offset, 40, 'ascii');
+  const record = validateFailedFrontendRecord();
+  const incumbentId = incumbent === 'record' ? record.observedVercel.deploymentId : 'dpl_Legacy';
+  const s = { availability: state, alias: incumbentId, servingId: 'dep-commissioned',
+    uploads: 0, posts: [], audit: [], deployed: null, failedVercel: false,
+    vars: Object.fromEntries(Object.entries(state === 'Available' ? normalRuntimeSettings :
+      cleanStartRuntimeSettings).map(([key, value]) => [key, value[0]])) };
+  s.vars.App__AutomaticPayouts__Enabled = 'false';
+  const incumbentMeta = incumbent === 'record' ?
+    { aquaCiRunId: '43597833117', aquaSourceSha: record.qualifiedSource.sha,
+      aquaFileSourceSha256: tamperIncumbent ? 'f'.repeat(64) :
+        record.qualifiedSource.fileSourceProofSha256,
+      aquaFrontendRelease: record.qualifiedSource.frontendRelease,
+      aquaReleaseIdentity: record.qualifiedSource.releaseIdentity } :
+    incumbent === 'prior' ?
+    { aquaCiRunId: '43597833119', aquaSourceSha: priorSha,
+      aquaFrontendRelease: frontendReleaseMode, aquaReleaseIdentity: 'y'.repeat(64) } : {};
+  const evidencePlan = incumbent === 'prior' ?
+    { resume: null, baseline: null,
+      frontendReleases: [{ runId: '900', runAttempt: 1, sha: priorSha,
+        vercelDeployId: incumbentId, frontendRelease: frontendReleaseMode,
+        renderSha: backend, renderDeployId: 'dep-old' }], combinedReleases: [] } :
+    { resume: null, baseline: null, frontendReleases: [], combinedReleases: [] };
+  const q = freezeCandidate({ repository: targets.repository, sha: freshSha,
+    ciRunId: '43597833118', ciRunAttempt: 1 }, runnerEnv(), standingPolicy, false, frontendReleaseMode);
+  const service = { id: targets.render.id, name: targets.render.name,
+    repo: `https://github.com/${targets.repository}`, branch: 'main', suspended: 'not_suspended',
+    autoDeploy: 'no', autoDeployTrigger: 'off', rootDir: '',
+    serviceDetails: { runtime: 'docker', plan: 'starter', buildPlan: 'starter', numInstances: 1,
+      region: 'frankfurt', maintenanceMode: { enabled: false }, healthCheckPath: '/api/health',
+      envSpecificDetails: { dockerContext: '.', dockerfilePath: './docker/api/Dockerfile',
+        preDeployCommand: '', dockerCommand: '' } } };
+  const project = () => ({ id: targets.vercel.id, name: targets.vercel.name, accountId: targets.vercel.teamId,
+    rootDirectory: targets.vercel.rootDirectory, nodeVersion: '24.x', autoAssignCustomDomains: true,
+    link: null, targets: { production: { id: s.alias } } });
+  const inputRows = () => Object.entries({ NEXT_PUBLIC_ABP_API_URL: targets.vercel.publicApiUrl,
+    NEXT_PUBLIC_DEFAULT_TENANT_NAME: targets.vercel.defaultTenantName }).map(([key, value]) =>
+    ({ key, value, type: 'plain', target: ['production'] }));
+  const api = {
+    gh: async route => {
+      assert.equal(route, `/compare/${backend}...${freshSha}`);
+      return { status: 'ahead', base_commit: { sha: backend }, merge_base_commit: { sha: backend },
+        files: files ?? [
+          { filename: targets.vercel.rootDirectory + '/app/page.tsx', status: 'modified' },
+          { filename: 'AqualLifeStyle/9.4.2/aspnet-core/test/AqualLifeStyle.Tests/Example.cs', status: 'modified' }] };
+    },
+    render: async (path, body) => {
+      assert.equal(body, undefined, 'Render POST must never occur');
+      if (path.includes('/env-vars/')) { const key = path.split('/').at(-1); return { key, value: s.vars[key] }; }
+      if (path.includes('/deploys?')) return [{ deploy: { id: s.servingId, status: 'live', commit: { id: backend } } }];
+      assert.equal(path, `/services/${targets.render.id}`); return service;
+    },
+    vercel: async (path, body) => {
+      if (body) {
+        assert.equal(path, '/v13/deployments'); s.posts.push(body);
+        s.deployed = { ...body, id: 'dpl_New', projectId: targets.vercel.id,
+          target: 'production', readyState: 'BUILDING' };
+        return s.deployed;
+      }
+      if (path.startsWith('/v6/')) return { deployments: [
+        { uid: s.alias, state: 'READY', meta: incumbentMeta },
+        ...(s.deployed ? [{ uid: 'dpl_New', state: s.deployed.readyState, meta: s.deployed.meta }] : [])] };
+      if (path.startsWith('/v10/')) return { envs: inputRows() };
+      if (path.includes('/domains/')) return { name: 'www.aqualifestyleclub.co.za',
+        projectId: targets.vercel.id, verified: true };
+      if (path.endsWith('/aliases')) return { aliases: [{ alias: 'www.aqualifestyleclub.co.za' }] };
+      if (path.endsWith(`/v13/deployments/${incumbentId}`)) return { id: incumbentId,
+        projectId: targets.vercel.id, target: 'production', readyState: 'READY', meta: incumbentMeta };
+      if (path.endsWith('/dpl_New')) {
+        s.deployed.readyState = s.failedVercel ? 'ERROR' : 'READY';
+        if (!s.failedVercel) s.alias = 'dpl_New';
+        return s.deployed;
+      }
+      assert.equal(path, `/v9/projects/${targets.vercel.id}`); return project();
+    },
+    health: async () => ({ status: 200, recovery: null, body: { status: 'Healthy',
+      buildId: backend, environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy',
+      dataProtectionKeyStoreStatus: 'Healthy', paymentAvailability: s.availability } }),
+    uploadVercel: async () => { s.uploads++; },
+    web: async () => 200,
+    webHealth: async (sha, expected) => {
+      assert.equal(sha, backend); assert.equal(expected, state);
+      return { status: 'Healthy', buildId: backend, paymentAvailability: s.availability };
+    }
+  };
+  const options = { targets, policy: standingPolicy, validateRender, validateVercel, validateHealth,
+    validateBaselineReceipt: () => { throw new Error('baseline receipt must not be consulted'); },
+    deploymentHistory, waitFor, releaseKey, frontendArchive: archive,
+    evidencePlan, now, attempts: 2, pause: async () => {}, guard: async () => {}, validateAdmission: () => {},
+    publicFetch: async url => {
+      const path = new URL(url);
+      assert.equal(path.origin, targets.vercel.productionUrl);
+      if (path.pathname === '/login')
+        return new Response('<script src="/_next/static/chunks/public-env.js"></script>');
+      return new Response(`schema.parse({NEXT_PUBLIC_ABP_API_URL:${JSON.stringify(targets.vercel.publicApiUrl)},NEXT_PUBLIC_DEFAULT_TENANT_NAME:'Default',NEXT_PUBLIC_MONITORING_ENDPOINT:undefined})`);
+    } };
+  const report = createAuditWriter(q, row => s.audit.push(row));
+  report({ phase: 'evidence-selected', authorizationId: 'a'.repeat(64), evidenceSha256: 'b'.repeat(64),
+    inventorySha256: 'c'.repeat(64), evidenceArtifactId: '123' });
+  return { s, q, api, options, execute: () => deployFrontendRelease(api, q, report, options) };
+}
+
+test('ordinary frontend release deploys a fresh revision on the reconciled incumbent', async () => {
+  const f = generalFixture(); await f.execute();
+  assert.equal(f.s.posts.length, 1);
+  assert.equal(f.s.posts[0].meta.aquaFrontendRelease, frontendReleaseMode);
+  assert.equal(f.s.posts[0].meta.aquaSourceSha, 'c'.repeat(40));
+  assert.ok(f.s.uploads > 0);
+  assert.equal(f.s.audit.at(-1).phase, 'frontend-deployed');
+  assert.equal(f.s.audit[1].phase, 'frontend-baseline-selected');
+  assert.equal(f.s.audit[1].baselineVercelSourceProvenance, 'RECONCILED_FRONTEND_EFFECT');
+  assert.equal(f.s.audit[1].baselineRenderSha, backend);
+  assert.equal(f.s.audit[1].baselineVercelDeployId,
+    validateFailedFrontendRecord().observedVercel.deploymentId);
+  assert.equal(f.s.audit[2].frontendFiles, 1);
+  assert.equal(f.s.audit[2].backendFiles, 1);
+  assert.equal(f.s.audit.at(-1).renderSha, backend);
+  assert.equal(f.s.audit.at(-1).webStatus, 200);
+  assert.equal(f.s.audit.at(-1).webSha256, backend);
+  const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
+  const receipt = validateFrontendReceipt(f.s.audit, descriptor, targets);
+  assert.equal(receipt.sha, 'c'.repeat(40));
+  assert.equal(receipt.renderSha, backend);
+  assert.equal(receipt.frontendRelease, frontendReleaseMode);
+  for (const mutate of [rows => rows[1].servingRenderSha = '0'.repeat(40),
+    rows => rows[1].paymentAvailability = 'Held',
+    rows => rows.at(-1).webSha256 = '0'.repeat(40), rows => rows.splice(5, 1)]) {
+    const rows = structuredClone(f.s.audit); mutate(rows);
+    assert.throws(() => validateFrontendReceipt(rows, descriptor, targets));
+  }
+});
+
+test('ordinary frontend release accepts a prior frontend receipt as incumbent provenance', async () => {
+  const f = generalFixture('Available', { incumbent: 'prior' }); await f.execute();
+  assert.equal(f.s.posts.length, 1);
+  assert.equal(f.s.audit[1].baselineVercelSourceProvenance, 'PRIOR_RELEASE_RECEIPT');
+  const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
+  const receipt = validateFrontendReceipt(f.s.audit, descriptor, targets);
+  assert.equal(receipt.sha, 'c'.repeat(40));
+  assert.equal(receipt.frontendRelease, frontendReleaseMode);
+});
+
+test('ordinary frontend release denies unrecognized incumbents and backend-only deltas', async () => {
+  const unknown = generalFixture('Available', { incumbent: 'unknown' });
+  await assert.rejects(unknown.execute(), /FRONTEND_BASELINE_PROVENANCE_MISMATCH/);
+  assert.equal(unknown.s.posts.length, 0); assert.equal(unknown.s.uploads, 0);
+  const tampered = generalFixture('Available', { tamperIncumbent: true });
+  await assert.rejects(tampered.execute(), /FRONTEND_BASELINE_PROVENANCE_MISMATCH/);
+  assert.equal(tampered.s.posts.length, 0);
+  const backendOnly = generalFixture('Available', { files: [
+    { filename: 'AqualLifeStyle/9.4.2/aspnet-core/src/X/AQGreenD10BackendSuccessor.cs', status: 'modified' },
+    { filename: 'docs/x.md', status: 'modified' }] });
+  await assert.rejects(backendOnly.execute(), /FRONTEND_RELEASE_DELTA_UNAUTHORIZED/);
+  assert.equal(backendOnly.s.posts.length, 0); assert.equal(backendOnly.s.uploads, 0);
 });

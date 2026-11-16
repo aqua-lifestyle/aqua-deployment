@@ -9,14 +9,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { backendSuccessorMode, backendSuccessorPayloadKey, backendSuccessorPinKey,
-  deployBackendSuccessorRelease, validateBackendSuccessorIdentity,
-  validateBackendSuccessorReceipt } from './backend-successor-release.mjs';
+  combinedMode, deployBackendSuccessorRelease, validateBackendSuccessorIdentity,
+  validateBackendSuccessorReceipt, validateCombinedReceipt } from './backend-successor-release.mjs';
 import { freezeCandidate, validateDispatchInputs, verifyCandidate, createAuditWriter, releaseKey,
-  standingPolicy, targets, clients, validateRender, validateHealth, deploymentHistory,
-  waitFor, deploy, evidencePlan } from './release-control.mjs';
+  standingPolicy, targets, clients, validateRender, validateVercel, validateHealth,
+  deploymentHistory, waitFor, deploy, evidencePlan } from './release-control.mjs';
 import { normalRuntimeSettings } from './runtime-readiness.mjs';
-import { runnerEnv, fixture as controllerFixture, fixtureNow, zipFixture } from './fixtures/provider.mjs';
+import { runnerEnv, fixture as controllerFixture, fixtureNow, zipFixture,
+  frontendFixtureArchive } from './fixtures/provider.mjs';
 import { sha256, verifyGitHubEvidence, createGitHubAdmission } from './github-evidence.mjs';
+import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
 import { schemaSource } from './commission-schema-first.mjs';
 
 const baselineSha = 'b8d86e5e60997483423b273d5f426c08b411f573';
@@ -384,12 +386,19 @@ test('missing or substituted qualified assembly/schema artifact denies before pr
   }
 });
 
-test('unauthorized source deltas deny: frontend files, absent backend change, non-additive migrations', async () => {
+test('backend successor releases accept a mixed delta and deny unauthorized source deltas', async () => {
   const frontend = fixture({ files: [
     { filename: `${targets.vercel.rootDirectory}/app/page.tsx`, status: 'modified' },
     { filename: backendModifiedPath, status: 'modified' }] });
-  await assert.rejects(frontend.execute(), /BACKEND_SOURCE_DELTA_UNAUTHORIZED/);
-  assert.equal(frontend.s.puts.length, 0);
+  await frontend.execute();
+  assert.equal(frontend.s.puts.length, 2);
+  assert.equal(frontend.s.audit[3].phase, 'backend-classified');
+  assert.equal(frontend.s.audit[3].frontendFiles, 1);
+  assert.equal(frontend.s.audit[3].backendFiles, 1);
+  assert.match(frontend.s.audit[3].sourceDeltaSha256, /^[a-f0-9]{64}$/);
+  const descriptor = { runId: frontend.q.releaseRunId, runAttempt: 1, sha: frontend.q.executorSha };
+  const receipt = validateBackendSuccessorReceipt(frontend.s.audit, descriptor, targets);
+  assert.equal(receipt.schemaTransition, 'none');
   const none = fixture({ files: [{ filename: 'README.md', status: 'modified' }] });
   await assert.rejects(none.execute(), /BACKEND_SOURCE_DELTA_UNAUTHORIZED/);
   const behind = fixture({ compareStatus: 'behind' });
@@ -505,4 +514,241 @@ test('render client restricts env access to the settings and successor allowlist
     [`${servicePath}/env-vars/${backendSuccessorPayloadKey}Extra`, { value: 'x' }]])
     await assert.rejects(async () => api.render(route, body),
       /SECRET_BEARING_RENDER_READ_FORBIDDEN|RENDER_ENV_WRITE_FORBIDDEN/);
+});
+
+// Combined releases: one qualified revision released as a backend successor on
+// Render first and only then as the frontend phase on Vercel, with a single
+// authenticated audit receipt spanning both providers.
+function combinedFixture({ files = [
+    { filename: `${targets.vercel.rootDirectory}/app/page.tsx`, status: 'modified' },
+    { filename: backendModifiedPath, status: 'modified' }], failedVercel = false } = {}) {
+  const s = { vars: Object.fromEntries(Object.entries(normalRuntimeSettings).map(([key, allowed]) =>
+      [key, allowed[0]])), posts: [], puts: [], audit: [], uploads: 0, vercelPosts: [],
+    deployed: null, failedVercel, alias: 'dpl_Legacy', jobReads: 0, deployReads: {} };
+  const candidateSha = 'a'.repeat(40);
+  const q = freezeCandidate({ repository: targets.repository, sha: candidateSha,
+    ciRunId: '43597833118', ciRunAttempt: 1 }, runnerEnv(), standingPolicy, false, combinedMode);
+  assert.equal(q.backendSuccessor, backendSuccessorMode);
+  assert.equal(q.combinedRelease, combinedMode);
+  const integrityName = `backend-successor-integrity-${q.sha}-${q.ciRunId}-${q.ciRunAttempt}`;
+  const integrity = { contract: 'aqua.backend-successor-integrity-v1', repository: q.repository,
+    sha: q.sha, ciRunId: q.ciRunId, ciRunAttempt: q.ciRunAttempt,
+    successorSchemaSha256: '1'.repeat(64), successorAssemblySha256: 'b'.repeat(64),
+    successorApplicationSha256: 'd'.repeat(64), successorCoreSha256: 'e'.repeat(64) };
+  const archive = zipFixture('backend-successor-integrity.json', JSON.stringify(integrity));
+  const artifact = { id: 7891, name: integrityName, expired: false,
+    size_in_bytes: archive.length, digest: `sha256:${sha256(archive)}`,
+    workflow_run: { id: Number(q.ciRunId), repository_id: 789, head_repository_id: 789,
+      head_sha: q.sha, head_branch: 'main' } };
+  const decision = { contractVersion: 'AQGreenD10CutoverV2', decisionId: 'D10-TEST-DECISION-1',
+    requiredSchemaDigest: '1'.repeat(64), requiredAssemblyDigest: '2'.repeat(64),
+    requiredRuntimeAssemblyDigest: '3'.repeat(64), requiredDatabaseIdentityDigest: '4'.repeat(64),
+    requiredConfigurationDigest: '5'.repeat(64) };
+  const decisionBytes = Buffer.from(JSON.stringify(decision), 'utf8');
+  s.vars = { ...s.vars, Deployment__BuildId: baselineSha,
+    App__AQGreenV2__Commissioning__DecisionJsonBase64: decisionBytes.toString('base64'),
+    App__AQGreenV2__Commissioning__DecisionSha256: sha256(decisionBytes) };
+  s.deploys = [{ id: 'dep-commissioned', status: 'live', commit: { id: baselineSha } }];
+  const record = validateFailedFrontendRecord();
+  const incumbentId = record.observedVercel.deploymentId;
+  s.alias = incumbentId;
+  const incumbentMeta = { aquaCiRunId: '43597833117', aquaSourceSha: record.qualifiedSource.sha,
+    aquaFileSourceSha256: record.qualifiedSource.fileSourceProofSha256,
+    aquaFrontendRelease: record.qualifiedSource.frontendRelease,
+    aquaReleaseIdentity: record.qualifiedSource.releaseIdentity };
+  const frontendSource = frontendFixtureArchive();
+  const frontendArchive = Buffer.from(frontendSource.archive);
+  const frontendOffset = frontendArchive.indexOf(Buffer.from(frontendSource.sha));
+  assert.ok(frontendOffset >= 0);
+  frontendArchive.write(candidateSha, frontendOffset, 40, 'ascii');
+  const servicePath = `/services/${targets.render.id}`;
+  const service = { id: targets.render.id, name: targets.render.name,
+    repo: `https://github.com/${targets.repository}`, branch: 'main', suspended: 'not_suspended',
+    autoDeploy: 'no', autoDeployTrigger: 'off', rootDir: '',
+    serviceDetails: { runtime: 'docker', plan: 'starter', buildPlan: 'starter', numInstances: 1,
+      region: 'frankfurt', maintenanceMode: { enabled: false }, healthCheckPath: '/api/health',
+      envSpecificDetails: { dockerContext: '.', dockerfilePath: './docker/api/Dockerfile',
+        preDeployCommand: '', dockerCommand: '' } } };
+  const bindings = sha => ({ requiredAssemblyDigest: sha === baselineSha ? '2'.repeat(64) : 'b'.repeat(64),
+    requiredRuntimeAssemblyDigest: sha === baselineSha ? '3'.repeat(64) : 'c'.repeat(64),
+    currentConfigurationDigest: '5'.repeat(64),
+    intendedConfigurationDigest: 'c'.repeat(64), intendedEnvironmentId: 'production-release',
+    intendedBuildId: sha });
+  const prefix = `${servicePath}/env-vars/`;
+  const project = () => ({ id: targets.vercel.id, name: targets.vercel.name, accountId: targets.vercel.teamId,
+    rootDirectory: targets.vercel.rootDirectory, nodeVersion: '24.x', autoAssignCustomDomains: true,
+    link: null, targets: { production: { id: s.alias } } });
+  const inputRows = () => Object.entries({ NEXT_PUBLIC_ABP_API_URL: targets.vercel.publicApiUrl,
+    NEXT_PUBLIC_DEFAULT_TENANT_NAME: targets.vercel.defaultTenantName }).map(([key, value]) =>
+    ({ key, value, type: 'plain', target: ['production'] }));
+  const api = {
+    gh: async route => {
+      if (route === '') return { id: 789 };
+      if (route === `/actions/runs/${q.ciRunId}/artifacts?per_page=100`)
+        return { total_count: 1, artifacts: [artifact] };
+      if (route === '/actions/artifacts/7891') return artifact;
+      assert.equal(route, `/compare/${baselineSha}...${candidateSha}`);
+      return { status: 'ahead', base_commit: { sha: baselineSha },
+        merge_base_commit: { sha: baselineSha }, files };
+    },
+    artifact: async (owner, id) => {
+      assert.equal(owner, 'source'); assert.equal(id, '7891'); return archive;
+    },
+    render: async (route, body) => {
+      if (body !== undefined && route.startsWith(prefix)) {
+        const key = route.slice(prefix.length);
+        s.vars[key] = body.value;
+        s.puts.push({ key, value: body.value });
+        return { key, value: body.value };
+      }
+      if (route.startsWith(prefix)) {
+        const key = route.slice(prefix.length);
+        return { key, value: s.vars[key] };
+      }
+      if (route === servicePath) return structuredClone(service);
+      if (route.endsWith('/deploys?limit=100')) return s.deploys.map(row => ({ deploy: row }));
+      if (route === `${servicePath}/deploys`) {
+        s.posts.push({ body });
+        s.deploys = s.deploys.map(row => row.id === 'dep-commissioned' ?
+          { ...row, status: 'deactivated' } : row);
+        s.deploys.unshift({ id: 'dep-new', status: 'created', commit: { id: candidateSha } });
+        return { id: 'dep-new', status: 'created', commit: { id: candidateSha } };
+      }
+      const deploy = s.deploys.find(row => route.endsWith(`/deploys/${row.id}`));
+      if (deploy) {
+        s.deployReads[deploy.id] = (s.deployReads[deploy.id] ?? 0) + 1;
+        if (s.deployReads[deploy.id] > 1) {
+          deploy.status = 'live';
+          for (const row of s.deploys) if (row.id !== deploy.id && row.status === 'live')
+            row.status = 'deactivated';
+        }
+        return deploy;
+      }
+      throw new Error('Unexpected Render route ' + route);
+    },
+    vercel: async (path, body) => {
+      if (body) {
+        assert.equal(path, '/v13/deployments'); s.vercelPosts.push(body);
+        s.deployed = { ...body, id: 'dpl_New', projectId: targets.vercel.id,
+          target: 'production', readyState: 'BUILDING' };
+        return s.deployed;
+      }
+      if (path.startsWith('/v6/')) return { deployments: [
+        { uid: s.alias, state: 'READY', meta: incumbentMeta },
+        ...(s.deployed ? [{ uid: 'dpl_New', state: s.deployed.readyState, meta: s.deployed.meta }] : [])] };
+      if (path.startsWith('/v10/')) return { envs: inputRows() };
+      if (path.includes('/domains/')) return { name: 'www.aqualifestyleclub.co.za',
+        projectId: targets.vercel.id, verified: true };
+      if (path.endsWith('/aliases')) return { aliases: [{ alias: 'www.aqualifestyleclub.co.za' }] };
+      if (path.endsWith(`/v13/deployments/${incumbentId}`)) return { id: incumbentId,
+        projectId: targets.vercel.id, target: 'production', readyState: 'READY', meta: incumbentMeta };
+      if (path.endsWith('/dpl_New')) {
+        s.deployed.readyState = s.failedVercel ? 'ERROR' : 'READY';
+        if (!s.failedVercel) s.alias = 'dpl_New';
+        return s.deployed;
+      }
+      assert.equal(path, `/v9/projects/${targets.vercel.id}`); return project();
+    },
+    health: async () => ({ status: 200, recovery: null, body: { result: { status: 'Healthy',
+      buildId: s.deploys.find(row => row.status === 'live')?.commit.id ?? baselineSha,
+      environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy',
+      dataProtectionKeyStoreStatus: 'Healthy', paymentAvailability: 'Available' } } }),
+    readiness: async sha => ({ status: 200, body: { contract: 'aqua.production-readiness',
+      version: 2, status: 'Ready', buildId: sha, birdConfiguration: 'StartupValidated',
+      yocoConfiguration: 'StartupValidated', profile: 'normal-integrated',
+      restrictedOperations: 'ConfigurationHeld', d10Bindings: bindings(sha) } }),
+    web: async () => 200,
+    webHealth: async (sha, expected) => {
+      assert.equal(expected, 'Available');
+      return { status: 'Healthy', buildId: sha, paymentAvailability: 'Available' };
+    },
+    uploadVercel: async () => { s.uploads++; },
+    publicFetch: async url => {
+      const path = new URL(url);
+      assert.equal(path.origin, targets.vercel.productionUrl);
+      if (path.pathname === '/login')
+        return new Response('<script src="/_next/static/chunks/public-env.js"></script>');
+      return new Response(`schema.parse({NEXT_PUBLIC_ABP_API_URL:${JSON.stringify(targets.vercel.publicApiUrl)},NEXT_PUBLIC_DEFAULT_TENANT_NAME:'Default',NEXT_PUBLIC_MONITORING_ENDPOINT:undefined})`);
+    }
+  };
+  const options = { targets, policy: standingPolicy, validateRender, validateVercel, validateHealth,
+    deploymentHistory, waitFor, releaseKey, frontendArchive,
+    evidencePlan: { policySha256: q.policySha256, verifiedReleases: [], priorFailedRuns: [],
+      baseline: null, resume: null, resumeChain: [], backendReleases: [],
+      frontendReleases: [], combinedReleases: [] }, attempts: 3, pause: async () => {},
+    guard: async () => {}, validateAdmission: () => {}, now };
+  const report = createAuditWriter(q, row => s.audit.push(row));
+  report({ phase: 'evidence-selected', authorizationId: 'a'.repeat(64), evidenceSha256: 'b'.repeat(64),
+    inventorySha256: 'c'.repeat(64), evidenceArtifactId: '123' });
+  return { s, q, api, options, candidateSha, execute: () =>
+    deployBackendSuccessorRelease(api, q, report, options) };
+}
+
+test('combined release verifies the backend on Render then continues with the frontend phase', async () => {
+  const f = combinedFixture();
+  await f.execute();
+  assert.equal(f.s.posts.length, 1, 'exactly one Render deploy POST');
+  assert.equal(f.s.puts.length, 2, 'payload and pin staged exactly once');
+  assert.equal(f.s.vercelPosts.length, 1, 'exactly one Vercel deploy POST');
+  assert.equal(f.s.vercelPosts[0].meta.aquaSourceSha, f.candidateSha);
+  assert.equal(f.s.vercelPosts[0].meta.aquaFrontendRelease, undefined);
+  assert.equal(f.s.vercelPosts[0].meta.aquaReleaseIdentity, releaseKey(f.q));
+  assert.ok(f.s.uploads > 0);
+  assert.deepEqual(f.s.audit.map(row => row.phase),
+    ['evidence-selected', 'backend-baseline-selected', 'backend-decision-verified',
+      'backend-classified', 'backend-successor-staging', 'backend-successor-staged',
+      'backend-render-requesting', 'backend-render-requested', 'backend-render-ready',
+      'backend-deployed', 'frontend-baseline-selected', 'frontend-classified',
+      'frontend-vercel-files-requesting', 'frontend-vercel-files-uploaded',
+      'frontend-vercel-requesting', 'frontend-vercel-requested', 'frontend-deployed']);
+  assert.equal(f.s.audit[9].renderSha, f.candidateSha);
+  assert.equal(f.s.audit[10].baselineRenderSha, baselineSha);
+  assert.equal(f.s.audit[10].baselineRenderDeployId, 'dep-commissioned');
+  assert.equal(f.s.audit[10].baselineVercelSourceProvenance, 'RECONCILED_FRONTEND_EFFECT');
+  assert.equal(f.s.audit[10].servingRenderSha, f.candidateSha);
+  assert.equal(f.s.audit[11].frontendFiles, 1);
+  assert.equal(f.s.audit[11].backendFiles, 1);
+  assert.equal(f.s.audit.at(-1).vercelDeployId, 'dpl_New');
+  assert.equal(f.s.audit.at(-1).renderSha, f.candidateSha);
+  assert.equal(f.s.audit.at(-1).webStatus, 200);
+  assert.equal(f.s.deploys.filter(row => row.status === 'live').length, 1);
+  const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
+  const receipt = validateCombinedReceipt(f.s.audit, descriptor, targets);
+  assert.equal(receipt.sha, f.candidateSha);
+  assert.equal(receipt.combinedRelease, combinedMode);
+  assert.equal(receipt.backendSuccessor, backendSuccessorMode);
+  assert.equal(receipt.vercelDeployId, 'dpl_New');
+  assert.equal(receipt.renderSha, f.candidateSha);
+  assert.equal(receipt.renderDeployId, 'dep-new');
+  assert.equal(receipt.schemaTransition, 'none');
+  assert.equal(receipt.payloadPinSha256, f.s.puts[1].value);
+  for (const mutate of [rows => rows.splice(12, 1),
+    rows => rows[0].combinedRelease = 'other',
+    rows => rows[10].baselineVercelSourceProvenance = 'BACKEND_VERIFIED_RENDER',
+    rows => rows[11].frontendFiles = 0,
+    rows => rows.at(-1).vercelSha = '0'.repeat(40)]) {
+    const rows = structuredClone(f.s.audit); mutate(rows);
+    assert.throws(() => validateCombinedReceipt(rows, descriptor, targets));
+  }
+});
+
+test('combined release requires frontend changes in the delta', async () => {
+  const f = combinedFixture({ files: [{ filename: backendModifiedPath, status: 'modified' }] });
+  await assert.rejects(f.execute(), /COMBINED_RELEASE_REQUIRES_FRONTEND_DELTA/);
+  assert.equal(f.s.puts.length, 0, 'no staging before the classification gate');
+  assert.equal(f.s.posts.length, 0, 'no Render deploy before the classification gate');
+  assert.equal(f.s.vercelPosts.length, 0);
+});
+
+test('combined release failure in the frontend phase leaves the released backend intact', async () => {
+  const f = combinedFixture({ failedVercel: true });
+  await assert.rejects(f.execute(), /PROVIDER_DEPLOYMENT_FAILED_INSPECT_RELEASE_REPORT/);
+  assert.equal(f.s.puts.length, 2, 'backend staging already happened');
+  assert.equal(f.s.posts.length, 1, 'backend deployed exactly once');
+  const live = f.s.deploys.filter(row => row.status === 'live');
+  assert.equal(live.length, 1);
+  assert.equal(live[0].commit.id, f.candidateSha);
+  assert.equal(f.s.audit.some(row => row.phase === 'frontend-deployed'), false);
+  const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
+  assert.throws(() => validateCombinedReceipt(f.s.audit, descriptor, targets));
 });
