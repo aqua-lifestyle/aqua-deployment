@@ -11,6 +11,10 @@ import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validat
 import { frontendReleaseMode, frontendReleaseRecordDigest, frontendSuccessorCandidateSha,
   validateFrontendSuccessorIdentity } from './aqgreen-frontend-source-successor.mjs';
 import { FrontendReleaseDenied, deployFrontendRelease, validateFrontendReceipt } from './frontend-release.mjs';
+import { backendSuccessorMode, backendSuccessorPayloadKey, backendSuccessorPinKey,
+  backendSuccessorWriteKeys, backendSuccessorReadKeys, BackendSuccessorReleaseDenied,
+  deployBackendSuccessorRelease, validateBackendSuccessorIdentity,
+  validateBackendSuccessorReceipt } from './backend-successor-release.mjs';
 import { FailedFrontendReleaseDenied, failedFrontendRunId,
   validateFailedFrontendContext, validateFailedFrontendAudit } from './failed-frontend-release.mjs';
 import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied, memberContinuation,
@@ -154,9 +158,10 @@ export function validateDispatchInputs(inputs) {
   const mode = Object.hasOwn(inputs, 'qualification_only') ? inputs.qualification_only : false;
   requireThat([true, false, 'true', 'false'].includes(mode), 'EXECUTOR_INPUT_INVALID');
   const releaseMode = Object.hasOwn(inputs, 'release_mode') ? inputs.release_mode : 'full';
-  requireThat(['full', memberPolicy.mode, frontendReleaseMode].includes(releaseMode) &&
+  requireThat(['full', memberPolicy.mode, frontendReleaseMode, backendSuccessorMode].includes(releaseMode) &&
     (releaseMode === 'full' || (releaseMode === memberPolicy.mode ?
-      inputs.sha === memberPolicy.frontendSha : inputs.sha === frontendSuccessorCandidateSha)), 'EXECUTOR_INPUT_INVALID');
+      inputs.sha === memberPolicy.frontendSha :
+      releaseMode === backendSuccessorMode || inputs.sha === frontendSuccessorCandidateSha)), 'EXECUTOR_INPUT_INVALID');
   const prospectiveMode = inputs.prospective_mode ?? 'none';
   requireThat(['none', 'capture-baseline', 'authorize'].includes(prospectiveMode), 'EXECUTOR_INPUT_INVALID');
   if (prospectiveMode === 'capture-baseline') requireThat((mode === true || mode === 'true') &&
@@ -235,7 +240,7 @@ export async function loadProspectiveRecovery(api, inputs, qualified, releaseRun
 export function freezeCandidate(qualified, env, policy = standingPolicy, qualificationOnly = false,
   releaseMode = 'full', prospectiveMode = 'none') {
   requireThat(typeof qualificationOnly === 'boolean', 'EXECUTOR_INPUT_INVALID');
-  requireThat(['full', memberPolicy.mode, frontendReleaseMode].includes(releaseMode), 'EXECUTOR_INPUT_INVALID');
+  requireThat(['full', memberPolicy.mode, frontendReleaseMode, backendSuccessorMode].includes(releaseMode), 'EXECUTOR_INPUT_INVALID');
   requireThat(['none', 'capture-baseline', 'authorize'].includes(prospectiveMode) &&
     (prospectiveMode === 'none' || qualified.sha === prospectiveRecovery.targetSha && releaseMode === 'full'),
   'PROSPECTIVE_RECOVERY_SOURCE_MISMATCH');
@@ -251,6 +256,7 @@ export function freezeCandidate(qualified, env, policy = standingPolicy, qualifi
     ...(prospectiveMode !== 'none' ? { prospectiveMode } : {}),
     ...(releaseMode === memberPolicy.mode ? { memberRelease: memberPolicyDigest } : {}),
     ...(releaseMode === frontendReleaseMode ? { frontendRelease: frontendReleaseRecordDigest } : {}),
+    ...(releaseMode === backendSuccessorMode ? { backendSuccessor: backendSuccessorMode } : {}),
     ...(external ? { executorRepository: execution.repository, executorSha: env.GITHUB_SHA } : {}), releaseRunId: env.GITHUB_RUN_ID,
     releaseRunAttempt: Number(env.GITHUB_RUN_ATTEMPT), policySha256: policyDigest(policy), ...targetIdentity };
   validateReleaseIdentity(candidate);
@@ -267,13 +273,15 @@ function validateReleaseIdentity(identity) {
   'RELEASE_IDENTITY_UNVERIFIABLE');
   if (identity.memberRelease !== undefined) validateMemberIdentity(identity);
   if (identity.frontendRelease !== undefined) validateFrontendSuccessorIdentity(identity);
+  if (identity.backendSuccessor !== undefined) validateBackendSuccessorIdentity(identity);
 }
 
 export function releaseKey(identity) {
   validateReleaseIdentity(identity);
   return createHash('sha256').update(JSON.stringify(
     [...releaseIdentityFields, ...(identity.memberRelease !== undefined ? ['memberRelease'] : []),
-      ...(identity.frontendRelease !== undefined ? ['frontendRelease'] : [])]
+      ...(identity.frontendRelease !== undefined ? ['frontendRelease'] : []),
+      ...(identity.backendSuccessor !== undefined ? ['backendSuccessor'] : [])]
       .map(key => [key, identity[key]]))).digest('hex');
 }
 
@@ -282,7 +290,8 @@ export function verifyCandidate(candidate, qualified, archive, trustedArchive) {
   requireThat(typeof qualified.qualificationOnly === 'boolean' &&
     candidate.qualificationOnly === qualified.qualificationOnly &&
     candidate.memberRelease === qualified.memberRelease &&
-    candidate.frontendRelease === qualified.frontendRelease, 'CANDIDATE_PURPOSE_MISMATCH');
+    candidate.frontendRelease === qualified.frontendRelease &&
+    candidate.backendSuccessor === qualified.backendSuccessor, 'CANDIDATE_PURPOSE_MISMATCH');
   for (const key of releaseIdentityFields)
     requireThat(candidate[key] === qualified[key], 'CANDIDATE_PROVENANCE_MISMATCH');
   requireThat(candidate.sourceSha256 === createHash('sha256').update(archive).digest('hex'),
@@ -498,11 +507,11 @@ export function clients(env, fetcher = fetch, reportGitHubRead = row => console.
     route.startsWith('/rules') ? 'governance' : route.includes('/check-runs') ? 'checks' :
     route.startsWith('/git/') || route.startsWith('/contents/') ? 'contents' :
     route.startsWith('/commits/') || route.startsWith('/pulls/') ? 'pull-request-provenance' : 'required-evidence' });
-  async function request(base, token, route, body, github) {
+  async function request(base, token, route, body, github, method) {
     requireThat(token, 'PROVIDER_CREDENTIAL_UNAVAILABLE');
     let response;
     try {
-      response = await fetcher(base + route, { method: body ? 'POST' : 'GET', redirect: 'error',
+      response = await fetcher(base + route, { method: method ?? (body ? 'POST' : 'GET'), redirect: 'error',
         signal: AbortSignal.timeout(30_000), headers: { Authorization: `Bearer ${token}`,
           Accept: 'application/json', 'Content-Type': 'application/json',
           ...(github ? { 'X-GitHub-Api-Version': '2022-11-28' } : {}) },
@@ -515,6 +524,7 @@ export function clients(env, fetcher = fetch, reportGitHubRead = row => console.
       ...(Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ?
         { httpStatus: response.status } : {}) });
     requireThat(response.ok, body ? 'PROVIDER_POST_REJECTED_INSPECT_BEFORE_RETRY' : 'PROVIDER_READ_REJECTED');
+    if (response.status === 204) return undefined;
     try { return await response.json(); } catch { throw new ReleaseFailure('INVALID_PROVIDER_RESPONSE'); }
   }
   const githubRead = (owner, route, body) => {
@@ -556,13 +566,21 @@ export function clients(env, fetcher = fetch, reportGitHubRead = row => console.
       }
     },
     render: (route, body) => {
-      if (route.includes('/env-vars') || route.includes('/secret-files')) {
-        const prefix = `/services/${targets.render.id}/env-vars/`;
-        requireThat(body === undefined && route.startsWith(prefix) &&
-          (Object.hasOwn(cleanStartRuntimeSettings, route.slice(prefix.length)) ||
-            Object.hasOwn(memberRuntimeSettings, route.slice(prefix.length))), 'SECRET_BEARING_RENDER_READ_FORBIDDEN');
+      const prefix = `/services/${targets.render.id}/env-vars/`;
+      const key = route.startsWith(prefix) ? route.slice(prefix.length) : undefined;
+      if (route.includes('/secret-files'))
+        requireThat(false, 'SECRET_BEARING_RENDER_READ_FORBIDDEN');
+      else if (route.includes('/env-vars')) {
+        if (key === undefined) requireThat(false, 'SECRET_BEARING_RENDER_READ_FORBIDDEN');
+        else if (body === undefined)
+          requireThat(Object.hasOwn(cleanStartRuntimeSettings, key) ||
+            Object.hasOwn(memberRuntimeSettings, key) ||
+            backendSuccessorReadKeys.includes(key), 'SECRET_BEARING_RENDER_READ_FORBIDDEN');
+        else
+          requireThat(backendSuccessorWriteKeys.includes(key), 'RENDER_ENV_WRITE_FORBIDDEN');
       }
-      return request('https://api.render.com/v1', env.RENDER_API_KEY, route, body);
+      return request('https://api.render.com/v1', env.RENDER_API_KEY, route, body, undefined,
+        body !== undefined && key !== undefined && backendSuccessorWriteKeys.includes(key) ? 'PUT' : undefined);
     },
     vercel: (route, body) => {
       if (route.includes('/env?')) requireThat(body === undefined &&
@@ -694,7 +712,8 @@ export function createAuditWriter(identity, emit) {
     }
     emit({ ...row, ...Object.fromEntries(releaseIdentityFields.map(key => [key, identity[key]])),
       ...(identity.memberRelease !== undefined ? { memberRelease: identity.memberRelease } : {}),
-      ...(identity.frontendRelease !== undefined ? { frontendRelease: identity.frontendRelease } : {}), ...known });
+      ...(identity.frontendRelease !== undefined ? { frontendRelease: identity.frontendRelease } : {}),
+      ...(identity.backendSuccessor !== undefined ? { backendSuccessor: identity.backendSuccessor } : {}), ...known });
   };
 }
 
@@ -877,12 +896,19 @@ export async function evidencePlan(api, candidate, policy) {
   // no portable ticket: authenticate every completed release's immutable audit.
   // Deleted history, expired evidence or a previously deployed SHA denies even
   // when the caller supplies another CI run/attempt or dispatches a fresh run.
-  const verifiedReleases = [], memberReleases = [], frontendReleases = [], frontendReconciliations = [];
+  const verifiedReleases = [], memberReleases = [], frontendReleases = [], frontendReconciliations = [],
+    backendReleases = [];
   for (const past of successful) {
     const descriptor = await auditArtifact(api, past, past.run_attempt);
     const rows = await readReleaseAudit(api, descriptor);
     if (rows[0]?.memberRelease !== undefined) {
       memberReleases.push(validateMemberReceipt(rows, descriptor, targets));
+      continue;
+    }
+    if (rows[0]?.backendSuccessor !== undefined) {
+      const receipt = validateBackendSuccessorReceipt(rows, descriptor, targets);
+      requireThat(receipt.sha !== candidate.sha, 'SOURCE_ALREADY_VERIFIED');
+      backendReleases.push(receipt);
       continue;
     }
     if (rows[0]?.frontendRelease !== undefined) {
@@ -1035,6 +1061,7 @@ export async function evidencePlan(api, candidate, policy) {
     ...(memberReleases.length ? { memberReleases } : {}),
     ...(frontendReleases.length ? { frontendReleases } : {}),
     ...(frontendReconciliations.length ? { frontendReconciliations } : {}),
+    ...(backendReleases.length ? { backendReleases } : {}),
     firstReleaseRecoveryEvidenceSha256: candidate.prospectiveRecovery || latest ? null : policy.firstReleaseRecovery.evidenceSha256,
     baseline: latest && !candidate.prospectiveRecovery ? await auditArtifact(api, latest, latest.run_attempt) : null,
     resume: resumeChain.at(-1) ?? null, resumeChain };
@@ -1211,8 +1238,11 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     'READINESS_CONTINUATION_CONFLICT');
   const prior = readyReuse ? readinessRenderReuse(readyReuse, qualified) : partial ? partialRenderReuse(partial, qualified, targets) :
     options.receiptRows ? validateResumeReceipt(options.receiptRows, qualified) : {};
-  const schemaProof = await verifySchemaFirst(api, qualified, policy, readSource,
-    options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now);
+  // The ordinary backend successor supersedes the pinned commissioning-era
+  // chain: its schema safety is re-derived by the successor runtime from the
+  // commissioned decision, not by the one-time M55 source pins.
+  const schemaProof = qualified.backendSuccessor === undefined ? await verifySchemaFirst(api, qualified, policy, readSource,
+    options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now) : null;
   const prospective = qualified.prospectiveRecovery;
   if (prospective) {
     validateProspectiveBaseline(prospective.boundary, qualified.sha, options.now);
@@ -1233,15 +1263,17 @@ export async function deploy(api, qualified, policy, report, options = {}) {
         row.status === 'live') && rows.every(row => !activeRender.has(row.status)),
     'RECONCILED_TARGET_FAILURE_STATE_CHANGED');
   };
-  const firstRecovery = !plan.baseline && !prospective ? validateFirstReleaseRecovery(
+  const firstRecovery = qualified.backendSuccessor === undefined && !plan.baseline && !prospective ? validateFirstReleaseRecovery(
     options.recoveryReadback ?? approvedRecoveryReadback, qualified, policy, options.now, schemaProof) : null;
-  requireThat(plan.firstReleaseRecoveryEvidenceSha256 === (firstRecovery?.evidenceSha256 ?? null),
-    'FIRST_RELEASE_RECOVERY_PLAN_MISMATCH');
-  requireThat(!firstRecovery || plan.verifiedReleases.length === 0, 'FIRST_RELEASE_RECOVERY_ALREADY_CONSUMED');
+  if (qualified.backendSuccessor === undefined) {
+    requireThat(plan.firstReleaseRecoveryEvidenceSha256 === (firstRecovery?.evidenceSha256 ?? null),
+      'FIRST_RELEASE_RECOVERY_PLAN_MISMATCH');
+    requireThat(!firstRecovery || plan.verifiedReleases.length === 0, 'FIRST_RELEASE_RECOVERY_ALREADY_CONSUMED');
+  }
   const githubGuard = guard;
   guard = async () => {
     await githubGuard();
-    await verifySchemaFirst(api, qualified, policy, readSource,
+    if (qualified.backendSuccessor === undefined) await verifySchemaFirst(api, qualified, policy, readSource,
       options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now);
     if (firstRecovery) validateFirstReleaseRecovery(
       options.recoveryReadback ?? approvedRecoveryReadback, qualified, policy, options.now, schemaProof);
@@ -1260,6 +1292,11 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     return deployFrontendRelease(api, qualified, report, { ...options, guard, targets, plan,
       policy, evidence, validateRender, validateVercel, validateHealth, validateBaselineReceipt,
       deploymentHistory, waitFor, releaseKey,
+      validateAdmission: () => validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now) });
+  }
+  if (qualified.backendSuccessor !== undefined) {
+    return deployBackendSuccessorRelease(api, qualified, report, { ...options, guard, targets, plan,
+      policy, evidence, validateRender, validateHealth, deploymentHistory, waitFor, releaseKey,
       validateAdmission: () => validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now) });
   }
   const frontend = prepareFrontend(options.frontendArchive, qualified.sha, targets.vercel, policy.scope.frontend.publicBuildInputs);
@@ -1904,13 +1941,15 @@ export async function main(env, options = {}) {
     await validateInfrastructure(api, q, policy);
     await validateCandidateProvenance(api, q);
     const plan = await evidencePlan(api, q, policy);
-    const schemaProof = q.memberRelease === undefined ? await verifySchemaFirst(api, q, policy, readSource,
-      options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now) : null;
+    const schemaProof = q.memberRelease === undefined && q.backendSuccessor === undefined ?
+      await verifySchemaFirst(api, q, policy, readSource,
+        options.schemaReadback ?? approvedSchemaReadback, !!plan.baseline, options.now) : null;
     // Match deploy's recovery selection. prospectiveProof comes only from the
     // authenticated baseline and separate owner authorization loaded above.
     // Otherwise retain the original eligibility/compatibility readback; provider
     // credentials remain unavailable and qualification cannot authorize deployment.
-    if (q.memberRelease === undefined && !q.qualificationOnly && !plan.baseline && !prospectiveProof)
+    if (q.memberRelease === undefined && q.backendSuccessor === undefined &&
+      !q.qualificationOnly && !plan.baseline && !prospectiveProof)
       validateFirstReleaseRecovery(options.recoveryReadback ?? approvedRecoveryReadback, q, policy, options.now, schemaProof);
     const receipt = createGitHubAdmission(q, policy, evidence, options.now);
     requireThat(typeof env.AQUA_ADMISSION_RECEIPT_OUTPUT === 'string', 'ADMISSION_OUTPUT_REQUIRED');
@@ -1952,7 +1991,8 @@ export function safeReleaseFailureCode(error) {
     error instanceof SchemaFirstDenied || error instanceof MemberReleaseDenied ||
     error instanceof HistoricalReconciliationDenied || error instanceof PriorRunNotRecognized ||
     error instanceof ReadinessReleaseDenied || error instanceof ProspectiveBaselineDenied ||
-    error instanceof FrontendReleaseDenied || error instanceof FailedFrontendReleaseDenied) ?
+    error instanceof FrontendReleaseDenied || error instanceof FailedFrontendReleaseDenied ||
+    error instanceof BackendSuccessorReleaseDenied) ?
     error.message : 'UNEXPECTED_RELEASE_ERROR';
 }
 
