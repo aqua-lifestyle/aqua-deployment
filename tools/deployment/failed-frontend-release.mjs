@@ -1,6 +1,7 @@
 // Exact, read-only recognition of the acknowledged Vercel effect from the
 // failed run. Neither the original run nor this record is a success receipt.
 import { readFileSync } from 'node:fs';
+import { standingPolicy, policyDigest } from './release-control.mjs';
 import { sha256, objectDigest } from './github-evidence.mjs';
 import { validateFrontendProof, fileDeploymentBody, verifyObservedFileDeployment } from './vercel-source.mjs';
 import { normalRuntimeSettings } from './runtime-readiness.mjs';
@@ -76,7 +77,11 @@ export function validateFailedFrontendContext(run, past, attempt, production, ca
     production?.name === 'Unattended recovery release' && production.conclusion === 'failure' &&
     production.steps?.filter(step => step.name === e.failedStep && step.conclusion === 'failure').length === 1 &&
     candidate?.sha !== r.qualifiedSource.sha && candidate?.memberRelease === undefined &&
-    candidate?.policySha256 === r.qualifiedSource.policySha256 &&
+    // The failed run's original policy remains pinned in its immutable audit.
+    // Its factual Vercel effect may be recognized under today's approved policy,
+    // but this failed run never grants a release or retry authority.
+    (candidate?.policySha256 === r.qualifiedSource.policySha256 ||
+      candidate?.policySha256 === policyDigest(standingPolicy)) &&
     candidate.repository === r.qualifiedSource.repository &&
     candidate.executorRepository === e.repository && candidate.environment === targets.environment &&
     candidate.profile === targets.profile && candidate.renderServiceId === targets.render.id &&

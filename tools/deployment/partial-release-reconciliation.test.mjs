@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import './fixtures/historical-policy-epoch.mjs';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';

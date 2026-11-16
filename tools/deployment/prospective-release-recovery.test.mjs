@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import './fixtures/historical-policy-epoch.mjs';
 import { test } from 'node:test';
 import { cleanStartRuntimeSettings } from './runtime-readiness.mjs';
 import { schemaSource, verifySchemaFirst } from './commission-schema-first.mjs';

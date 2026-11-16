@@ -1,3 +1,4 @@
+import './fixtures/historical-policy-epoch.mjs';
 import assert from 'node:assert/strict';
 import { schemaSource } from './commission-schema-first.mjs';
 import { test } from 'node:test';

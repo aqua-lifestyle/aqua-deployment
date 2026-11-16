@@ -17,7 +17,7 @@
       }
     ],
     "inventorySourceCommit": "1421ef639849265d1d6e23292417ab8107d5add4",
-    "inventorySha256": "8ae9edb167884e84db0ed9d342eb315bb6d19ee51722eb20f75fb2c4ea99dbd5",
+    "inventorySha256": "2bedab20a4fe26c07a8ca027a52dfb2d3db60e21ee69f627775f6efe928a7239",
     "maxCiAgeSeconds": 86400,
     "maxAdmissionAgeSeconds": 3600
   },
