@@ -11,8 +11,14 @@
 import { execFileSync } from 'node:child_process';
 import { objectDigest, sha256, validateArtifact, readGitHubArtifact } from './github-evidence.mjs';
 import { normalRuntimeSettings, validateD10Bindings, validateReadiness } from './runtime-readiness.mjs';
+import { deployCombinedFrontendPhase } from './frontend-release.mjs';
 
 export const backendSuccessorMode = 'post-normal-backend-v1';
+// Combined release mode: one dispatch that performs the full backend successor
+// release first and, only after the backend is verified live on Render,
+// continues with the frontend release of the same qualified revision on
+// Vercel. A backend failure fails closed before any frontend mutation.
+export const combinedMode = 'post-normal-backend-frontend-v1';
 export const backendSuccessorPayloadKey = 'App__AQGreenV2__D10__BackendSuccessorJsonBase64';
 export const backendSuccessorPinKey = 'App__AQGreenV2__D10__BackendSuccessorSha256';
 export const backendSuccessorWriteKeys = Object.freeze([backendSuccessorPayloadKey, backendSuccessorPinKey]);
@@ -53,6 +59,7 @@ const successorDigestKeys = ['successorSchemaSha256', 'successorAssemblySha256',
 
 export function validateBackendSuccessorIdentity(q) {
   check(q && typeof q === 'object' && q.backendSuccessor === backendSuccessorMode &&
+    (q.combinedRelease === undefined || q.combinedRelease === combinedMode) &&
     q.memberRelease === undefined && q.frontendRelease === undefined &&
     q.prospectiveMode === undefined && q.prospectiveRecovery === undefined,
   'BACKEND_RELEASE_IDENTITY_MISMATCH');
@@ -120,7 +127,8 @@ export function validateBackendSuccessorReceipt(rows, descriptor, targets) {
   'BACKEND_AUDIT_DECISION_MISMATCH');
   check(classified.schemaTransition === (rows.length === 18 ? 'additive' : 'none') &&
     (classified.schemaTransition === 'none' || classified.migrationFiles > 0) &&
-    classified.backendFiles > 0 && hashPattern.test(classified.sourceDeltaSha256 ?? '') &&
+    classified.backendFiles > 0 && Number.isInteger(classified.frontendFiles) &&
+    classified.frontendFiles >= 0 && hashPattern.test(classified.sourceDeltaSha256 ?? '') &&
     /^[1-9]\d*$/.test(classified.integrityArtifactId ?? '') &&
     hashPattern.test(classified.integrityArtifactSha256 ?? '') &&
     classified.contract === 'aqua.backend-successor-integrity-v1' &&
@@ -177,7 +185,10 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   validateBackendSuccessorIdentity(q);
   check(q.qualificationOnly === false && q.releaseRunAttempt === 1 && !options.receiptRows &&
     options.evidencePlan && !options.evidencePlan.resume &&
-    (options.evidencePlan.backendReleases ?? []).every(row => row.sha !== q.sha),
+    (options.evidencePlan.backendReleases ?? []).every(row => row.sha !== q.sha) &&
+    (options.evidencePlan.combinedReleases ?? []).every(row => row.sha !== q.sha) &&
+    (q.combinedRelease === undefined ||
+      (options.evidencePlan.frontendReleases ?? []).every(row => row.sha !== q.sha)),
   'BACKEND_RELEASE_NO_RESUME');
   const { targets, guard, validateRender, validateHealth, deploymentHistory, waitFor, releaseKey, policy } = options;
   const start = (options.now ?? Date.now)(), end = start + 40 * 60 * 1000;
@@ -239,13 +250,15 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   const compare = await api.gh(`/compare/${baselineSha}...${q.sha}`);
   const frontendPrefix = `${targets.vercel.rootDirectory}/`;
   const backendFiles = compare.files.filter(file => file.filename.startsWith(backendRoot));
+  const frontendFiles = compare.files.filter(file => file.filename.startsWith(frontendPrefix));
+  if (q.combinedRelease !== undefined)
+    check(frontendFiles.length > 0, 'COMBINED_RELEASE_REQUIRES_FRONTEND_DELTA');
   check(compare.status === 'ahead' && compare.base_commit?.sha === baselineSha &&
     compare.merge_base_commit?.sha === baselineSha && Array.isArray(compare.files) &&
     compare.files.length > 0 && compare.files.length < 300 && backendFiles.length > 0 &&
     compare.files.every(file => ['added', 'modified', 'removed'].includes(file.status) &&
-      typeof file.filename === 'string' && !file.filename.includes('..') &&
-      !file.filename.startsWith(frontendPrefix)),
-  'BACKEND_SOURCE_DELTA_UNAUTHORIZED');
+      typeof file.filename === 'string' && !file.filename.includes('..')),
+    'BACKEND_SOURCE_DELTA_UNAUTHORIZED');
   // 2. Source classification: additive-only schema delta detection.
   const migrationFiles = compare.files.filter(file => file.filename.startsWith(migrationsPath));
   const sourceDir = options.env?.SOURCE_DIR;
@@ -308,7 +321,7 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
     requiredDatabaseIdentityDigest: decision.requiredDatabaseIdentityDigest,
     predecessorBuildId, baselineBindings, baselineRenderSha: baselineSha, paymentAvailability: state });
   audit({ phase: 'backend-classified', schemaTransition, backendFiles: backendFiles.length,
-    migrationFiles: migrationFiles.length, sourceDeltaSha256,
+    frontendFiles: frontendFiles.length, migrationFiles: migrationFiles.length, sourceDeltaSha256,
     integrityArtifactId: descriptor.id, integrityArtifactSha256: descriptor.digest.slice(7), ...integrity });
   // 3. Stage the successor input through the existing environment channel.
   const buildPayload = transition => {
@@ -420,4 +433,70 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   audit({ phase: 'backend-deployed', renderDeployId: finalDeployId, renderSha: q.sha,
     paymentAvailability: state, readinessBindings, payloadPinSha256: finalPin,
     releaseIdentity: releaseKey(q), schemaTransition });
+  // Combined releases continue with the frontend phase of the same qualified
+  // revision only after the backend release is fully verified above. Every
+  // failure in the frontend phase fails closed on the already-released backend.
+  if (q.combinedRelease !== undefined)
+    await deployCombinedFrontendPhase(api, q, report, options, {
+      baselineRenderDeployId: live[0].id, baselineRenderSha: baselineSha,
+      renderDeployId: finalDeployId, renderSha: q.sha, paymentAvailability: state,
+      frontendFiles: frontendFiles.length, backendFiles: backendFiles.length, sourceDeltaSha256 });
+}
+
+// Combined audit receipt: the 10- or 18-row backend successor sequence is
+// validated by the ordinary backend receipt logic, then the seven-row frontend
+// suffix is bound to that backend result. The frontend phase never re-runs the
+// backend comparison; it inherits the backend classification.
+export function validateCombinedReceipt(rows, descriptor, targets) {
+  check(Array.isArray(rows) && (rows.length === 17 || rows.length === 25) &&
+    rows.map(row => row.phase).join() ===
+      [...(rows.length === 17 ? baselineSequence : additiveSequence),
+        'frontend-baseline-selected', 'frontend-classified',
+        'frontend-vercel-files-requesting', 'frontend-vercel-files-uploaded',
+        'frontend-vercel-requesting', 'frontend-vercel-requested', 'frontend-deployed'].join(),
+    'COMBINED_AUDIT_SEQUENCE_INVALID');
+  const backendLen = rows.length - 7;
+  const backendReceipt = validateBackendSuccessorReceipt(rows.slice(0, backendLen), descriptor, targets);
+  const first = rows[0], classified = rows[3], baseline = rows[backendLen],
+    deployed = rows.at(-1);
+  check(first.combinedRelease === combinedMode &&
+    rows.every(row => row.combinedRelease === first.combinedRelease &&
+      row.backendSuccessor === first.backendSuccessor),
+    'COMBINED_AUDIT_IDENTITY_MISMATCH');
+  check(rows[backendLen - 1].phase === 'backend-deployed' &&
+    rows[backendLen - 1].renderSha === first.sha &&
+    rows[backendLen - 1].renderDeployId === backendReceipt.renderDeployId &&
+    hashPattern.test(rows[backendLen - 1].releaseIdentity ?? ''),
+    'COMBINED_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  check(/^dpl_[A-Za-z0-9]+$/.test(baseline.baselineVercelDeployId ?? '') &&
+    baseline.baselineRenderSha === rows[1].baselineRenderSha &&
+    baseline.baselineRenderDeployId === rows[1].baselineRenderDeployId &&
+    baseline.baselineRenderSha !== first.sha && baseline.servingRenderSha === first.sha &&
+    baseline.servingRenderDeployId === backendReceipt.renderDeployId &&
+    baseline.paymentAvailability === 'Available' &&
+    baseline.paymentAvailability === rows[1].paymentAvailability &&
+    baseline.paymentAvailability === deployed.paymentAvailability &&
+    ['GIT_SOURCE', 'UNVERIFIED_LEGACY', 'RECONCILED_FRONTEND_EFFECT', 'PRIOR_RELEASE_RECEIPT']
+      .includes(baseline.baselineVercelSourceProvenance),
+    'COMBINED_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  const frontendClassified = rows[backendLen + 1];
+  check(frontendClassified.phase === 'frontend-classified' &&
+    frontendClassified.frontendFiles === rows[3].frontendFiles &&
+    frontendClassified.backendFiles === rows[3].backendFiles &&
+    frontendClassified.sourceDeltaSha256 === rows[3].sourceDeltaSha256,
+    'COMBINED_AUDIT_CLASSIFICATION_MISMATCH');
+  const vercelDeployId = rows[backendLen + 5].vercelDeployId;
+  check(typeof vercelDeployId === 'string' && /^dpl_[A-Za-z0-9]+$/.test(vercelDeployId) &&
+    rows[backendLen + 6].vercelDeployId === vercelDeployId &&
+    rows[backendLen + 6].renderSha === first.sha &&
+    rows[backendLen + 6].webSha256 === first.sha && rows[backendLen + 6].webStatus === 200,
+    'COMBINED_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  check(deployed.phase === 'frontend-deployed' && deployed.renderSha === first.sha &&
+    deployed.vercelSha === first.sha && deployed.webSha256 === first.sha &&
+    deployed.paymentAvailability === baseline.paymentAvailability,
+    'COMBINED_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  return { ...backendReceipt, sha: first.sha, ciRunId: first.ciRunId, ciRunAttempt: first.ciRunAttempt,
+    renderDeployId: backendReceipt.renderDeployId, renderSha: first.sha,
+    vercelDeployId, combinedRelease: first.combinedRelease, backendSuccessor: first.backendSuccessor,
+    payloadPinSha256: backendReceipt.payloadPinSha256, receiptSha256: objectDigest(rows) };
 }

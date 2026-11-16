@@ -11,10 +11,10 @@ import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validat
 import { frontendReleaseMode, frontendReleaseRecordDigest, frontendSuccessorCandidateSha,
   validateFrontendSuccessorIdentity } from './aqgreen-frontend-source-successor.mjs';
 import { FrontendReleaseDenied, deployFrontendRelease, validateFrontendReceipt } from './frontend-release.mjs';
-import { backendSuccessorMode, backendSuccessorPayloadKey, backendSuccessorPinKey,
+import { backendSuccessorMode, combinedMode, backendSuccessorPayloadKey, backendSuccessorPinKey,
   backendSuccessorWriteKeys, backendSuccessorReadKeys, BackendSuccessorReleaseDenied,
   deployBackendSuccessorRelease, validateBackendSuccessorIdentity,
-  validateBackendSuccessorReceipt } from './backend-successor-release.mjs';
+  validateBackendSuccessorReceipt, validateCombinedReceipt } from './backend-successor-release.mjs';
 import { FailedFrontendReleaseDenied, failedFrontendRunId,
   validateFailedFrontendContext, validateFailedFrontendAudit } from './failed-frontend-release.mjs';
 import { memberPolicy, memberPolicyDigest, memberRuntimeSettings, MemberReleaseDenied, memberContinuation,
@@ -158,10 +158,10 @@ export function validateDispatchInputs(inputs) {
   const mode = Object.hasOwn(inputs, 'qualification_only') ? inputs.qualification_only : false;
   requireThat([true, false, 'true', 'false'].includes(mode), 'EXECUTOR_INPUT_INVALID');
   const releaseMode = Object.hasOwn(inputs, 'release_mode') ? inputs.release_mode : 'full';
-  requireThat(['full', memberPolicy.mode, frontendReleaseMode, backendSuccessorMode].includes(releaseMode) &&
-    (releaseMode === 'full' || (releaseMode === memberPolicy.mode ?
-      inputs.sha === memberPolicy.frontendSha :
-      releaseMode === backendSuccessorMode || inputs.sha === frontendSuccessorCandidateSha)), 'EXECUTOR_INPUT_INVALID');
+  requireThat(['full', memberPolicy.mode, frontendReleaseMode, backendSuccessorMode, combinedMode]
+      .includes(releaseMode) &&
+    (releaseMode !== memberPolicy.mode || inputs.sha === memberPolicy.frontendSha),
+  'EXECUTOR_INPUT_INVALID');
   const prospectiveMode = inputs.prospective_mode ?? 'none';
   requireThat(['none', 'capture-baseline', 'authorize'].includes(prospectiveMode), 'EXECUTOR_INPUT_INVALID');
   if (prospectiveMode === 'capture-baseline') requireThat((mode === true || mode === 'true') &&
@@ -240,7 +240,8 @@ export async function loadProspectiveRecovery(api, inputs, qualified, releaseRun
 export function freezeCandidate(qualified, env, policy = standingPolicy, qualificationOnly = false,
   releaseMode = 'full', prospectiveMode = 'none') {
   requireThat(typeof qualificationOnly === 'boolean', 'EXECUTOR_INPUT_INVALID');
-  requireThat(['full', memberPolicy.mode, frontendReleaseMode, backendSuccessorMode].includes(releaseMode), 'EXECUTOR_INPUT_INVALID');
+  requireThat(['full', memberPolicy.mode, frontendReleaseMode, backendSuccessorMode, combinedMode]
+    .includes(releaseMode), 'EXECUTOR_INPUT_INVALID');
   requireThat(['none', 'capture-baseline', 'authorize'].includes(prospectiveMode) &&
     (prospectiveMode === 'none' || qualified.sha === prospectiveRecovery.targetSha && releaseMode === 'full'),
   'PROSPECTIVE_RECOVERY_SOURCE_MISMATCH');
@@ -255,8 +256,12 @@ export function freezeCandidate(qualified, env, policy = standingPolicy, qualifi
   const candidate = { ...qualified, version: external ? 4 : 3, qualificationOnly,
     ...(prospectiveMode !== 'none' ? { prospectiveMode } : {}),
     ...(releaseMode === memberPolicy.mode ? { memberRelease: memberPolicyDigest } : {}),
-    ...(releaseMode === frontendReleaseMode ? { frontendRelease: frontendReleaseRecordDigest } : {}),
+    ...(releaseMode === frontendReleaseMode ?
+      { frontendRelease: qualified.sha === frontendSuccessorCandidateSha ?
+        frontendReleaseRecordDigest : frontendReleaseMode } : {}),
     ...(releaseMode === backendSuccessorMode ? { backendSuccessor: backendSuccessorMode } : {}),
+    ...(releaseMode === combinedMode ?
+      { backendSuccessor: backendSuccessorMode, combinedRelease: combinedMode } : {}),
     ...(external ? { executorRepository: execution.repository, executorSha: env.GITHUB_SHA } : {}), releaseRunId: env.GITHUB_RUN_ID,
     releaseRunAttempt: Number(env.GITHUB_RUN_ATTEMPT), policySha256: policyDigest(policy), ...targetIdentity };
   validateReleaseIdentity(candidate);
@@ -274,6 +279,11 @@ function validateReleaseIdentity(identity) {
   if (identity.memberRelease !== undefined) validateMemberIdentity(identity);
   if (identity.frontendRelease !== undefined) validateFrontendSuccessorIdentity(identity);
   if (identity.backendSuccessor !== undefined) validateBackendSuccessorIdentity(identity);
+  if (identity.combinedRelease !== undefined)
+    requireThat(identity.combinedRelease === combinedMode &&
+      identity.backendSuccessor === backendSuccessorMode &&
+      identity.frontendRelease === undefined && identity.memberRelease === undefined,
+    'RELEASE_IDENTITY_UNVERIFIABLE');
 }
 
 export function releaseKey(identity) {
@@ -281,7 +291,8 @@ export function releaseKey(identity) {
   return createHash('sha256').update(JSON.stringify(
     [...releaseIdentityFields, ...(identity.memberRelease !== undefined ? ['memberRelease'] : []),
       ...(identity.frontendRelease !== undefined ? ['frontendRelease'] : []),
-      ...(identity.backendSuccessor !== undefined ? ['backendSuccessor'] : [])]
+      ...(identity.backendSuccessor !== undefined ? ['backendSuccessor'] : []),
+      ...(identity.combinedRelease !== undefined ? ['combinedRelease'] : [])]
       .map(key => [key, identity[key]]))).digest('hex');
 }
 
@@ -291,7 +302,8 @@ export function verifyCandidate(candidate, qualified, archive, trustedArchive) {
     candidate.qualificationOnly === qualified.qualificationOnly &&
     candidate.memberRelease === qualified.memberRelease &&
     candidate.frontendRelease === qualified.frontendRelease &&
-    candidate.backendSuccessor === qualified.backendSuccessor, 'CANDIDATE_PURPOSE_MISMATCH');
+    candidate.backendSuccessor === qualified.backendSuccessor &&
+    candidate.combinedRelease === qualified.combinedRelease, 'CANDIDATE_PURPOSE_MISMATCH');
   for (const key of releaseIdentityFields)
     requireThat(candidate[key] === qualified[key], 'CANDIDATE_PROVENANCE_MISMATCH');
   requireThat(candidate.sourceSha256 === createHash('sha256').update(archive).digest('hex'),
@@ -713,7 +725,8 @@ export function createAuditWriter(identity, emit) {
     emit({ ...row, ...Object.fromEntries(releaseIdentityFields.map(key => [key, identity[key]])),
       ...(identity.memberRelease !== undefined ? { memberRelease: identity.memberRelease } : {}),
       ...(identity.frontendRelease !== undefined ? { frontendRelease: identity.frontendRelease } : {}),
-      ...(identity.backendSuccessor !== undefined ? { backendSuccessor: identity.backendSuccessor } : {}), ...known });
+      ...(identity.backendSuccessor !== undefined ? { backendSuccessor: identity.backendSuccessor } : {}),
+      ...(identity.combinedRelease !== undefined ? { combinedRelease: identity.combinedRelease } : {}), ...known });
   };
 }
 
@@ -897,12 +910,18 @@ export async function evidencePlan(api, candidate, policy) {
   // Deleted history, expired evidence or a previously deployed SHA denies even
   // when the caller supplies another CI run/attempt or dispatches a fresh run.
   const verifiedReleases = [], memberReleases = [], frontendReleases = [], frontendReconciliations = [],
-    backendReleases = [];
+    backendReleases = [], combinedReleases = [];
   for (const past of successful) {
     const descriptor = await auditArtifact(api, past, past.run_attempt);
     const rows = await readReleaseAudit(api, descriptor);
     if (rows[0]?.memberRelease !== undefined) {
       memberReleases.push(validateMemberReceipt(rows, descriptor, targets));
+      continue;
+    }
+    if (rows[0]?.combinedRelease !== undefined) {
+      const receipt = validateCombinedReceipt(rows, descriptor, targets);
+      requireThat(receipt.sha !== candidate.sha, 'SOURCE_ALREADY_VERIFIED');
+      combinedReleases.push(receipt);
       continue;
     }
     if (rows[0]?.backendSuccessor !== undefined) {
@@ -1062,6 +1081,7 @@ export async function evidencePlan(api, candidate, policy) {
     ...(frontendReleases.length ? { frontendReleases } : {}),
     ...(frontendReconciliations.length ? { frontendReconciliations } : {}),
     ...(backendReleases.length ? { backendReleases } : {}),
+    ...(combinedReleases.length ? { combinedReleases } : {}),
     firstReleaseRecoveryEvidenceSha256: candidate.prospectiveRecovery || latest ? null : policy.firstReleaseRecovery.evidenceSha256,
     baseline: latest && !candidate.prospectiveRecovery ? await auditArtifact(api, latest, latest.run_attempt) : null,
     resume: resumeChain.at(-1) ?? null, resumeChain };
@@ -1296,7 +1316,8 @@ export async function deploy(api, qualified, policy, report, options = {}) {
   }
   if (qualified.backendSuccessor !== undefined) {
     return deployBackendSuccessorRelease(api, qualified, report, { ...options, guard, targets, plan,
-      policy, evidence, validateRender, validateHealth, deploymentHistory, waitFor, releaseKey,
+      policy, evidence, validateRender, validateVercel, validateHealth, validateBaselineReceipt,
+      deploymentHistory, waitFor, releaseKey,
       validateAdmission: () => validateGitHubAdmission(options.admissionReceipt, qualified, policy, evidence, options.now) });
   }
   const frontend = prepareFrontend(options.frontendArchive, qualified.sha, targets.vercel, policy.scope.frontend.publicBuildInputs);

@@ -27,14 +27,21 @@ const sourcePaths = [
 ];
 
 export function validateFrontendSuccessorIdentity(q) {
-  check(q?.frontendRelease === frontendReleaseRecordDigest && q.sha === frontendSuccessorCandidateSha &&
-    q.ciRunId === '43597833117' && q.ciRunAttempt === 1 && typeof q.qualificationOnly === 'boolean' &&
-    q.memberRelease === undefined && q.policySha256 ===
-      '717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840' &&
-    q.repository === targets.repository && q.executorRepository === targets.executor.repository &&
-    q.environment === targets.environment && q.profile === targets.profile &&
-    q.renderServiceId === targets.render.id && q.vercelProjectId === targets.vercel.id &&
-    q.vercelTeamId === targets.vercel.teamId, 'AQGREEN_FRONTEND_SUCCESSOR_EXACT_SCOPE_REQUIRED');
+  if (q?.frontendRelease === frontendReleaseRecordDigest) {
+    check(q.sha === frontendSuccessorCandidateSha &&
+      q.ciRunId === '43597833117' && q.ciRunAttempt === 1 && typeof q.qualificationOnly === 'boolean' &&
+      q.memberRelease === undefined && q.policySha256 ===
+        '717b071718a7032c49055673092c1aa62114055c3d5ab22a8708ef5ca509f840' &&
+      q.repository === targets.repository && q.executorRepository === targets.executor.repository &&
+      q.environment === targets.environment && q.profile === targets.profile &&
+      q.renderServiceId === targets.render.id && q.vercelProjectId === targets.vercel.id &&
+      q.vercelTeamId === targets.vercel.teamId, 'AQGREEN_FRONTEND_SUCCESSOR_EXACT_SCOPE_REQUIRED');
+    return;
+  }
+  check(q?.frontendRelease === frontendReleaseMode, 'AQGREEN_FRONTEND_SUCCESSOR_EXACT_SCOPE_REQUIRED');
+  check(q.memberRelease === undefined && q.backendSuccessor === undefined &&
+    q.combinedRelease === undefined && q.prospectiveMode === undefined &&
+    q.prospectiveRecovery === undefined, 'FRONTEND_RELEASE_IDENTITY_MISMATCH');
 }
 
 export function validateAqGreenFrontendSuccessor(q, bytes = readFileSync(recordUrl)) {

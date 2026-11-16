@@ -163,7 +163,8 @@ export function createGitHubAdmission(qualified, policy, evidence, now = Date.no
   const binding = Object.fromEntries([...receiptBindings,
     ...(qualified.memberRelease !== undefined ? ['memberRelease'] : []),
     ...(qualified.frontendRelease !== undefined ? ['frontendRelease'] : []),
-    ...(qualified.backendSuccessor !== undefined ? ['backendSuccessor'] : [])].map(k => [k, qualified[k]]));
+    ...(qualified.backendSuccessor !== undefined ? ['backendSuccessor'] : []),
+    ...(qualified.combinedRelease !== undefined ? ['combinedRelease'] : [])].map(k => [k, qualified[k]]));
   check(receiptBindings.every(k => binding[k] !== undefined), 'ADMISSION_BINDING_INCOMPLETE');
   const expiry = Math.min(time + policy.authorization.maxAdmissionAgeSeconds * 1000,
     Date.parse(evidence.completedAt) + policy.authorization.maxCiAgeSeconds * 1000);
