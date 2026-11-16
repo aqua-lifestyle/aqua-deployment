@@ -101,11 +101,17 @@ export const mutationCapablePhases = Object.freeze(new Set([
   'member-render-ready', 'member-vercel-files-requesting', 'member-vercel-files-uploaded',
   'member-vercel-requesting', 'member-vercel-requested', 'member-deployed',
   'frontend-vercel-files-requesting', 'frontend-vercel-files-uploaded',
-  'frontend-vercel-requesting', 'frontend-vercel-requested', 'frontend-deployed']));
+  'frontend-vercel-requesting', 'frontend-vercel-requested', 'frontend-deployed',
+  'backend-successor-staging', 'backend-successor-staged', 'backend-render-requesting',
+  'backend-render-requested', 'backend-render-ready', 'backend-schema-job-requesting',
+  'backend-schema-job-created', 'backend-schema-job-succeeded', 'backend-successor-restart-staging',
+  'backend-successor-restart-staged', 'backend-restart-requesting', 'backend-restart-requested',
+  'backend-restart-ready', 'backend-deployed']));
 
 const knownPhases = Object.freeze(new Set([
   'evidence-selected', 'baseline-selected', 'admitted', 'verified', 'failed', 'provider-read',
-  'frontend-baseline-selected', 'frontend-classified',
+  'frontend-baseline-selected', 'frontend-classified', 'backend-baseline-selected',
+  'backend-decision-verified', 'backend-classified',
   ...mutationCapablePhases]));
 
 // Terminal codes reachable only after a mutation-capable call was initiated, or
@@ -125,7 +131,12 @@ const preMutationFailureCodes = new Set(['PROVIDER_READ_REJECTED', 'PROTECTED_RU
   'FRONTEND_ONLY_RELEASE_REQUIRES_SEPARATE_BACKEND_AUTHORIZATION',
   'FRONTEND_BACKEND_STATE_CHANGED', 'FRONTEND_BACKEND_SETTINGS_CHANGED', 'FRONTEND_RENDER_DRIFT',
   'FRONTEND_CONFIGURATION_UNVERIFIED', 'FRONTEND_INCUMBENT_ALIAS_DRIFT', 'FRONTEND_SOURCE_ALREADY_DEPLOYED',
-  'FRONTEND_EXECUTION_WINDOW_EXPIRED']);
+  'FRONTEND_EXECUTION_WINDOW_EXPIRED',
+  'BACKEND_RELEASE_NO_RESUME', 'BACKEND_RELEASE_IDENTITY_MISMATCH',
+  'BACKEND_EXECUTION_WINDOW_EXPIRED', 'BACKEND_RENDER_DRIFT',
+  'BACKEND_RUNTIME_CONFIGURATION_CHANGED', 'BACKEND_COMMISSIONED_STATE_CHANGED',
+  'BACKEND_SOURCE_DELTA_UNAUTHORIZED', 'BACKEND_SCHEMA_DELTA_UNAUTHORIZED',
+  'BACKEND_INTEGRITY_EVIDENCE_UNAVAILABLE', 'BACKEND_INTEGRITY_EVIDENCE_MISMATCH']);
 
 export const providerReadScopes = Object.freeze(new Set([
   'github-repository', 'github-compare', 'render-service', 'render-env', 'render-deploy-history',

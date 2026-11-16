@@ -79,7 +79,7 @@ export function validateArtifact(metadata, runId, sha, name, repositoryId) {
 // unzip streams one bounded file; it never extracts into the executor worktree.
 export async function readGitHubArtifact(api, owner, descriptor, filename) {
   check(['source', 'executor'].includes(owner) && /^[1-9]\d*$/.test(descriptor.id) &&
-    ['report.json', 'release-report.jsonl'].includes(filename), 'GITHUB_ARTIFACT_INPUT_INVALID');
+    ['report.json', 'release-report.jsonl', 'backend-successor-integrity.json'].includes(filename), 'GITHUB_ARTIFACT_INPUT_INVALID');
   const gh = owner === 'source' ? api.gh : api.executor;
   check(typeof gh === 'function' && typeof api.artifact === 'function', 'GITHUB_ARTIFACT_RETRIEVAL_UNAVAILABLE');
   const metadata = await gh(`/actions/artifacts/${descriptor.id}`);
@@ -162,7 +162,8 @@ export function createGitHubAdmission(qualified, policy, evidence, now = Date.no
   const evidenceSha256 = objectDigest(evidence);
   const binding = Object.fromEntries([...receiptBindings,
     ...(qualified.memberRelease !== undefined ? ['memberRelease'] : []),
-    ...(qualified.frontendRelease !== undefined ? ['frontendRelease'] : [])].map(k => [k, qualified[k]]));
+    ...(qualified.frontendRelease !== undefined ? ['frontendRelease'] : []),
+    ...(qualified.backendSuccessor !== undefined ? ['backendSuccessor'] : [])].map(k => [k, qualified[k]]));
   check(receiptBindings.every(k => binding[k] !== undefined), 'ADMISSION_BINDING_INCOMPLETE');
   const expiry = Math.min(time + policy.authorization.maxAdmissionAgeSeconds * 1000,
     Date.parse(evidence.completedAt) + policy.authorization.maxCiAgeSeconds * 1000);
