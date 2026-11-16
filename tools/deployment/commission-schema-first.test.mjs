@@ -1,3 +1,4 @@
+import './fixtures/historical-policy-epoch.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';

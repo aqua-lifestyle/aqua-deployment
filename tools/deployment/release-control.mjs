@@ -24,6 +24,7 @@ import { approvedSchemaReadback, validSchemaPolicy, verifySchemaFirst, validateM
 import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   gitSourceDigest, verifyGitHubEvidence, verifyGitHubEvidenceForCapture, createGitHubAdmission, validateGitHubAdmission,
   readGitHubArtifact, readAuditFile, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
+import { validateInventory } from './mandatory-security.mjs';
 import { HistoricalReconciliationDenied, isReconciledHistoricalRun, validateHistoricalContext,
   validateHistoricalArtifact, validateHistoricalAudit, selectTargetFailure } from './historical-release-reconciliation.mjs';
 import { partialReleaseRunId, reconcilePartialRelease, partialRenderReuse,
@@ -103,7 +104,7 @@ export function validateRun(run, jobs, mainSha) {
     ciRunId: String(run.id), ciRunAttempt: run.run_attempt, ciUrl: run.html_url };
 }
 
-export function policyDigest(policy) {
+function policyDigestForInventory(policy, approvedDigest) {
   const owns = (object, keys) => object && typeof object === 'object' && !Array.isArray(object) &&
     Object.keys(object).sort().join(',') === keys.sort().join(',');
   const a = policy?.authorization;
@@ -121,7 +122,7 @@ export function policyDigest(policy) {
     /^[a-f0-9]{64}$/.test(policy.firstReleaseRecovery.evidenceSha256) &&
     owns(a, ['kind', 'approval', 'administrators', 'inventorySourceCommit', 'inventorySha256', 'maxCiAgeSeconds', 'maxAdmissionAgeSeconds']) &&
     a.kind === 'github-evidence-v1' && a.approval === 'trusted-administrator-executor-merge' &&
-    a.inventorySha256 === inventoryDigest && shaPattern.test(a.inventorySourceCommit) &&
+    a.inventorySha256 === approvedDigest && shaPattern.test(a.inventorySourceCommit) &&
     positiveAttempt(a.maxCiAgeSeconds) && a.maxCiAgeSeconds <= 86400 &&
     positiveAttempt(a.maxAdmissionAgeSeconds) && a.maxAdmissionAgeSeconds <= 3600 &&
     Array.isArray(a.administrators) && a.administrators.length === 2 &&
@@ -130,6 +131,45 @@ export function policyDigest(policy) {
     JSON.stringify(canonical(policy.scope)) === JSON.stringify(canonical(expectedScope)),
   'STANDING_POLICY_INVALID');
   return createHash('sha256').update(JSON.stringify(canonical(policy))).digest('hex');
+}
+export const policyDigest = policy => policyDigestForInventory(policy, inventoryDigest);
+
+// Historical receipts are evidence, never a portable authorization. Read the
+// policy and approved inventory from the exact executor commit named by the
+// authenticated successful audit. A caller-supplied hash/proof cannot mint an
+// historical epoch; only this GitHub read can create a usable proof in this run.
+const authenticatedHistoricalPolicies = new WeakSet();
+export async function authenticateHistoricalPolicy(api, descriptor, recordedDigest) {
+  requireThat(shaPattern.test(descriptor?.sha) && /^[a-f0-9]{64}$/.test(recordedDigest ?? ''),
+    'HISTORICAL_POLICY_UNVERIFIABLE');
+  const read = async path => {
+    const row = await releaseApi(api)(`/contents/tools/deployment/${path}?ref=${descriptor.sha}`);
+    requireThat(row?.type === 'file' && row.path === `tools/deployment/${path}` &&
+      row.encoding === 'base64' && Number.isSafeInteger(row.size) && row.size > 0 && row.size < 200000 &&
+      typeof row.content === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(row.content),
+    'HISTORICAL_POLICY_UNVERIFIABLE');
+    const bytes = Buffer.from(row.content, 'base64');
+    requireThat(bytes.length === row.size && /^[a-f0-9]{40}$/.test(row.sha ?? '') &&
+      createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex') === row.sha,
+    'HISTORICAL_POLICY_UNVERIFIABLE');
+    return bytes;
+  };
+  const inventoryBytes = await read('approved-security-tests.json');
+  const policyBytes = await read('unattended-policy.json');
+  let historicalPolicy;
+  try {
+    validateInventory(JSON.parse(inventoryBytes));
+    historicalPolicy = JSON.parse(policyBytes);
+  } catch { throw new ReleaseFailure('HISTORICAL_POLICY_UNVERIFIABLE'); }
+  const historicalDigest = sha256(inventoryBytes);
+  let authenticatedDigest;
+  try { authenticatedDigest = policyDigestForInventory(historicalPolicy, historicalDigest); }
+  catch { throw new ReleaseFailure('HISTORICAL_POLICY_UNVERIFIABLE'); }
+  requireThat(authenticatedDigest === recordedDigest, 'HISTORICAL_POLICY_UNVERIFIABLE');
+  const proof = Object.freeze({ executorSha: descriptor.sha, policySha256: recordedDigest,
+    inventorySha256: historicalDigest, policyFileSha256: sha256(policyBytes) });
+  authenticatedHistoricalPolicies.add(proof);
+  return proof;
 }
 
 export async function validateExecutorApproval(api, identity, policy = standingPolicy) {
@@ -904,7 +944,7 @@ export async function evidencePlan(api, candidate, policy) {
   requireThat(successful.every(r => r.run_number < current.run_number), 'NEWER_RELEASE_ALREADY_COMPLETED');
   successful.sort((a, b) => b.run_number - a.run_number);
   const latestObserved = successful[0];
-  let latest;
+  let latest, baselinePolicyProof;
   // GitHub's workflow-level concurrency is the serialization boundary. Consume
   // no portable ticket: authenticate every completed release's immutable audit.
   // Deleted history, expired evidence or a previously deployed SHA denies even
@@ -937,7 +977,10 @@ export async function evidencePlan(api, candidate, policy) {
       continue;
     }
     latest ??= past;
-    const proof = validateBaselineReceipt(rows, descriptor, candidate);
+    const historicalPolicy = rows[0]?.policySha256 !== candidate.policySha256 ?
+      await authenticateHistoricalPolicy(api, descriptor, rows[0]?.policySha256) : undefined;
+    const proof = validateBaselineReceipt(rows, descriptor, candidate, historicalPolicy);
+    if (latest.id === past.id) baselinePolicyProof = historicalPolicy;
     requireThat(proof.origin.sha !== candidate.sha, 'SOURCE_ALREADY_VERIFIED');
     verifiedReleases.push({ ...descriptor, sourceSha: proof.origin.sha,
       ciRunId: proof.origin.ciRunId, ciRunAttempt: proof.origin.ciRunAttempt,
@@ -1084,6 +1127,7 @@ export async function evidencePlan(api, candidate, policy) {
     ...(combinedReleases.length ? { combinedReleases } : {}),
     firstReleaseRecoveryEvidenceSha256: candidate.prospectiveRecovery || latest ? null : policy.firstReleaseRecovery.evidenceSha256,
     baseline: latest && !candidate.prospectiveRecovery ? await auditArtifact(api, latest, latest.run_attempt) : null,
+    ...(baselinePolicyProof ? { baselinePolicyProof } : {}),
     resume: resumeChain.at(-1) ?? null, resumeChain };
 }
 
@@ -1102,7 +1146,7 @@ async function readReleaseAudit(api, descriptor) {
   } catch { throw new ReleaseFailure('AUDIT_RECEIPT_UNVERIFIABLE'); }
 }
 
-export function validateBaselineReceipt(rows, descriptor, candidate) {
+export function validateBaselineReceipt(rows, descriptor, candidate, historicalPolicy) {
   requireThat(rows.length > 0 && rows.length <= 100, 'VERIFIED_BASELINE_RECEIPT_REQUIRED');
   const first = rows[0], last = rows.at(-1);
   for (const row of rows) {
@@ -1110,7 +1154,10 @@ export function validateBaselineReceipt(rows, descriptor, candidate) {
     requireThat(row.memberRelease === undefined && candidate.memberRelease === undefined, 'FULL_RELEASE_PURPOSE_REQUIRED');
     requireThat(releaseIdentityFields.every(key => row[key] === first[key]) &&
       row.releaseRunId === descriptor.runId && row.releaseRunAttempt === descriptor.runAttempt &&
-      (external ? row.executorSha === descriptor.sha : row.sha === descriptor.sha) && row.policySha256 === candidate.policySha256,
+      (external ? row.executorSha === descriptor.sha : row.sha === descriptor.sha) &&
+      (row.policySha256 === candidate.policySha256 ||
+        authenticatedHistoricalPolicies.has(historicalPolicy) &&
+        historicalPolicy.executorSha === descriptor.sha && row.policySha256 === historicalPolicy.policySha256),
     'BASELINE_RECEIPT_PROVENANCE_MISMATCH');
   }
   const verifiedVercel = last.vercelSha === last.sha || (last.vercelBaselineReused === true &&
@@ -1456,7 +1503,8 @@ export async function deploy(api, qualified, policy, report, options = {}) {
     ...(prospective.boundary.vercel.sourceSha ? { vercelSha: prospective.boundary.vercel.sourceSha } : {}),
     vercelSourceProvenance: prospective.boundary.vercel.sourceProvenance,
     vercelBaselineReused: prospective.boundary.frontend.reuseBaseline };
-  else if (plan.baseline) baselineProof = validateBaselineReceipt(options.baselineRows, plan.baseline, qualified);
+  else if (plan.baseline) baselineProof = validateBaselineReceipt(options.baselineRows, plan.baseline, qualified,
+    plan.baselinePolicyProof);
   else {
     const baselineRow = options.receiptRows?.find(row => row.phase === 'baseline-selected') ?? partial?.baseline ?? acknowledged?.recoveryBaseline;
     requireThat(!prior.renderDeployId || baselineRow, 'RESUME_BASELINE_RECEIPT_REQUIRED');

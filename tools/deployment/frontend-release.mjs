@@ -121,7 +121,8 @@ const selectFrontendIncumbent = (options, q, incumbent) => {
     return { vercelSourceProvenance: 'RECONCILED_FRONTEND_EFFECT' };
   }
   if (options.baselineRows && options.evidencePlan?.baseline) {
-    const proof = options.validateBaselineReceipt(options.baselineRows, options.evidencePlan.baseline, q);
+    const proof = options.validateBaselineReceipt(options.baselineRows, options.evidencePlan.baseline, q,
+      options.evidencePlan.baselinePolicyProof);
     if (proof.vercelDeployId === incumbent.id &&
       ['GIT_SOURCE', 'UNVERIFIED_LEGACY'].includes(proof.vercelSourceProvenance)) {
       check(proof.vercelSourceProvenance === 'UNVERIFIED_LEGACY' ? !incumbent.gitSource :
@@ -360,7 +361,8 @@ export async function deployFrontendRelease(api, q, report, options) {
     !options.evidencePlan.acknowledgedBackend, 'FRONTEND_RELEASE_NO_RESUME');
   const { targets, guard, validateRender, validateVercel, validateHealth,
     validateBaselineReceipt, deploymentHistory, waitFor, releaseKey, policy } = options;
-  const proof = validateBaselineReceipt(options.baselineRows, options.evidencePlan.baseline, q);
+  const proof = validateBaselineReceipt(options.baselineRows, options.evidencePlan.baseline, q,
+    options.evidencePlan.baselinePolicyProof);
   check(proof.renderSha === 'b8d86e5e60997483423b273d5f426c08b411f573' &&
     proof.origin.sha === proof.renderSha, 'FRONTEND_BASELINE_PROVENANCE_MISMATCH');
   const start = (options.now ?? Date.now)(), end = start + 40 * 60 * 1000;

@@ -1205,7 +1205,7 @@
   "sources": [
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "e28faa320901a6c9c88072d049e44964f35fad91a932318e43438ee6d1a72b17"
+      "sha256": "dffaae558c04afc614a9ab1c7782c3af492c5f1e8e0d622247d1e93aa3eae81f"
     },
     {
       "path": ".github/workflows/publish-images.yml",
@@ -1269,11 +1269,11 @@
     },
     {
       "path": "tools/deployment/runtime-restart-probe.sh",
-      "sha256": "c8628caff8fce379e0f4919d24d89bfd03643d35a22ec66ba51490eab63ba29e"
+      "sha256": "e5626ea6cd0efa8f03f1d71ebbb5bf4bbecf1522b74e44e47434396d4e697de0"
     },
     {
       "path": "docker/api/Dockerfile",
-      "sha256": "b526238b9175800ca815a744487fe68fc9de7034acd2f024e3075c4cfeb33cd4"
+      "sha256": "c2c517babdd99ec3d07c08cb2d6401918371aae2341ab21997423585cb7c920c"
     },
     {
       "path": "docker-compose.yml",
