@@ -13,7 +13,7 @@ import { backendSuccessorMode, backendSuccessorPayloadKey, backendSuccessorPinKe
   validateBackendSuccessorReceipt, validateCombinedReceipt } from './backend-successor-release.mjs';
 import { freezeCandidate, validateDispatchInputs, verifyCandidate, createAuditWriter, releaseKey,
   standingPolicy, targets, clients, validateRender, validateVercel, validateHealth,
-  deploymentHistory, waitFor, deploy, evidencePlan } from './release-control.mjs';
+  validateBaselineReceipt, deploymentHistory, waitFor, deploy, evidencePlan } from './release-control.mjs';
 import { normalRuntimeSettings } from './runtime-readiness.mjs';
 import { runnerEnv, fixture as controllerFixture, fixtureNow, zipFixture,
   frontendFixtureArchive } from './fixtures/provider.mjs';
@@ -686,7 +686,32 @@ function combinedFixture({ files = [
 
 test('combined release verifies the backend on Render then continues with the frontend phase', async () => {
   const f = combinedFixture();
+  const providerEvents = [], render = f.api.render, vercel = f.api.vercel, upload = f.api.uploadVercel;
+  f.api.render = async (path, body) => {
+    if (body !== undefined) providerEvents.push('render-write');
+    return render(path, body);
+  };
+  f.api.vercel = async (path, body) => {
+    providerEvents.push(`${body === undefined ? 'vercel-read' : 'vercel-write'}:${path}`);
+    return vercel(path, body);
+  };
+  f.api.uploadVercel = async (...args) => { providerEvents.push('vercel-write:upload'); return upload(...args); };
   await f.execute();
+  const firstWrite = providerEvents.indexOf('render-write');
+  const beforeWrite = providerEvents.slice(0, firstWrite);
+  assert.ok(firstWrite > 0 && [
+    `/v9/projects/${targets.vercel.id}`,
+    `/v13/deployments/${validateFailedFrontendRecord().observedVercel.deploymentId}`,
+    `/v10/projects/${targets.vercel.id}/env?decrypt=false`,
+    `/v9/projects/${targets.vercel.id}/domains/www.aqualifestyleclub.co.za`,
+    `/v2/deployments/${validateFailedFrontendRecord().observedVercel.deploymentId}/aliases`
+  ].every(path => beforeWrite.includes(`vercel-read:${path}`)) &&
+    beforeWrite.some(row => row.startsWith('vercel-read:/v6/')),
+  'current Vercel project, deployment, env, alias and history precede the first Render write');
+  assert.ok(providerEvents.findIndex(row => row === 'vercel-write:upload') >
+    providerEvents.lastIndexOf('render-write'), 'frontend upload follows verified backend transition');
+  assert.ok(providerEvents.filter(row => row === `vercel-read:/v9/projects/${targets.vercel.id}`).length >= 4,
+    'Vercel project is rechecked after the backend transition');
   assert.equal(f.s.posts.length, 1, 'exactly one Render deploy POST');
   assert.equal(f.s.puts.length, 2, 'payload and pin staged exactly once');
   assert.equal(f.s.vercelPosts.length, 1, 'exactly one Vercel deploy POST');
@@ -738,6 +763,79 @@ test('combined release requires frontend changes in the delta', async () => {
   assert.equal(f.s.puts.length, 0, 'no staging before the classification gate');
   assert.equal(f.s.posts.length, 0, 'no Render deploy before the classification gate');
   assert.equal(f.s.vercelPosts.length, 0);
+});
+
+test('combined release denies missing Vercel credentials and missing or drifted aliases before any provider write', async () => {
+  const noCredential = combinedFixture();
+  noCredential.api.vercel = async () => { throw Error('PROVIDER_READ_REJECTED'); };
+  await assert.rejects(noCredential.execute(), /PROVIDER_READ_REJECTED/);
+  assert.equal(noCredential.s.puts.length, 0);
+  assert.equal(noCredential.s.posts.length, 0);
+  assert.equal(noCredential.s.uploads, 0);
+
+  for (const aliases of [[], [{ alias: 'unrelated.example' }]]) {
+    const f = combinedFixture(), vercel = f.api.vercel;
+    f.api.vercel = (path, body) => path.endsWith('/aliases') ? { aliases } : vercel(path, body);
+    await assert.rejects(f.execute(), /FRONTEND_INCUMBENT_ALIAS_DRIFT/);
+    assert.equal(f.s.puts.length, 0);
+    assert.equal(f.s.posts.length, 0);
+    assert.equal(f.s.vercelPosts.length, 0);
+    assert.equal(f.s.uploads, 0);
+  }
+
+  const wrongProject = combinedFixture(), projectRead = wrongProject.api.vercel;
+  wrongProject.api.vercel = async (path, body) => path === `/v9/projects/${targets.vercel.id}` ?
+    { ...await projectRead(path, body), id: 'prj_foreign' } : projectRead(path, body);
+  await assert.rejects(wrongProject.execute(), /FRONTEND_CONFIGURATION_UNVERIFIED/);
+  assert.equal(wrongProject.s.puts.length, 0);
+  assert.equal(wrongProject.s.posts.length, 0);
+
+  const wrongInputs = combinedFixture(), envRead = wrongInputs.api.vercel;
+  wrongInputs.api.vercel = async (path, body) => {
+    const response = await envRead(path, body);
+    if (path.startsWith('/v10/'))
+      response.envs.find(row => row.key === 'NEXT_PUBLIC_ABP_API_URL').value = 'https://foreign.example';
+    return response;
+  };
+  await assert.rejects(wrongInputs.execute(), /FRONTEND_CONFIGURATION_UNVERIFIED/);
+  assert.equal(wrongInputs.s.puts.length, 0);
+  assert.equal(wrongInputs.s.posts.length, 0);
+});
+
+test('combined release binds the live Render deployment to its authenticated full-release baseline', async () => {
+  const f = combinedFixture();
+  const { backendSuccessor, combinedRelease, ...originalIdentity } = f.q;
+  f.options.evidencePlan.baseline = { runId: '123', runAttempt: 1, sha: f.q.executorSha };
+  f.options.baselineRows = [{ ...originalIdentity, sha: baselineSha, ciRunId: '123',
+    releaseRunId: '123', phase: 'verified', renderSha: baselineSha, vercelSha: baselineSha,
+    renderDeployId: 'dep-commissioned', vercelDeployId: 'dpl_Old',
+    renderReleaseRunAttempt: 1, vercelReleaseRunAttempt: 1 }];
+  f.options.validateBaselineReceipt = validateBaselineReceipt;
+  f.s.deploys[0].id = 'dep-foreign'; // Same source SHA, different unreceipted deployment.
+  await assert.rejects(f.execute(), /BACKEND_RENDER_DRIFT/);
+  assert.equal(f.s.puts.length, 0);
+  assert.equal(f.s.posts.length, 0);
+  assert.equal(f.s.vercelPosts.length, 0);
+});
+
+test('combined release rechecks the initial Vercel incumbent after Render and never uploads on alias drift', async () => {
+  const f = combinedFixture(), render = f.api.render;
+  f.api.render = async (path, body) => {
+    const response = await render(path, body);
+    if (path === `/services/${targets.render.id}/deploys` && body?.commitId === f.candidateSha)
+      f.s.alias = 'dpl_Foreign';
+    return response;
+  };
+  await assert.rejects(f.execute(), /FRONTEND_INCUMBENT_ALIAS_DRIFT/);
+  assert.equal(f.s.puts.length, 2);
+  assert.equal(f.s.posts.length, 1);
+  assert.equal(f.s.deploys.filter(row => row.status === 'live')[0].commit.id, f.candidateSha);
+  assert.ok(f.s.audit.some(row => row.phase === 'backend-deployed'));
+  assert.equal(f.s.audit.some(row => row.phase === 'frontend-deployed'), false);
+  assert.equal(f.s.vercelPosts.length, 0);
+  assert.equal(f.s.uploads, 0);
+  const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
+  assert.throws(() => validateCombinedReceipt(f.s.audit, descriptor, targets));
 });
 
 test('combined release failure in the frontend phase leaves the released backend intact', async () => {
