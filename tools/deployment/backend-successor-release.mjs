@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { objectDigest, sha256, validateArtifact, readGitHubArtifact } from './github-evidence.mjs';
 import { normalRuntimeSettings, validateD10Bindings, validateReadiness } from './runtime-readiness.mjs';
 import { deployCombinedFrontendPhase, verifyFrontendIncumbent } from './frontend-release.mjs';
+import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
 
 export const backendSuccessorMode = 'post-normal-backend-v1';
 // Combined release mode: one dispatch that performs the full backend successor
@@ -117,6 +118,16 @@ export function validateBackendSuccessorReceipt(rows, descriptor, targets) {
     baseline.paymentAvailability === decision.paymentAvailability &&
     baseline.paymentAvailability === last.paymentAvailability,
   'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  // A reconciled first-combined baseline must re-derive from the same
+  // digest-pinned record that authenticated the live deployment at admission.
+  if (baseline.baselineRenderProvenance !== undefined) {
+    const observed = validateFailedFrontendRecord().observedBackend;
+    check(baseline.baselineRenderProvenance === 'FULL_RELEASE_RECEIPT' ||
+      baseline.baselineRenderProvenance === 'RECONCILED_LATER_OBSERVATION' &&
+        observed.renderDeployId === baseline.baselineRenderDeployId &&
+        observed.renderSha === baseline.baselineRenderSha,
+    'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  }
   check(decision.decisionContract === decisionContract && decision.decisionSha256 === decision.decisionPin &&
     hashPattern.test(decision.decisionSha256 ?? '') &&
     digestKeys.every(key => hashPattern.test(decision[key] ?? '')) &&
@@ -239,14 +250,23 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   // identifies the commissioned Render deployment, not merely its commit. A
   // later verified successor has a different legitimate live deployment and
   // remains governed by its own receipt and the existing runtime fences.
+  // The live deployment ID may only additionally be the exact deployment the
+  // digest-pinned failed-run reconciliation observed, and only within the same
+  // commissioned build: any other same-SHA deployment, a changed record or a
+  // differing source revision still denies before any write.
+  let renderBaselineProvenance;
   if (q.combinedRelease !== undefined && options.evidencePlan?.baseline &&
     !(options.evidencePlan.backendReleases?.length || options.evidencePlan.combinedReleases?.length)) {
     check(Array.isArray(options.baselineRows) && typeof options.validateBaselineReceipt === 'function',
       'BACKEND_RENDER_DRIFT');
     const proof = options.validateBaselineReceipt(options.baselineRows, options.evidencePlan.baseline, q,
       options.evidencePlan.baselinePolicyProof);
-    check(live[0].id === proof.renderDeployId && baselineSha === proof.renderSha,
-      'BACKEND_RENDER_DRIFT');
+    const original = live[0].id === proof.renderDeployId && baselineSha === proof.renderSha;
+    const observed = validateFailedFrontendRecord().observedBackend;
+    const reconciled = proof.renderSha === observed.renderSha &&
+      live[0].id === observed.renderDeployId && baselineSha === observed.renderSha;
+    check(original || reconciled, 'BACKEND_RENDER_DRIFT');
+    renderBaselineProvenance = original ? 'FULL_RELEASE_RECEIPT' : 'RECONCILED_LATER_OBSERVATION';
   }
   const health = await api.health();
   try { validateHealth(health, baselineSha); }
@@ -326,7 +346,8 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
       additions: file.additions, deletions: file.deletions, changes: file.changes })) })));
   audit({ phase: 'backend-baseline-selected', baselineRenderDeployId: live[0].id,
     baselineRenderSha: baselineSha, servingRenderDeployId: live[0].id,
-    servingRenderSha: baselineSha, paymentAvailability: state });
+    servingRenderSha: baselineSha, paymentAvailability: state,
+    ...(renderBaselineProvenance ? { baselineRenderProvenance: renderBaselineProvenance } : {}) });
   audit({ phase: 'backend-decision-verified', decisionSha256: sha256(decisionBytes),
     decisionPin, decisionContract, requiredConfigurationDigest: decision.requiredConfigurationDigest,
     requiredSchemaDigest: decision.requiredSchemaDigest, requiredAssemblyDigest: decision.requiredAssemblyDigest,
