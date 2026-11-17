@@ -14,7 +14,7 @@ import { backendSuccessorMode, backendSuccessorPayloadKey, backendSuccessorPinKe
 import { freezeCandidate, validateDispatchInputs, verifyCandidate, createAuditWriter, releaseKey,
   standingPolicy, targets, clients, validateRender, validateVercel, validateHealth,
   validateBaselineReceipt, deploymentHistory, waitFor, deploy, evidencePlan } from './release-control.mjs';
-import { normalRuntimeSettings } from './runtime-readiness.mjs';
+import { normalRuntimeSettings, validateReadiness } from './runtime-readiness.mjs';
 import { runnerEnv, fixture as controllerFixture, fixtureNow, zipFixture,
   frontendFixtureArchive } from './fixtures/provider.mjs';
 import { sha256, verifyGitHubEvidence, createGitHubAdmission } from './github-evidence.mjs';
@@ -60,28 +60,31 @@ const destructiveMigrationSource = additiveMigrationSource.replace(
   'migrationBuilder.AddColumn<string>(',
   'migrationBuilder.DropTable(\n                name: "ClubMembers");\n            migrationBuilder.AddColumn<string>(');
 
-function sourceRepository(content = additiveMigrationSource) {
+function sourceRepository(content = additiveMigrationSource, migrationFilePath = migrationPath) {
   const dir = mkdtempSync(join(tmpdir(), 'aqua-backend-successor-'));
   const git = (...args) => execFileSync('git', ['-C', dir, ...args],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, GIT_AUTHOR_DATE: '2026-11-15T10:00:00Z', GIT_COMMITTER_DATE: '2026-11-15T10:00:00Z' } });
   git('init', '-q');
-  const path = join(dir, migrationPath);
-  mkdirSync(join(path, '..'), { recursive: true });
-  writeFileSync(path, content);
-  writeFileSync(join(dir, designerPath), 'namespace AqualLifeStyle.Migrations { public partial class MembershipNote { } }\n');
+  const sourceFile = join(dir, migrationFilePath);
+  const generatedDesignerPath = migrationFilePath.replace(/\.cs$/, '.Designer.cs');
+  mkdirSync(join(sourceFile, '..'), { recursive: true });
+  writeFileSync(sourceFile, content);
+  writeFileSync(join(dir, generatedDesignerPath), 'namespace AqualLifeStyle.Migrations { public partial class MembershipNote { } }\n');
   git('add', '.');
   git('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false',
     'commit', '-qm', 'Additive successor migration');
   const sha = git('rev-parse', 'HEAD').trim();
-  return { dir, sha, close: () => rmSync(dir, { recursive: true, force: true }) };
+  return { dir, sha, migrationFilePath, designerPath: generatedDesignerPath,
+    close: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 function fixture({ files = [{ filename: backendModifiedPath, status: 'modified' }], repo = null,
   vars = {}, deployFails = false, jobFails = false, serviceId = null, compareStatus = 'ahead',
-  integrityOverrides = {}, omitIntegrity = false, paymentAvailability = 'Available' } = {}) {
+  integrityOverrides = {}, omitIntegrity = false, paymentAvailability = 'Available',
+  decisionOverrides = {} } = {}) {
   const s = { vars: { ...Object.fromEntries(Object.entries(normalRuntimeSettings).map(([key, allowed]) =>
-      [key, allowed[0]])), ...vars }, deployFails, jobFails, posts: [], puts: [], audit: [] };
+      [key, allowed[0]])), ...vars }, deployFails, jobFails, posts: [], puts: [], audit: [], readinessCalls: 0 };
   const candidateSha = repo ? repo.sha : 'a'.repeat(40);
   const q = freezeCandidate({ repository: targets.repository, sha: candidateSha,
     ciRunId: '43597833117', ciRunAttempt: 1 }, runnerEnv(), standingPolicy, false, backendSuccessorMode);
@@ -100,7 +103,7 @@ function fixture({ files = [{ filename: backendModifiedPath, status: 'modified' 
   const decision = { contractVersion: 'AQGreenD10CutoverV2', decisionId: 'D10-TEST-DECISION-1',
     requiredSchemaDigest: '1'.repeat(64), requiredAssemblyDigest: '2'.repeat(64),
     requiredRuntimeAssemblyDigest: '3'.repeat(64), requiredDatabaseIdentityDigest: '4'.repeat(64),
-    requiredConfigurationDigest: '5'.repeat(64) };
+    requiredConfigurationDigest: '5'.repeat(64), ...decisionOverrides };
   const decisionBytes = Buffer.from(JSON.stringify(decision), 'utf8');
   s.vars = { ...s.vars, Deployment__BuildId: baselineSha,
     App__AQGreenV2__Commissioning__DecisionJsonBase64: decisionBytes.toString('base64'),
@@ -116,11 +119,6 @@ function fixture({ files = [{ filename: backendModifiedPath, status: 'modified' 
       region: 'frankfurt', maintenanceMode: { enabled: false }, healthCheckPath: '/api/health',
       envSpecificDetails: { dockerContext: '.', dockerfilePath: './docker/api/Dockerfile',
         preDeployCommand: '', dockerCommand: '' } } };
-  const bindings = sha => ({ requiredAssemblyDigest: sha === baselineSha ? '2'.repeat(64) : 'b'.repeat(64),
-    requiredRuntimeAssemblyDigest: sha === baselineSha ? '3'.repeat(64) : 'c'.repeat(64),
-    currentConfigurationDigest: '5'.repeat(64),
-    intendedConfigurationDigest: 'c'.repeat(64), intendedEnvironmentId: 'production-release',
-    intendedBuildId: sha });
   const prefix = `${servicePath}/env-vars/`;
   const api = {
     gh: async route => {
@@ -182,10 +180,11 @@ function fixture({ files = [{ filename: backendModifiedPath, status: 'modified' 
       buildId: s.deploys.find(row => row.status === 'live')?.commit.id ?? baselineSha,
       environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy',
       dataProtectionKeyStoreStatus: 'Healthy', paymentAvailability } } }),
-    readiness: async sha => ({ status: 200, body: { contract: 'aqua.production-readiness',
-      version: 2, status: 'Ready', buildId: sha, birdConfiguration: 'StartupValidated',
-      yocoConfiguration: 'StartupValidated', profile: 'normal-integrated',
-      restrictedOperations: 'ConfigurationHeld', d10Bindings: bindings(sha) } }),
+    readiness: async () => {
+      s.readinessCalls = (s.readinessCalls ?? 0) + 1;
+      return { status: 503, body: { status: 'Unavailable', birdConfiguration: 'Unavailable',
+        yocoConfiguration: 'Unavailable', restrictedOperations: 'Unavailable' } };
+    },
     web: async () => 200,
     webHealth: async (sha, expected) => {
       assert.equal(expected, 'Available');
@@ -203,6 +202,13 @@ function fixture({ files = [{ filename: backendModifiedPath, status: 'modified' 
     inventorySha256: 'c'.repeat(64), evidenceArtifactId: '123' });
   return { s, q, api, options, candidateSha, decisionBytes,
     execute: () => deployBackendSuccessorRelease(api, q, report, options) };
+}
+
+function assertNoProviderWrites(f) {
+  assert.equal(f.s.puts.length, 0, 'no Render environment writes');
+  assert.equal(f.s.posts.length, 0, 'no Render deployment or job posts');
+  assert.equal(f.s.vercelPosts?.length ?? 0, 0, 'no Vercel deployment posts');
+  assert.equal(f.s.uploads ?? 0, 0, 'no Vercel file uploads');
 }
 
 test('ordinary backend dispatch accepts the merged main sha and freezes a distinct purpose', () => {
@@ -299,6 +305,7 @@ test('no-schema successor stages the pinned input, deploys the candidate once an
   assert.equal(f.s.audit.length, 10);
   assert.equal(f.s.audit.at(-1).phase, 'backend-deployed');
   assert.equal(f.s.audit.at(-1).renderSha, f.candidateSha);
+  assert.equal(f.s.readinessCalls, 0, 'Normal runtime verification does not call the Held-only endpoint');
   const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
   const receipt = validateBackendSuccessorReceipt(f.s.audit, descriptor, targets);
   assert.equal(receipt.sha, f.candidateSha);
@@ -353,26 +360,91 @@ test('additive successor runs the candidate migrator once-off and restarts on th
 test('runtime and commissioned-state drift denies before any provider write', async () => {
   const stoppedPayments = fixture({ paymentAvailability: 'Held' });
   await assert.rejects(stoppedPayments.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
-  assert.equal(stoppedPayments.s.puts.length, 0);
+  assertNoProviderWrites(stoppedPayments);
+  const unavailablePayments = fixture({ paymentAvailability: 'Unavailable' });
+  await assert.rejects(unavailablePayments.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
+  assertNoProviderWrites(unavailablePayments);
   const settings = fixture({ vars: { App__AQGreenV2__Commissioning__Enabled: 'false' } });
   await assert.rejects(settings.execute(), /BACKEND_RUNTIME_CONFIGURATION_CHANGED/);
-  assert.equal(settings.s.puts.length, 0);
+  assertNoProviderWrites(settings);
   const pin = fixture({ vars: { App__AQGreenV2__Commissioning__DecisionSha256: sha256(Buffer.from('other')) } });
   await assert.rejects(pin.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
-  assert.equal(pin.s.puts.length, 0);
+  assertNoProviderWrites(pin);
   const payload = fixture();
   payload.s.vars.App__AQGreenV2__Commissioning__DecisionJsonBase64 =
     Buffer.from(JSON.stringify({ contractVersion: 'AQGreenD10CutoverV1' })).toString('base64');
   await assert.rejects(payload.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
   const buildId = fixture({ vars: { Deployment__BuildId: '9'.repeat(40) } });
   await assert.rejects(buildId.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
-  assert.equal(buildId.s.puts.length, 0);
+  assertNoProviderWrites(buildId);
   const competing = fixture();
   competing.s.deploys.push({ id: 'dep-second', status: 'live', commit: { id: 'c'.repeat(40) } });
   await assert.rejects(competing.execute(), /BACKEND_RENDER_DRIFT/);
   const foreign = fixture({ serviceId: 'srv-foreign' });
   await assert.rejects(foreign.execute(), /BACKEND_RENDER_DRIFT/);
   assert.equal(foreign.s.puts.length, 0);
+});
+
+test('Normal/Committed evidence accepts the commissioned baseline while the legacy Held endpoint remains unavailable', async () => {
+  const f = fixture();
+  await f.execute();
+  assert.equal(f.s.readinessCalls, 0);
+  assert.deepEqual(f.s.audit[1].normalRuntimeHealth, {
+    status: 'Healthy', buildId: baselineSha, environment: 'Production', databaseStatus: 'Healthy',
+    redisStatus: 'Healthy', dataProtectionKeyStoreStatus: 'Healthy', paymentAvailability: 'Available'
+  });
+  assert.match(f.s.audit[1].normalSettingsSha256, /^[a-f0-9]{64}$/);
+  assert.equal(f.s.audit.at(-1).runtimeEvidence.requiredConfigurationDigest, '5'.repeat(64));
+  assert.equal(f.s.audit.at(-1).runtimeEvidence.requiredAssemblyDigest, 'b'.repeat(64));
+  assert.throws(() => validateReadiness({ status: 503, body: { status: 'Unavailable' } }, baselineSha),
+    /PROTECTED_RUNTIME_READINESS_FAILED/);
+});
+
+test('invalid D10 decision bindings, Normal settings, and operational holds deny before any provider write', async () => {
+  const invalidDecision = fixture({ decisionOverrides: { requiredConfigurationDigest: '0'.repeat(64) } });
+  await assert.rejects(invalidDecision.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
+  assertNoProviderWrites(invalidDecision);
+
+  for (const decisionOverrides of [{ requiredAssemblyDigest: 'invalid' },
+    { requiredRuntimeAssemblyDigest: '0'.repeat(64) }]) {
+    const f = fixture({ decisionOverrides });
+    await assert.rejects(f.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
+    assertNoProviderWrites(f);
+  }
+
+  for (const [key, allowed] of Object.entries(normalRuntimeSettings)) {
+    const invalid = ['false', 'true', 'invalid'].find(value => !allowed.includes(value));
+    const f = fixture({ vars: { [key]: invalid } });
+    await assert.rejects(f.execute(), /BACKEND_RUNTIME_CONFIGURATION_CHANGED/);
+    assertNoProviderWrites(f);
+  }
+});
+
+test('unhealthy commissioned backend and Render service drift deny before provider writes', async () => {
+  for (const mutate of [body => { body.status = 'Degraded'; },
+    body => { body.databaseStatus = 'Unavailable'; }, body => { body.redisStatus = 'Unavailable'; },
+    body => { body.dataProtectionKeyStoreStatus = 'Unavailable'; }]) {
+    const f = fixture();
+    f.api.health = async () => {
+      const result = { status: 'Healthy', buildId: baselineSha, environment: 'Production',
+        databaseStatus: 'Healthy', redisStatus: 'Healthy', dataProtectionKeyStoreStatus: 'Healthy',
+        paymentAvailability: 'Available' };
+      mutate(result);
+      return { status: 200, recovery: null, body: { result } };
+    };
+    await assert.rejects(f.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
+    assertNoProviderWrites(f);
+  }
+
+  const f = fixture();
+  const render = f.api.render;
+  f.api.render = async (route, body) => {
+    const result = await render(route, body);
+    if (route === `/services/${targets.render.id}`) result.serviceDetails.plan = 'pro';
+    return result;
+  };
+  await assert.rejects(f.execute(), /BACKEND_RENDER_DRIFT/);
+  assertNoProviderWrites(f);
 });
 
 test('missing or substituted qualified assembly/schema artifact denies before provider mutation', async () => {
@@ -401,20 +473,23 @@ test('backend successor releases accept a mixed delta and deny unauthorized sour
   assert.equal(receipt.schemaTransition, 'none');
   const none = fixture({ files: [{ filename: 'README.md', status: 'modified' }] });
   await assert.rejects(none.execute(), /BACKEND_SOURCE_DELTA_UNAUTHORIZED/);
+  assertNoProviderWrites(none);
   const behind = fixture({ compareStatus: 'behind' });
   await assert.rejects(behind.execute(), /BACKEND_SOURCE_DELTA_UNAUTHORIZED/);
+  assertNoProviderWrites(behind);
   const destructive = sourceRepository(destructiveMigrationSource);
   try {
     const f = fixture({ repo: destructive, files: [{ filename: migrationPath, status: 'added' },
       { filename: backendModifiedPath, status: 'modified' }] });
     await assert.rejects(f.execute(), /BACKEND_SCHEMA_DELTA_UNAUTHORIZED/);
-    assert.equal(f.s.puts.length, 0);
+    assertNoProviderWrites(f);
   } finally { destructive.close(); }
   const nonstandard = sourceRepository(destructiveMigrationSource.replace('void Up(', 'void Up ('));
   try {
     const f = fixture({ repo: nonstandard, files: [{ filename: migrationPath, status: 'added' },
       { filename: backendModifiedPath, status: 'modified' }] });
     await assert.rejects(f.execute(), /BACKEND_SCHEMA_DELTA_UNAUTHORIZED/);
+    assertNoProviderWrites(f);
   } finally { nonstandard.close(); }
   const spacedCall = sourceRepository(additiveMigrationSource.replace(
     'migrationBuilder.AddColumn<string>(', 'migrationBuilder .DropTable(\n                name: "ClubMembers");\n            migrationBuilder.AddColumn<string>('));
@@ -422,28 +497,34 @@ test('backend successor releases accept a mixed delta and deny unauthorized sour
     const f = fixture({ repo: spacedCall, files: [{ filename: migrationPath, status: 'added' },
       { filename: backendModifiedPath, status: 'modified' }] });
     await assert.rejects(f.execute(), /BACKEND_SCHEMA_DELTA_UNAUTHORIZED/);
+    assertNoProviderWrites(f);
   } finally { spacedCall.close(); }
   const missingUp = sourceRepository(additiveMigrationSource.replace('void Up(', 'void Apply('));
   try {
     const f = fixture({ repo: missingUp, files: [{ filename: migrationPath, status: 'added' },
       { filename: backendModifiedPath, status: 'modified' }] });
     await assert.rejects(f.execute(), /BACKEND_SCHEMA_DELTA_UNAUTHORIZED/);
+    assertNoProviderWrites(f);
     const orphan = fixture({ repo: missingUp, files: [{ filename: designerPath, status: 'added' },
       { filename: backendModifiedPath, status: 'modified' }] });
     await assert.rejects(orphan.execute(), /BACKEND_SCHEMA_DELTA_UNAUTHORIZED/);
+    assertNoProviderWrites(orphan);
   } finally { missingUp.close(); }
   const renamed = fixture({ repo: sourceRepository(), files: [
     { filename: migrationPath, status: 'modified', previous_filename: `${migrationsDir}/Earlier.cs` },
     { filename: backendModifiedPath, status: 'modified' }] });
   await assert.rejects(renamed.execute(), /BACKEND_SCHEMA_DELTA_UNAUTHORIZED/);
+  assertNoProviderWrites(renamed);
   const removed = fixture({ repo: sourceRepository(), files: [
     { filename: migrationPath, status: 'removed' },
     { filename: backendModifiedPath, status: 'modified' }] });
   await assert.rejects(removed.execute(), /BACKEND_SCHEMA_DELTA_UNAUTHORIZED/);
+  assertNoProviderWrites(removed);
   const pathed = fixture({ repo: sourceRepository(), files: [
     { filename: `${migrationsDir}/sub/../X.cs`, status: 'added' },
     { filename: backendModifiedPath, status: 'modified' }] });
   await assert.rejects(pathed.execute(), /BACKEND_SOURCE_DELTA_UNAUTHORIZED/);
+  assertNoProviderWrites(pathed);
 });
 
 test('deployment failure after staging leaves the write-ahead audit and never finalizes', async () => {
@@ -470,7 +551,8 @@ test('audit receipts authenticate exact sequences and reject tampering', async (
   for (const mutate of [rows => rows.splice(2, 1), rows => rows[0].backendSuccessor = 'other',
     rows => rows[4].payloadPinSha256 = 'x'.repeat(64),
     rows => rows[2].baselineRenderSha = 'e'.repeat(40),
-    rows => { rows.at(-1).readinessBindings.intendedBuildId = '0'.repeat(40); },
+    rows => { rows.at(-1).runtimeEvidence.requiredConfigurationDigest = '6'.repeat(64); },
+    rows => { rows.at(-1).runtimeEvidence.normalSettingsSha256 = '0'.repeat(64); },
     rows => { rows.at(-1).payloadPinSha256 = 'x'.repeat(64); },
     rows => { rows[3].schemaTransition = 'additive'; },
     rows => { rows[3].successorAssemblySha256 = 'f'.repeat(64); }]) {
@@ -521,11 +603,11 @@ test('render client restricts env access to the settings and successor allowlist
 // authenticated audit receipt spanning both providers.
 function combinedFixture({ files = [
     { filename: `${targets.vercel.rootDirectory}/app/page.tsx`, status: 'modified' },
-    { filename: backendModifiedPath, status: 'modified' }], failedVercel = false } = {}) {
+    { filename: backendModifiedPath, status: 'modified' }], failedVercel = false, repo = null } = {}) {
   const s = { vars: Object.fromEntries(Object.entries(normalRuntimeSettings).map(([key, allowed]) =>
       [key, allowed[0]])), posts: [], puts: [], audit: [], uploads: 0, vercelPosts: [],
-    deployed: null, failedVercel, alias: 'dpl_Legacy', jobReads: 0, deployReads: {} };
-  const candidateSha = 'a'.repeat(40);
+    deployed: null, failedVercel, alias: 'dpl_Legacy', jobReads: 0, deployReads: {}, readinessCalls: 0 };
+  const candidateSha = repo?.sha ?? 'a'.repeat(40);
   const q = freezeCandidate({ repository: targets.repository, sha: candidateSha,
     ciRunId: '43597833118', ciRunAttempt: 1 }, runnerEnv(), standingPolicy, false, combinedMode);
   assert.equal(q.backendSuccessor, backendSuccessorMode);
@@ -533,7 +615,9 @@ function combinedFixture({ files = [
   const integrityName = `backend-successor-integrity-${q.sha}-${q.ciRunId}-${q.ciRunAttempt}`;
   const integrity = { contract: 'aqua.backend-successor-integrity-v1', repository: q.repository,
     sha: q.sha, ciRunId: q.ciRunId, ciRunAttempt: q.ciRunAttempt,
-    successorSchemaSha256: '1'.repeat(64), successorAssemblySha256: 'b'.repeat(64),
+    successorSchemaSha256: files.some(file => file.filename.startsWith(`${migrationsDir}/`) &&
+      file.status === 'added' && !file.filename.endsWith('.Designer.cs')) ? '9'.repeat(64) : '1'.repeat(64),
+    successorAssemblySha256: 'b'.repeat(64),
     successorApplicationSha256: 'd'.repeat(64), successorCoreSha256: 'e'.repeat(64) };
   const archive = zipFixture('backend-successor-integrity.json', JSON.stringify(integrity));
   const artifact = { id: 7891, name: integrityName, expired: false,
@@ -569,11 +653,6 @@ function combinedFixture({ files = [
       region: 'frankfurt', maintenanceMode: { enabled: false }, healthCheckPath: '/api/health',
       envSpecificDetails: { dockerContext: '.', dockerfilePath: './docker/api/Dockerfile',
         preDeployCommand: '', dockerCommand: '' } } };
-  const bindings = sha => ({ requiredAssemblyDigest: sha === baselineSha ? '2'.repeat(64) : 'b'.repeat(64),
-    requiredRuntimeAssemblyDigest: sha === baselineSha ? '3'.repeat(64) : 'c'.repeat(64),
-    currentConfigurationDigest: '5'.repeat(64),
-    intendedConfigurationDigest: 'c'.repeat(64), intendedEnvironmentId: 'production-release',
-    intendedBuildId: sha });
   const prefix = `${servicePath}/env-vars/`;
   const project = () => ({ id: targets.vercel.id, name: targets.vercel.name, accountId: targets.vercel.teamId,
     rootDirectory: targets.vercel.rootDirectory, nodeVersion: '24.x', autoAssignCustomDomains: true,
@@ -609,10 +688,18 @@ function combinedFixture({ files = [
       if (route.endsWith('/deploys?limit=100')) return s.deploys.map(row => ({ deploy: row }));
       if (route === `${servicePath}/deploys`) {
         s.posts.push({ body });
-        s.deploys = s.deploys.map(row => row.id === 'dep-commissioned' ?
-          { ...row, status: 'deactivated' } : row);
-        s.deploys.unshift({ id: 'dep-new', status: 'created', commit: { id: candidateSha } });
-        return { id: 'dep-new', status: 'created', commit: { id: candidateSha } };
+        const id = s.deploys.some(row => row.id === 'dep-new') ? 'dep-restart' : 'dep-new';
+        s.deploys = s.deploys.map(row => row.status === 'live' ? { ...row, status: 'deactivated' } : row);
+        s.deploys.unshift({ id, status: 'created', commit: { id: candidateSha } });
+        return { id, status: 'created', commit: { id: candidateSha } };
+      }
+      if (route === `${servicePath}/jobs`) {
+        s.posts.push({ body });
+        return { id: 'job-a'.padEnd(24, '0'), status: 'pending' };
+      }
+      if (route.includes('/jobs/job-')) {
+        s.jobReads++;
+        return { id: 'job-a'.padEnd(24, '0'), status: s.jobReads > 1 ? 'succeeded' : 'pending' };
       }
       const deploy = s.deploys.find(row => route.endsWith(`/deploys/${row.id}`));
       if (deploy) {
@@ -653,10 +740,11 @@ function combinedFixture({ files = [
       buildId: s.deploys.find(row => row.status === 'live')?.commit.id ?? baselineSha,
       environment: 'Production', databaseStatus: 'Healthy', redisStatus: 'Healthy',
       dataProtectionKeyStoreStatus: 'Healthy', paymentAvailability: 'Available' } } }),
-    readiness: async sha => ({ status: 200, body: { contract: 'aqua.production-readiness',
-      version: 2, status: 'Ready', buildId: sha, birdConfiguration: 'StartupValidated',
-      yocoConfiguration: 'StartupValidated', profile: 'normal-integrated',
-      restrictedOperations: 'ConfigurationHeld', d10Bindings: bindings(sha) } }),
+    readiness: async () => {
+      s.readinessCalls++;
+      return { status: 503, body: { status: 'Unavailable', birdConfiguration: 'Unavailable',
+        yocoConfiguration: 'Unavailable', restrictedOperations: 'Unavailable' } };
+    },
     web: async () => 200,
     webHealth: async (sha, expected) => {
       assert.equal(expected, 'Available');
@@ -676,11 +764,12 @@ function combinedFixture({ files = [
     evidencePlan: { policySha256: q.policySha256, verifiedReleases: [], priorFailedRuns: [],
       baseline: null, resume: null, resumeChain: [], backendReleases: [],
       frontendReleases: [], combinedReleases: [] }, attempts: 3, pause: async () => {},
-    guard: async () => {}, validateAdmission: () => {}, now };
+    guard: async () => {}, validateAdmission: () => {},
+    ...(repo ? { env: { SOURCE_DIR: repo.dir } } : {}), now };
   const report = createAuditWriter(q, row => s.audit.push(row));
   report({ phase: 'evidence-selected', authorizationId: 'a'.repeat(64), evidenceSha256: 'b'.repeat(64),
     inventorySha256: 'c'.repeat(64), evidenceArtifactId: '123' });
-  return { s, q, api, options, candidateSha, execute: () =>
+  return { s, q, api, options, candidateSha, repo, execute: () =>
     deployBackendSuccessorRelease(api, q, report, options) };
 }
 
@@ -697,6 +786,7 @@ test('combined release verifies the backend on Render then continues with the fr
   };
   f.api.uploadVercel = async (...args) => { providerEvents.push('vercel-write:upload'); return upload(...args); };
   await f.execute();
+  assert.equal(f.s.readinessCalls, 0, 'backend and frontend phases do not call the Held-only endpoint');
   const firstWrite = providerEvents.indexOf('render-write');
   const beforeWrite = providerEvents.slice(0, firstWrite);
   assert.ok(firstWrite > 0 && [
@@ -737,6 +827,7 @@ test('combined release verifies the backend on Render then continues with the fr
   assert.equal(f.s.audit.at(-1).renderSha, f.candidateSha);
   assert.equal(f.s.audit.at(-1).webStatus, 200);
   assert.equal(f.s.deploys.filter(row => row.status === 'live').length, 1);
+  assert.equal(f.s.readinessCalls, 0);
   const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
   const receipt = validateCombinedReceipt(f.s.audit, descriptor, targets);
   assert.equal(receipt.sha, f.candidateSha);
@@ -757,38 +848,69 @@ test('combined release verifies the backend on Render then continues with the fr
   }
 });
 
+test('combined release crosses additive migration 56, restart, backend verification and frontend deployment with legacy readiness unavailable', async () => {
+  const migration56 = `${migrationsDir}/20261115113914_AddAQGreenIndependentRootRequests.cs`;
+  const repo = sourceRepository(additiveMigrationSource.replaceAll('MembershipNote',
+    'AddAQGreenIndependentRootRequests'), migration56);
+  try {
+    const f = combinedFixture({ repo, files: [
+      { filename: `${targets.vercel.rootDirectory}/app/page.tsx`, status: 'modified' },
+      { filename: migration56, status: 'added' },
+      { filename: repo.designerPath.replace(`${repo.dir}/`, ''), status: 'added' },
+      { filename: snapshotPath, status: 'modified' },
+      { filename: backendModifiedPath, status: 'modified' }
+    ] });
+    await f.execute();
+    assert.equal(f.s.readinessCalls, 0);
+    assert.equal(f.s.posts.length, 3, 'candidate deploy, migration job, additive restart');
+    assert.equal(f.s.posts[0].body.commitId, f.candidateSha);
+    assert.equal(f.s.posts[1].body.startCommand, 'dotnet migrator/AqualLifeStyle.Migrator.dll');
+    assert.deepEqual(f.s.posts[2].body, { deployMode: 'deploy_only' });
+    assert.equal(f.s.puts.length, 4, 'initial and additive successor payloads are pinned');
+    assert.equal(f.s.audit[3].schemaTransition, 'additive');
+    assert.equal(f.s.audit[3].migrationFiles, 3);
+    assert.deepEqual(f.s.audit.slice(9, 18).map(row => row.phase), [
+      'backend-schema-job-requesting', 'backend-schema-job-created', 'backend-schema-job-succeeded',
+      'backend-successor-restart-staging', 'backend-successor-restart-staged',
+      'backend-restart-requesting', 'backend-restart-requested', 'backend-restart-ready', 'backend-deployed'
+    ]);
+    assert.equal(f.s.audit[17].renderDeployId, 'dep-restart');
+    assert.equal(f.s.audit[17].runtimeEvidence.health.buildId, f.candidateSha);
+    assert.equal(f.s.audit[17].runtimeEvidence.health.paymentAvailability, 'Available');
+    assert.equal(f.s.vercelPosts.length, 1, 'frontend deployment follows backend verification');
+    assert.ok(f.s.uploads > 0);
+    const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
+    const receipt = validateCombinedReceipt(f.s.audit, descriptor, targets);
+    assert.equal(receipt.schemaTransition, 'additive');
+    assert.equal(receipt.renderDeployId, 'dep-restart');
+    assert.equal(receipt.vercelDeployId, 'dpl_New');
+  } finally { repo.close(); }
+});
+
 test('combined release requires frontend changes in the delta', async () => {
   const f = combinedFixture({ files: [{ filename: backendModifiedPath, status: 'modified' }] });
   await assert.rejects(f.execute(), /COMBINED_RELEASE_REQUIRES_FRONTEND_DELTA/);
-  assert.equal(f.s.puts.length, 0, 'no staging before the classification gate');
-  assert.equal(f.s.posts.length, 0, 'no Render deploy before the classification gate');
-  assert.equal(f.s.vercelPosts.length, 0);
+  assertNoProviderWrites(f);
 });
 
 test('combined release denies missing Vercel credentials and missing or drifted aliases before any provider write', async () => {
   const noCredential = combinedFixture();
   noCredential.api.vercel = async () => { throw Error('PROVIDER_READ_REJECTED'); };
   await assert.rejects(noCredential.execute(), /PROVIDER_READ_REJECTED/);
-  assert.equal(noCredential.s.puts.length, 0);
-  assert.equal(noCredential.s.posts.length, 0);
-  assert.equal(noCredential.s.uploads, 0);
+  assertNoProviderWrites(noCredential);
 
   for (const aliases of [[], [{ alias: 'unrelated.example' }]]) {
     const f = combinedFixture(), vercel = f.api.vercel;
     f.api.vercel = (path, body) => path.endsWith('/aliases') ? { aliases } : vercel(path, body);
     await assert.rejects(f.execute(), /FRONTEND_INCUMBENT_ALIAS_DRIFT/);
-    assert.equal(f.s.puts.length, 0);
-    assert.equal(f.s.posts.length, 0);
-    assert.equal(f.s.vercelPosts.length, 0);
-    assert.equal(f.s.uploads, 0);
+    assertNoProviderWrites(f);
   }
 
   const wrongProject = combinedFixture(), projectRead = wrongProject.api.vercel;
   wrongProject.api.vercel = async (path, body) => path === `/v9/projects/${targets.vercel.id}` ?
     { ...await projectRead(path, body), id: 'prj_foreign' } : projectRead(path, body);
   await assert.rejects(wrongProject.execute(), /FRONTEND_CONFIGURATION_UNVERIFIED/);
-  assert.equal(wrongProject.s.puts.length, 0);
-  assert.equal(wrongProject.s.posts.length, 0);
+  assertNoProviderWrites(wrongProject);
 
   const wrongInputs = combinedFixture(), envRead = wrongInputs.api.vercel;
   wrongInputs.api.vercel = async (path, body) => {
@@ -798,8 +920,7 @@ test('combined release denies missing Vercel credentials and missing or drifted 
     return response;
   };
   await assert.rejects(wrongInputs.execute(), /FRONTEND_CONFIGURATION_UNVERIFIED/);
-  assert.equal(wrongInputs.s.puts.length, 0);
-  assert.equal(wrongInputs.s.posts.length, 0);
+  assertNoProviderWrites(wrongInputs);
 });
 
 const fullReleaseBaselinePlan = f => {
@@ -817,9 +938,7 @@ test('combined release binds the live Render deployment to its authenticated ful
   fullReleaseBaselinePlan(f);
   f.s.deploys[0].id = 'dep-foreign'; // Same source SHA, different unreceipted deployment.
   await assert.rejects(f.execute(), /BACKEND_RENDER_DRIFT/);
-  assert.equal(f.s.puts.length, 0);
-  assert.equal(f.s.posts.length, 0);
-  assert.equal(f.s.vercelPosts.length, 0);
+  assertNoProviderWrites(f);
   assert.equal(f.s.audit.some(row => row.phase === 'backend-baseline-selected'), false);
 });
 
