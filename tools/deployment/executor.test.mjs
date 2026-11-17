@@ -198,9 +198,11 @@ test('baseline capture, admission and production secrets stay in distinct protec
       assert.match(other,/github.ref == 'refs\/heads\/main' && github.ref_protected/);
       assert.match(other,/environment: production-release/);
       assert.ok(other.indexOf('.mjs context')<other.indexOf('secrets.RENDER_API_KEY'));
-      assert.deepEqual([...other.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),['RENDER_API_KEY','VERCEL_TOKEN','RENDER_API_KEY']);
+      assert.deepEqual([...other.matchAll(/secrets\.(\w+)/g)].map(x=>x[1]),
+        ['RENDER_API_KEY','VERCEL_TOKEN','RENDER_API_KEY','RENDER_API_KEY']);
       assert.deepEqual([...other.matchAll(/^\s+run: (.*)$/gm)].map(x=>x[1]),[
         'node tools/deployment/verify-provider-credentials.mjs context',
+        'node tools/deployment/verify-provider-credentials.mjs verify',
         'node tools/deployment/verify-provider-credentials.mjs verify',
         'node tools/deployment/verify-provider-credentials.mjs verify']);
       assert.doesNotMatch(other,/pull_request|push:|workflow_run|repository_dispatch|id-token:|write/);

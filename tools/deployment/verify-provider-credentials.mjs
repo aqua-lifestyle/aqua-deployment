@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { clients, targets, standingPolicy, validateRender, deploymentHistory } from './release-control.mjs';
 import { validateFailedRenderReconciliation } from './historical-release-reconciliation.mjs';
+import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
 import { runtimeSettings, cleanStartRuntimeSettings } from './runtime-readiness.mjs';
 import { memberRuntimeSettings } from './member-release.mjs';
 const nativeSource = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
@@ -28,10 +29,109 @@ export function providerCheckContext(env, checkoutSha) {
 
 export function providerCheckMode(env) {
   const mode = env.PROVIDER_CHECK_MODE ?? 'verify';
-  if (!['verify', 'native-recovery-readback', 'render-env-diagnostic'].includes(mode)) denied();
-  if (mode === 'render-env-diagnostic' &&
+  if (!['verify', 'native-recovery-readback', 'render-env-diagnostic', 'render-baseline-diagnostic'].includes(mode)) denied();
+  if (['render-env-diagnostic', 'render-baseline-diagnostic'].includes(mode) &&
     (!/^[1-9]\d*$/.test(env.GITHUB_RUN_ID ?? '') || env.GITHUB_RUN_ATTEMPT !== '1')) denied();
   return mode;
+}
+
+// Fixed-service GET-only comparison for the already failed combined release.
+// The original full-release ID comes from authenticated audit 43429695806/1
+// (artifact 14040001166, SHA-256 516c46ea49d444ed514c4d300adfe5c746c199727ca3ef8f4a972b8e60ba6a14).
+// The later observation is independently digest-pinned in the failed-frontend
+// reconciliation. Neither is promoted to a new release baseline by this read.
+export async function diagnoseRenderBaseline(env, { checkoutSha, fetcher = fetch, emit = () => {} }) {
+  providerCheckContext(env, checkoutSha);
+  if (providerCheckMode(env) !== 'render-baseline-diagnostic') denied();
+  const report = row => emit({ contract: 'aqua.render-baseline-drift-diagnostic', version: 1,
+    executorSha: checkoutSha, runId: env.GITHUB_RUN_ID, runAttempt: 1,
+    failedReleaseRunId: '43935894260', renderServiceId: targets.render.id, ...row });
+  if (typeof env.RENDER_API_KEY !== 'string' || !env.RENDER_API_KEY.trim()) {
+    report({ result: 'FAIL', classification: 'CREDENTIAL_MISSING' }); return false;
+  }
+  const servicePath = `/services/${targets.render.id}`;
+  const historyPath = `${servicePath}/deploys?limit=100`;
+  let active;
+  const transport = async (url, options) => {
+    if (!active || url !== active.url || options.method !== 'GET' || options.body !== undefined ||
+      options.redirect !== 'error') throw Error('FIXED_GET_ONLY_REQUIRED');
+    const response = await fetcher(url, options);
+    active.httpStatus = response.status;
+    return response;
+  };
+  const api = clients({ RENDER_API_KEY: env.RENDER_API_KEY }, transport);
+  const read = async (check, path) => {
+    const query = new URL(path, 'https://api.render.com');
+    const history = query.pathname === `${servicePath}/deploys` && query.searchParams.get('limit') === '100' &&
+      [...query.searchParams.keys()].sort().join() ===
+        (query.searchParams.has('cursor') ? 'cursor,limit' : 'limit') &&
+      (!query.searchParams.has('cursor') || (query.searchParams.get('cursor').length > 0 &&
+        query.searchParams.get('cursor').length <= 256));
+    if (path !== servicePath && (!history || !path.startsWith(historyPath))) throw Error('FIXED_GET_ONLY_REQUIRED');
+    active = { check, url: 'https://api.render.com/v1' + path };
+    return api.render(path);
+  };
+  const safeDeploy = row => ({ id: /^dep-[a-z0-9]+$/.test(row?.id ?? '') ? row.id : 'UNVERIFIABLE',
+    status: row?.status, revision: /^[a-f0-9]{40}$/.test(row?.commit?.id ?? '') ? row.commit.id : 'UNVERIFIABLE' });
+  try {
+    const service = await read('service', servicePath);
+    let targetMatch = false;
+    try { validateRender(service, [], false, {}); targetMatch = true; } catch { /* report a predicate, never raw provider data */ }
+    const d = service?.serviceDetails;
+    const targetChecks = {
+      id: service?.id === targets.render.id, name: service?.name === targets.render.name,
+      repository: service?.repo?.replace(/\.git$/, '') === `https://github.com/${targets.repository}`,
+      branch: service?.branch === 'main', unsuspended: service?.suspended === 'not_suspended',
+      autoDeployTrigger: service?.autoDeployTrigger === 'off', autoDeploy: service?.autoDeploy === 'no',
+      rootDirectory: !service?.rootDir, runtime: d?.runtime === 'docker',
+      healthCheckPath: d?.healthCheckPath === '/api/health',
+      dockerContext: d?.envSpecificDetails?.dockerContext === '.',
+      dockerfilePath: d?.envSpecificDetails?.dockerfilePath === './docker/api/Dockerfile',
+      preDeployCommand: d?.envSpecificDetails?.preDeployCommand === '',
+      dockerCommand: d?.envSpecificDetails?.dockerCommand === ''
+    };
+    const profile = {
+      plan: d?.plan === 'starter', buildPlan: d?.buildPlan === 'starter', instances: d?.numInstances === 1,
+      region: d?.region === 'frankfurt', maintenance: d?.maintenanceMode?.enabled === false,
+      noDisk: !!d && !d.disk && !service?.disk
+    };
+    const deployments = await deploymentHistory({ render: path => read('deployment-history', path) }, 'render');
+    const live = deployments.filter(row => row.status === 'live');
+    const activeStates = new Set(['created', 'queued', 'build_in_progress', 'pre_deploy_in_progress', 'update_in_progress']);
+    const historyMatch = live.length === 1 && !deployments.some(row => activeStates.has(row.status));
+    const original = { id: 'dep-dbrgkstbedkc73difujg', sha: 'b8d86e5e60997483423b273d5f426c08b411f573' };
+    const observed = validateFailedFrontendRecord().observedBackend;
+    const later = { id: observed.renderDeployId, sha: observed.renderSha };
+    const current = live.map(safeDeploy);
+    const originalMatch = historyMatch && current[0].id === original.id && current[0].revision === original.sha;
+    const laterMatch = historyMatch && current[0].id === later.id && current[0].revision === later.sha;
+    const statusCounts = Object.fromEntries([...new Set(deployments.map(row => row.status))].sort().map(status =>
+      [status, deployments.filter(row => row.status === status).length]));
+    const profileMatch = targetMatch && Object.values(profile).every(Boolean);
+    report({ result: 'PASS', observedAt: new Date().toISOString(),
+      expected: { serviceId: targets.render.id, fullReleaseRunId: '43429695806',
+        fullReleaseDeployId: original.id, laterObservationRecordSha256: 'eb8e7c97a815e0e5181983bf26adf098af3193b2885b41268f3c6563549c09f0',
+        laterObservedDeployId: later.id, revision: original.sha },
+      observed: { serviceId: /^srv-[a-z0-9]+$/.test(service?.id ?? '') ? service.id : 'UNVERIFIABLE',
+        serviceTargetMatch: targetMatch, serviceTargetChecks: targetChecks, serviceProfileChecks: profile,
+        deploymentCount: deployments.length,
+        deploymentStatuses: statusCounts, liveDeployments: current },
+      predicates: { serviceTargetMatch: targetMatch, serviceProfileMatch: profileMatch,
+        oneLiveNoActive: historyMatch, originalFullReceiptMatch: originalMatch,
+        laterObservedBaselineMatch: laterMatch },
+      classification: profileMatch && historyMatch && laterMatch && !originalMatch ?
+        'OBSOLETE_FULL_RECEIPT_RENDER_ID' : profileMatch && historyMatch && originalMatch ?
+          'NO_CURRENT_RENDER_DRIFT' : 'RENDER_DRIFT_REQUIRES_RECONCILIATION' });
+    return true; // A completed diagnostic is not a release authorization.
+  } catch {
+    const status = active?.httpStatus;
+    report({ result: 'FAIL', check: active?.check ?? 'context',
+      ...(status === undefined ? {} : { httpStatus: status }),
+      classification: status === undefined ? 'TRANSPORT_UNAVAILABLE' : status === 401 ?
+        'AUTHENTICATION_REJECTED' : status === 403 ? 'PERMISSION_OR_POLICY_DENIED' : status === 404 ?
+          'RESOURCE_UNAVAILABLE' : status >= 500 ? 'PROVIDER_UNAVAILABLE' : 'RESPONSE_OR_HISTORY_UNVERIFIABLE' });
+    return false;
+  }
 }
 
 // One bounded, fixed-service diagnostic. No group/environment enumeration, secret
@@ -318,7 +418,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const mode = providerCheckMode(process.env);
     if (process.argv[2] === 'context') console.log(JSON.stringify({ check: 'trusted-main-context', result: 'PASS' }));
     else if (process.argv[2] === 'verify') {
-      const operation = mode === 'render-env-diagnostic' ? diagnoseRenderEnvironment :
+      const operation = mode === 'render-baseline-diagnostic' ? diagnoseRenderBaseline :
+        mode === 'render-env-diagnostic' ? diagnoseRenderEnvironment :
         mode === 'native-recovery-readback' ? observeNativeRecoveryBaseline : verifyProviderCredentials;
       if (!await operation(process.env, { checkoutSha, emit: row => console.log(JSON.stringify(row)) })) process.exitCode = 1;
     } else if (process.argv[2] === 'native-recovery-readback') {

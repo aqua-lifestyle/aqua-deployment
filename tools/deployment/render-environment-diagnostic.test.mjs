@@ -118,8 +118,9 @@ test('diagnostic is opt-in, mutually exclusive with recovery readback, and gets 
   const yaml = readFileSync(new URL('../../.github/workflows/provider-credential-check.yml', import.meta.url), 'utf8');
   assert.match(yaml, /render_env_diagnostic:[\s\S]*?type: boolean\s+default: false/);
   assert.match(yaml, /inputs\.native_recovery_readback && 'invalid'/);
-  assert.match(yaml, /if: \$\{\{ !inputs\.render_env_diagnostic \}\}/);
-  const diagnostic = yaml.slice(yaml.indexOf('      - name: Diagnose allowlisted Render'));
+  assert.match(yaml, /if: \$\{\{ !inputs\.render_env_diagnostic && !inputs\.render_baseline_diagnostic \}\}/);
+  const diagnostic = yaml.slice(yaml.indexOf('      - name: Diagnose allowlisted Render'),
+    yaml.indexOf('      - name: Inspect fixed Render baseline'));
   assert.match(diagnostic, /if: \$\{\{ inputs\.render_env_diagnostic \}\}/);
   assert.deepEqual([...diagnostic.matchAll(/secrets\.(\w+)/g)].map(m => m[1]), ['RENDER_API_KEY']);
   assert.ok(yaml.indexOf('.mjs context') < yaml.indexOf('secrets.RENDER_API_KEY'));
