@@ -802,20 +802,103 @@ test('combined release denies missing Vercel credentials and missing or drifted 
   assert.equal(wrongInputs.s.posts.length, 0);
 });
 
-test('combined release binds the live Render deployment to its authenticated full-release baseline', async () => {
-  const f = combinedFixture();
+const fullReleaseBaselinePlan = f => {
   const { backendSuccessor, combinedRelease, ...originalIdentity } = f.q;
   f.options.evidencePlan.baseline = { runId: '123', runAttempt: 1, sha: f.q.executorSha };
   f.options.baselineRows = [{ ...originalIdentity, sha: baselineSha, ciRunId: '123',
     releaseRunId: '123', phase: 'verified', renderSha: baselineSha, vercelSha: baselineSha,
-    renderDeployId: 'dep-commissioned', vercelDeployId: 'dpl_Old',
+    renderDeployId: 'dep-dbrgkstbedkc73difujg', vercelDeployId: 'dpl_Old',
     renderReleaseRunAttempt: 1, vercelReleaseRunAttempt: 1 }];
   f.options.validateBaselineReceipt = validateBaselineReceipt;
+};
+
+test('combined release binds the live Render deployment to its authenticated full-release baseline', async () => {
+  const f = combinedFixture();
+  fullReleaseBaselinePlan(f);
   f.s.deploys[0].id = 'dep-foreign'; // Same source SHA, different unreceipted deployment.
   await assert.rejects(f.execute(), /BACKEND_RENDER_DRIFT/);
   assert.equal(f.s.puts.length, 0);
   assert.equal(f.s.posts.length, 0);
   assert.equal(f.s.vercelPosts.length, 0);
+  assert.equal(f.s.audit.some(row => row.phase === 'backend-baseline-selected'), false);
+});
+
+test('combined admission accepts the live deployment matching the full-release receipt identity', async () => {
+  const f = combinedFixture();
+  fullReleaseBaselinePlan(f);
+  f.s.deploys[0].id = 'dep-dbrgkstbedkc73difujg';
+  await f.execute();
+  assert.equal(f.s.audit[1].baselineRenderDeployId, 'dep-dbrgkstbedkc73difujg');
+  assert.equal(f.s.audit[1].baselineRenderProvenance, 'FULL_RELEASE_RECEIPT');
+  assert.equal(f.s.puts.length, 2);
+  assert.equal(f.s.posts.length, 1);
+  const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
+  const receipt = validateCombinedReceipt(f.s.audit, descriptor, targets);
+  assert.equal(receipt.renderDeployId, 'dep-new');
+  assert.equal(receipt.sha, f.candidateSha);
+});
+
+test('combined admission accepts the later same-SHA deployment authenticated by the pinned reconciliation', async () => {
+  const f = combinedFixture();
+  fullReleaseBaselinePlan(f);
+  const pinned = validateFailedFrontendRecord().observedBackend;
+  assert.equal(pinned.renderSha, baselineSha);
+  f.s.deploys[0] = { id: pinned.renderDeployId, status: 'live', commit: { id: baselineSha } };
+  await f.execute();
+  assert.equal(f.s.audit[1].baselineRenderDeployId, pinned.renderDeployId);
+  assert.equal(f.s.audit[1].baselineRenderProvenance, 'RECONCILED_LATER_OBSERVATION');
+  assert.equal(f.s.puts.length, 2);
+  assert.equal(f.s.posts.length, 1);
+  const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
+  const receipt = validateCombinedReceipt(f.s.audit, descriptor, targets);
+  assert.equal(receipt.renderDeployId, 'dep-new');
+  assert.equal(receipt.renderSha, f.candidateSha);
+  assert.equal(receipt.schemaTransition, 'none');
+});
+
+test('combined admission rejects the reconciled observation once the commissioned receipt names another build', async () => {
+  const f = combinedFixture();
+  fullReleaseBaselinePlan(f);
+  const pinned = validateFailedFrontendRecord().observedBackend;
+  f.s.deploys[0] = { id: pinned.renderDeployId, status: 'live', commit: { id: baselineSha } };
+  f.options.baselineRows = f.options.baselineRows.map(row => ({ ...row, sha: 'c'.repeat(40),
+    renderSha: 'c'.repeat(40), vercelSha: 'c'.repeat(40) }));
+  await assert.rejects(f.execute(), /BACKEND_RENDER_DRIFT/);
+  assert.equal(f.s.puts.length, 0);
+  assert.equal(f.s.posts.length, 0);
+  assert.equal(f.s.vercelPosts.length, 0);
+});
+
+test('combined admission rejects the reconciled deployment identity on a different source revision', async () => {
+  const f = combinedFixture();
+  fullReleaseBaselinePlan(f);
+  const pinned = validateFailedFrontendRecord().observedBackend;
+  f.s.deploys[0] = { id: pinned.renderDeployId, status: 'live', commit: { id: 'c'.repeat(40) } };
+  f.s.vars.Deployment__BuildId = 'c'.repeat(40);
+  await assert.rejects(f.execute(), /BACKEND_RENDER_DRIFT/);
+  assert.equal(f.s.puts.length, 0);
+  assert.equal(f.s.posts.length, 0);
+  assert.equal(f.s.vercelPosts.length, 0);
+});
+
+test('combined receipt authentication re-derives the reconciled Render baseline from the pinned record', async () => {
+  const f = combinedFixture();
+  fullReleaseBaselinePlan(f);
+  const pinned = validateFailedFrontendRecord().observedBackend;
+  f.s.deploys[0] = { id: pinned.renderDeployId, status: 'live', commit: { id: baselineSha } };
+  await f.execute();
+  const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
+  validateCombinedReceipt(structuredClone(f.s.audit), descriptor, targets);
+  for (const mutate of [
+    rows => rows[1].baselineRenderProvenance = 'UNKNOWN_PROVENANCE',
+    rows => { rows[1].baselineRenderProvenance = 'RECONCILED_LATER_OBSERVATION';
+      rows[1].baselineRenderDeployId = 'dep-foreign'; },
+    rows => { rows[1].baselineRenderProvenance = 'RECONCILED_LATER_OBSERVATION';
+      rows[1].baselineRenderSha = 'c'.repeat(40); }]) {
+    const rows = structuredClone(f.s.audit);
+    mutate(rows);
+    assert.throws(() => validateCombinedReceipt(rows, descriptor, targets));
+  }
 });
 
 test('combined release rechecks the initial Vercel incumbent after Render and never uploads on alias drift', async () => {
