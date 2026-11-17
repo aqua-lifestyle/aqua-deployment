@@ -389,13 +389,16 @@ test('Normal/Committed evidence accepts the commissioned baseline while the lega
   const f = fixture();
   await f.execute();
   assert.equal(f.s.readinessCalls, 0);
-  assert.deepEqual(f.s.audit[1].normalRuntimeHealth, {
+  assert.deepEqual(f.s.audit[1].healthObservation, {
     status: 'Healthy', buildId: baselineSha, environment: 'Production', databaseStatus: 'Healthy',
     redisStatus: 'Healthy', dataProtectionKeyStoreStatus: 'Healthy', paymentAvailability: 'Available'
   });
-  assert.match(f.s.audit[1].normalSettingsSha256, /^[a-f0-9]{64}$/);
-  assert.equal(f.s.audit.at(-1).runtimeEvidence.requiredConfigurationDigest, '5'.repeat(64));
-  assert.equal(f.s.audit.at(-1).runtimeEvidence.requiredAssemblyDigest, 'b'.repeat(64));
+  assert.match(f.s.audit[1].providerConfigurationSha256, /^[a-f0-9]{64}$/);
+  assert.equal(f.s.audit.at(-1).successorEvidence.commissioningDecisionSha256, sha256(f.decisionBytes));
+  assert.equal(f.s.audit.at(-1).successorEvidence.qualifiedBuildSha, f.candidateSha);
+  assert.equal(f.s.audit.at(-1).successorEvidence.successorAssemblyArtifactSha256, 'b'.repeat(64));
+  assert.equal(f.s.audit.at(-1).successorEvidence.requiredAssemblyDigest, undefined,
+    'qualified artifact evidence is not labeled runtime attestation');
   assert.throws(() => validateReadiness({ status: 503, body: { status: 'Unavailable' } }, baselineSha),
     /PROTECTED_RUNTIME_READINESS_FAILED/);
 });
@@ -551,8 +554,8 @@ test('audit receipts authenticate exact sequences and reject tampering', async (
   for (const mutate of [rows => rows.splice(2, 1), rows => rows[0].backendSuccessor = 'other',
     rows => rows[4].payloadPinSha256 = 'x'.repeat(64),
     rows => rows[2].baselineRenderSha = 'e'.repeat(40),
-    rows => { rows.at(-1).runtimeEvidence.requiredConfigurationDigest = '6'.repeat(64); },
-    rows => { rows.at(-1).runtimeEvidence.normalSettingsSha256 = '0'.repeat(64); },
+    rows => { rows.at(-1).successorEvidence.providerConfigurationSha256 = '0'.repeat(64); },
+    rows => { rows.at(-1).successorEvidence.successorAssemblyArtifactSha256 = '0'.repeat(64); },
     rows => { rows.at(-1).payloadPinSha256 = 'x'.repeat(64); },
     rows => { rows[3].schemaTransition = 'additive'; },
     rows => { rows[3].successorAssemblySha256 = 'f'.repeat(64); }]) {
@@ -860,6 +863,8 @@ test('combined release crosses additive migration 56, restart, backend verificat
       { filename: snapshotPath, status: 'modified' },
       { filename: backendModifiedPath, status: 'modified' }
     ] });
+    fullReleaseBaselinePlan(f);
+    f.s.deploys[0].id = 'dep-dbrgkstbedkc73difujg';
     await f.execute();
     assert.equal(f.s.readinessCalls, 0);
     assert.equal(f.s.posts.length, 3, 'candidate deploy, migration job, additive restart');
@@ -875,8 +880,9 @@ test('combined release crosses additive migration 56, restart, backend verificat
       'backend-restart-requesting', 'backend-restart-requested', 'backend-restart-ready', 'backend-deployed'
     ]);
     assert.equal(f.s.audit[17].renderDeployId, 'dep-restart');
-    assert.equal(f.s.audit[17].runtimeEvidence.health.buildId, f.candidateSha);
-    assert.equal(f.s.audit[17].runtimeEvidence.health.paymentAvailability, 'Available');
+    assert.equal(f.s.audit[17].successorEvidence.healthObservation.buildId, f.candidateSha);
+    assert.equal(f.s.audit[17].successorEvidence.healthObservation.paymentAvailability, 'Available');
+    assert.equal(f.s.audit[1].historicalD10Bindings.currentConfigurationDigest, '5'.repeat(64));
     assert.equal(f.s.vercelPosts.length, 1, 'frontend deployment follows backend verification');
     assert.ok(f.s.uploads > 0);
     const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
@@ -926,10 +932,18 @@ test('combined release denies missing Vercel credentials and missing or drifted 
 const fullReleaseBaselinePlan = f => {
   const { backendSuccessor, combinedRelease, ...originalIdentity } = f.q;
   f.options.evidencePlan.baseline = { runId: '123', runAttempt: 1, sha: f.q.executorSha };
-  f.options.baselineRows = [{ ...originalIdentity, sha: baselineSha, ciRunId: '123',
+  const identity = { ...originalIdentity, sha: baselineSha, ciRunId: '123',
     releaseRunId: '123', phase: 'verified', renderSha: baselineSha, vercelSha: baselineSha,
     renderDeployId: 'dep-dbrgkstbedkc73difujg', vercelDeployId: 'dpl_Old',
-    renderReleaseRunAttempt: 1, vercelReleaseRunAttempt: 1 }];
+    renderReleaseRunAttempt: 1, vercelReleaseRunAttempt: 1 };
+  const d10RuntimeBindings = { requiredAssemblyDigest: '2'.repeat(64),
+    requiredRuntimeAssemblyDigest: '3'.repeat(64), currentConfigurationDigest: '5'.repeat(64),
+    intendedConfigurationDigest: '6'.repeat(64), intendedEnvironmentId: 'production-release',
+    intendedBuildId: baselineSha };
+  f.options.baselineRows = [
+    { ...identity, phase: 'provider-read', scope: 'readiness-bindings', d10RuntimeBindings },
+    { ...identity, d10RuntimeBindings }
+  ];
   f.options.validateBaselineReceipt = validateBaselineReceipt;
 };
 
@@ -957,6 +971,46 @@ test('combined admission accepts the live deployment matching the full-release r
   assert.equal(receipt.sha, f.candidateSha);
 });
 
+test('combined baseline rejects historical D10 binding mismatch before provider writes', async () => {
+  const f = combinedFixture();
+  fullReleaseBaselinePlan(f);
+  f.options.baselineRows[0].d10RuntimeBindings.currentConfigurationDigest = '8'.repeat(64);
+  f.options.baselineRows[1].d10RuntimeBindings.currentConfigurationDigest = '8'.repeat(64);
+  await assert.rejects(f.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
+  assertNoProviderWrites(f);
+});
+
+test('combined successor rejects changed Normal provider configuration after additive restart', async () => {
+  const migration56 = `${migrationsDir}/20261115113914_AddAQGreenIndependentRootRequests.cs`;
+  const repo = sourceRepository(additiveMigrationSource.replaceAll('MembershipNote',
+    'AddAQGreenIndependentRootRequests'), migration56);
+  try {
+    const f = combinedFixture({ repo, files: [
+      { filename: `${targets.vercel.rootDirectory}/app/page.tsx`, status: 'modified' },
+      { filename: migration56, status: 'added' },
+      { filename: repo.designerPath.replace(`${repo.dir}/`, ''), status: 'added' },
+      { filename: snapshotPath, status: 'modified' },
+      { filename: backendModifiedPath, status: 'modified' }
+    ] });
+    const render = f.api.render;
+    const seen = new Map();
+    f.api.render = async (route, body) => {
+      const result = await render(route, body);
+      if (route.startsWith(`/services/${targets.render.id}/env-vars/`) && body === undefined &&
+        normalRuntimeSettings[result.key]) {
+        const count = (seen.get(result.key) ?? 0) + 1;
+        seen.set(result.key, count);
+        if (count === 2) return { ...result, value: 'false' };
+      }
+      return result;
+    };
+    await assert.rejects(f.execute(), /BACKEND_DEPLOYMENT_UNVERIFIABLE/);
+    assert.equal(f.s.posts.length, 3, 'candidate, migration job, and additive restart occurred');
+    assert.equal(f.s.audit.at(-1).phase, 'backend-restart-ready');
+    assert.equal(f.s.vercelPosts.length, 0, 'frontend is blocked by successor configuration drift');
+  } finally { repo.close(); }
+});
+
 test('combined admission accepts the later same-SHA deployment authenticated by the pinned reconciliation', async () => {
   const f = combinedFixture();
   fullReleaseBaselinePlan(f);
@@ -981,7 +1035,8 @@ test('combined admission rejects the reconciled observation once the commissione
   const pinned = validateFailedFrontendRecord().observedBackend;
   f.s.deploys[0] = { id: pinned.renderDeployId, status: 'live', commit: { id: baselineSha } };
   f.options.baselineRows = f.options.baselineRows.map(row => ({ ...row, sha: 'c'.repeat(40),
-    renderSha: 'c'.repeat(40), vercelSha: 'c'.repeat(40) }));
+    renderSha: 'c'.repeat(40), vercelSha: 'c'.repeat(40),
+    d10RuntimeBindings: { ...row.d10RuntimeBindings, intendedBuildId: 'c'.repeat(40) } }));
   await assert.rejects(f.execute(), /BACKEND_RENDER_DRIFT/);
   assert.equal(f.s.puts.length, 0);
   assert.equal(f.s.posts.length, 0);
