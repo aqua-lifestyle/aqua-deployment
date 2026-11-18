@@ -2,15 +2,15 @@
 // protected GitHub approval chain (owner-approved protected-main merge into
 // the qualified source, CI qualification and the executor's own admission).
 // The successor input is staged through the existing Render environment
-// delivery channel with a raw SHA-256 pin; it is additive evidence that no
-// released code revision acts on except the successor runtime itself, which
-// re-derives every binding from its own commissioned decision, live
-// configuration and observed source boundary. Database schema transitions run
+// delivery channel with a raw SHA-256 pin. Release assurance binds authenticated
+// commissioning evidence, provider readbacks, qualified build artifacts and
+// observed health; it does not claim direct attestation of loaded runtime
+// configuration or assemblies. Database schema transitions run
 // through the Render one-off job running the release's own migrator binary;
 // a failure between job and restart fails closed and never claims a rollback.
 import { execFileSync } from 'node:child_process';
 import { objectDigest, sha256, validateArtifact, readGitHubArtifact } from './github-evidence.mjs';
-import { normalRuntimeSettings, validateD10Bindings, validateReadiness } from './runtime-readiness.mjs';
+import { normalRuntimeSettings } from './runtime-readiness.mjs';
 import { deployCombinedFrontendPhase, verifyFrontendIncumbent } from './frontend-release.mjs';
 import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
 
@@ -57,6 +57,28 @@ const digestKeys = ['requiredSchemaDigest', 'requiredAssemblyDigest', 'requiredR
   'requiredDatabaseIdentityDigest', 'requiredConfigurationDigest'];
 const successorDigestKeys = ['successorSchemaSha256', 'successorAssemblySha256',
   'successorApplicationSha256', 'successorCoreSha256'];
+const healthObservationKeys = ['status', 'buildId', 'environment', 'databaseStatus', 'redisStatus',
+  'dataProtectionKeyStoreStatus', 'paymentAvailability'];
+const nonzeroHash = value => hashPattern.test(value ?? '') && value !== '0'.repeat(64);
+
+// The legacy protected endpoint describes the earlier Held operating mode.
+// For a commissioned Normal release, record separately the evidence actually
+// checked: provider configuration readbacks, commissioning/build provenance,
+// and the application's health response. These are release assurance, not
+// independent attestation of values loaded inside the running process.
+const healthObservation = response => {
+  const body = response.body.result ?? response.body;
+  return Object.fromEntries(healthObservationKeys.map(key => [key, body[key]]));
+};
+
+const validateHealthObservation = (evidence, sha) => {
+  check(evidence && typeof evidence === 'object' && !Array.isArray(evidence) &&
+    Object.keys(evidence).sort().join() === [...healthObservationKeys].sort().join() &&
+    evidence.status === 'Healthy' && evidence.buildId === sha && evidence.environment === 'Production' &&
+    evidence.databaseStatus === 'Healthy' && evidence.redisStatus === 'Healthy' &&
+    evidence.dataProtectionKeyStoreStatus === 'Healthy' && evidence.paymentAvailability === 'Available',
+  'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+};
 
 export function validateBackendSuccessorIdentity(q) {
   check(q && typeof q === 'object' && q.backendSuccessor === backendSuccessorMode &&
@@ -118,10 +140,17 @@ export function validateBackendSuccessorReceipt(rows, descriptor, targets) {
     baseline.paymentAvailability === decision.paymentAvailability &&
     baseline.paymentAvailability === last.paymentAvailability,
   'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  validateHealthObservation(baseline.healthObservation, baseline.baselineRenderSha);
+  check(nonzeroHash(baseline.providerConfigurationSha256), 'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
   // A reconciled first-combined baseline must re-derive from the same
   // digest-pinned record that authenticated the live deployment at admission.
   if (baseline.baselineRenderProvenance !== undefined) {
     const observed = validateFailedFrontendRecord().observedBackend;
+    const bindings = baseline.historicalD10Bindings;
+    check(bindings && bindings.currentConfigurationDigest === decision.requiredConfigurationDigest &&
+      bindings.requiredAssemblyDigest === decision.requiredAssemblyDigest &&
+      bindings.requiredRuntimeAssemblyDigest === decision.requiredRuntimeAssemblyDigest,
+    'BACKEND_AUDIT_DECISION_MISMATCH');
     check(baseline.baselineRenderProvenance === 'FULL_RELEASE_RECEIPT' ||
       baseline.baselineRenderProvenance === 'RECONCILED_LATER_OBSERVATION' &&
         observed.renderDeployId === baseline.baselineRenderDeployId &&
@@ -129,12 +158,12 @@ export function validateBackendSuccessorReceipt(rows, descriptor, targets) {
     'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
   }
   check(decision.decisionContract === decisionContract && decision.decisionSha256 === decision.decisionPin &&
-    hashPattern.test(decision.decisionSha256 ?? '') &&
-    digestKeys.every(key => hashPattern.test(decision[key] ?? '')) &&
+    nonzeroHash(decision.decisionSha256) &&
+    digestKeys.every(key => nonzeroHash(decision[key])) &&
     buildIdPattern.test(decision.predecessorBuildId ?? ''),
   'BACKEND_AUDIT_DECISION_MISMATCH');
-  validateD10Bindings(decision.baselineBindings, decision.baselineRenderSha);
-  check(decision.baselineBindings.currentConfigurationDigest === decision.requiredConfigurationDigest,
+  check(decision.baselineRenderSha === baseline.baselineRenderSha &&
+    decision.predecessorBuildId === baseline.baselineRenderSha,
   'BACKEND_AUDIT_DECISION_MISMATCH');
   check(classified.schemaTransition === (rows.length === 18 ? 'additive' : 'none') &&
     (classified.schemaTransition === 'none' || classified.migrationFiles > 0) &&
@@ -145,7 +174,7 @@ export function validateBackendSuccessorReceipt(rows, descriptor, targets) {
     classified.contract === 'aqua.backend-successor-integrity-v1' &&
     classified.repository === first.repository && classified.sha === first.sha &&
     classified.ciRunId === first.ciRunId && classified.ciRunAttempt === first.ciRunAttempt &&
-    successorDigestKeys.every(key => hashPattern.test(classified[key] ?? '')) &&
+    successorDigestKeys.every(key => nonzeroHash(classified[key])) &&
     (classified.schemaTransition === 'none' ?
       classified.successorSchemaSha256 === decision.requiredSchemaDigest :
       classified.successorSchemaSha256 !== decision.requiredSchemaDigest),
@@ -181,11 +210,23 @@ export function validateBackendSuccessorReceipt(rows, descriptor, targets) {
       rows[12].payloadPinSha256 === rows[13].payloadPinSha256,
     'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
   }
-  validateD10Bindings(last.readinessBindings, first.sha);
-  check(last.readinessBindings.currentConfigurationDigest === decision.requiredConfigurationDigest &&
-    last.readinessBindings.requiredAssemblyDigest === classified.successorAssemblySha256 &&
+  const successorEvidence = last.successorEvidence;
+  check(successorEvidence && typeof successorEvidence === 'object' && !Array.isArray(successorEvidence) &&
+    Object.keys(successorEvidence).sort().join() === ['healthObservation', 'providerConfigurationSha256',
+      'commissioningDecisionSha256', 'qualifiedBuildSha', 'integrityArtifactSha256',
+      'successorAssemblyArtifactSha256'].sort().join() &&
+    nonzeroHash(successorEvidence.providerConfigurationSha256) &&
+    nonzeroHash(successorEvidence.commissioningDecisionSha256) &&
+    nonzeroHash(successorEvidence.integrityArtifactSha256) &&
+    nonzeroHash(successorEvidence.successorAssemblyArtifactSha256) &&
+    successorEvidence.providerConfigurationSha256 === baseline.providerConfigurationSha256 &&
+    successorEvidence.commissioningDecisionSha256 === decision.decisionSha256 &&
+    successorEvidence.qualifiedBuildSha === first.sha &&
+    successorEvidence.integrityArtifactSha256 === classified.integrityArtifactSha256 &&
+    successorEvidence.successorAssemblyArtifactSha256 === classified.successorAssemblySha256 &&
     last.payloadPinSha256 === stagingRows.at(-1).payloadPinSha256,
   'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  validateHealthObservation(successorEvidence.healthObservation, first.sha);
   return { ...descriptor, sha: first.sha, ciRunId: first.ciRunId, ciRunAttempt: first.ciRunAttempt,
     renderDeployId: last.renderDeployId, renderSha: last.renderSha,
     schemaTransition: classified.schemaTransition, backendSuccessor: first.backendSuccessor,
@@ -222,10 +263,16 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
     check(envVar?.key === key && typeof envVar.value === 'string', 'BACKEND_RUNTIME_CONFIGURATION_CHANGED');
     return envVar.value;
   };
-  for (const key of Object.keys(normalRuntimeSettings)) {
-    const value = await readEnvVar(key);
-    check(normalRuntimeSettings[key].includes(value), 'BACKEND_RUNTIME_CONFIGURATION_CHANGED');
-  }
+  const readNormalSettingsDigest = async () => {
+    const values = {};
+    for (const [key, allowed] of Object.entries(normalRuntimeSettings)) {
+      const value = await readEnvVar(key);
+      check(allowed.includes(value), 'BACKEND_RUNTIME_CONFIGURATION_CHANGED');
+      values[key] = value;
+    }
+    return sha256(Buffer.from(JSON.stringify(values), 'utf8'));
+  };
+  const baselineProviderConfigurationSha256 = await readNormalSettingsDigest();
   const predecessorBuildId = await readEnvVar('Deployment__BuildId');
   check(buildIdPattern.test(predecessorBuildId), 'BACKEND_RUNTIME_CONFIGURATION_CHANGED');
   const decisionBytes = Buffer.from(
@@ -239,7 +286,7 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   check(decision && typeof decision === 'object' && !Array.isArray(decision) &&
     decision.contractVersion === decisionContract && typeof decision.decisionId === 'string' &&
     decision.decisionId.length > 0 && decision.decisionId.length <= 512 &&
-    digestKeys.every(key => hashPattern.test(decision[key] ?? '')), 'BACKEND_COMMISSIONED_STATE_CHANGED');
+    digestKeys.every(key => nonzeroHash(decision[key])), 'BACKEND_COMMISSIONED_STATE_CHANGED');
   const deploys = await deploymentHistory(api, 'render');
   const live = deploys.filter(row => row.status === 'live');
   check(live.length === 1 && deploys.every(row => !activeRender.has(row.status)), 'BACKEND_RENDER_DRIFT');
@@ -261,6 +308,11 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
       'BACKEND_RENDER_DRIFT');
     const proof = options.validateBaselineReceipt(options.baselineRows, options.evidencePlan.baseline, q,
       options.evidencePlan.baselinePolicyProof);
+    const historicalBindings = proof.origin?.d10RuntimeBindings;
+    check(historicalBindings && historicalBindings.currentConfigurationDigest === decision.requiredConfigurationDigest &&
+      historicalBindings.requiredAssemblyDigest === decision.requiredAssemblyDigest &&
+      historicalBindings.requiredRuntimeAssemblyDigest === decision.requiredRuntimeAssemblyDigest,
+    'BACKEND_COMMISSIONED_STATE_CHANGED');
     const original = live[0].id === proof.renderDeployId && baselineSha === proof.renderSha;
     const observed = validateFailedFrontendRecord().observedBackend;
     const reconciled = proof.renderSha === observed.renderSha &&
@@ -273,13 +325,7 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   catch { throw new BackendSuccessorReleaseDenied('BACKEND_COMMISSIONED_STATE_CHANGED'); }
   const state = (health.body.result ?? health.body).paymentAvailability;
   check(state === 'Available', 'BACKEND_COMMISSIONED_STATE_CHANGED');
-  const baselineReadiness = await api.readiness(baselineSha);
-  validateReadiness(baselineReadiness, baselineSha);
-  const baselineBindings = baselineReadiness.body.d10Bindings;
-  check(baselineBindings.currentConfigurationDigest === decision.requiredConfigurationDigest &&
-    baselineBindings.requiredAssemblyDigest === decision.requiredAssemblyDigest &&
-    baselineBindings.requiredRuntimeAssemblyDigest === decision.requiredRuntimeAssemblyDigest,
-    'BACKEND_COMMISSIONED_STATE_CHANGED');
+  const baselineHealthObservation = healthObservation(health);
   const compare = await api.gh(`/compare/${baselineSha}...${q.sha}`);
   const frontendPrefix = `${targets.vercel.rootDirectory}/`;
   const backendFiles = compare.files.filter(file => file.filename.startsWith(backendRoot));
@@ -336,7 +382,7 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
       ...successorDigestKeys].sort().join() &&
     integrity.contract === 'aqua.backend-successor-integrity-v1' && integrity.repository === q.repository &&
     integrity.sha === q.sha && integrity.ciRunId === q.ciRunId && integrity.ciRunAttempt === q.ciRunAttempt &&
-    successorDigestKeys.every(key => hashPattern.test(integrity[key] ?? '')) &&
+    successorDigestKeys.every(key => nonzeroHash(integrity[key])) &&
     (schemaTransition === 'none' ? integrity.successorSchemaSha256 === decision.requiredSchemaDigest :
       integrity.successorSchemaSha256 !== decision.requiredSchemaDigest),
   'BACKEND_INTEGRITY_EVIDENCE_MISMATCH');
@@ -346,14 +392,16 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
       additions: file.additions, deletions: file.deletions, changes: file.changes })) })));
   audit({ phase: 'backend-baseline-selected', baselineRenderDeployId: live[0].id,
     baselineRenderSha: baselineSha, servingRenderDeployId: live[0].id,
-    servingRenderSha: baselineSha, paymentAvailability: state,
+    servingRenderSha: baselineSha, paymentAvailability: state, healthObservation: baselineHealthObservation,
+    providerConfigurationSha256: baselineProviderConfigurationSha256,
+    ...(renderBaselineProvenance ? { historicalD10Bindings: options.baselineRows.at(-1).d10RuntimeBindings } : {}),
     ...(renderBaselineProvenance ? { baselineRenderProvenance: renderBaselineProvenance } : {}) });
   audit({ phase: 'backend-decision-verified', decisionSha256: sha256(decisionBytes),
     decisionPin, decisionContract, requiredConfigurationDigest: decision.requiredConfigurationDigest,
     requiredSchemaDigest: decision.requiredSchemaDigest, requiredAssemblyDigest: decision.requiredAssemblyDigest,
     requiredRuntimeAssemblyDigest: decision.requiredRuntimeAssemblyDigest,
     requiredDatabaseIdentityDigest: decision.requiredDatabaseIdentityDigest,
-    predecessorBuildId, baselineBindings, baselineRenderSha: baselineSha, paymentAvailability: state });
+    predecessorBuildId, baselineRenderSha: baselineSha, paymentAvailability: state });
   audit({ phase: 'backend-classified', schemaTransition, backendFiles: backendFiles.length,
     frontendFiles: frontendFiles.length, migrationFiles: migrationFiles.length, sourceDeltaSha256,
     integrityArtifactId: descriptor.id, integrityArtifactSha256: descriptor.digest.slice(7), ...integrity });
@@ -459,18 +507,23 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   catch { throw new BackendSuccessorReleaseDenied('BACKEND_DEPLOYMENT_UNVERIFIABLE'); }
   check((endHealth.body.result ?? endHealth.body).paymentAvailability === state,
     'BACKEND_DEPLOYMENT_UNVERIFIABLE');
-  const endReadiness = await api.readiness(q.sha);
-  validateReadiness(endReadiness, q.sha);
-  const readinessBindings = endReadiness.body.d10Bindings;
-  check(readinessBindings.currentConfigurationDigest === decision.requiredConfigurationDigest &&
-    readinessBindings.requiredAssemblyDigest === integrity.successorAssemblySha256,
+  const endHealthObservation = healthObservation(endHealth);
+  let finalProviderConfigurationSha256;
+  try { finalProviderConfigurationSha256 = await readNormalSettingsDigest(); }
+  catch { throw new BackendSuccessorReleaseDenied('BACKEND_DEPLOYMENT_UNVERIFIABLE'); }
+  check(finalProviderConfigurationSha256 === baselineProviderConfigurationSha256,
     'BACKEND_DEPLOYMENT_UNVERIFIABLE');
+  const successorEvidence = { healthObservation: endHealthObservation,
+    providerConfigurationSha256: finalProviderConfigurationSha256,
+    commissioningDecisionSha256: sha256(decisionBytes), qualifiedBuildSha: q.sha,
+    integrityArtifactSha256: descriptor.digest.slice(7),
+    successorAssemblyArtifactSha256: integrity.successorAssemblySha256 };
   check(await api.web() === 200, 'WEB_READINESS_FAILED');
   const proxy = await api.webHealth(q.sha, state);
   check(proxy?.status === 'Healthy' && proxy.buildId === q.sha && proxy.paymentAvailability === state,
     'BACKEND_DEPLOYMENT_UNVERIFIABLE');
   audit({ phase: 'backend-deployed', renderDeployId: finalDeployId, renderSha: q.sha,
-    paymentAvailability: state, readinessBindings, payloadPinSha256: finalPin,
+    paymentAvailability: state, successorEvidence, payloadPinSha256: finalPin,
     releaseIdentity: releaseKey(q), schemaTransition });
   // Combined releases continue with the frontend phase of the same qualified
   // revision only after the backend release is fully verified above. Every
