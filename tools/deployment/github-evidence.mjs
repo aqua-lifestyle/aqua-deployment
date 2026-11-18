@@ -77,9 +77,13 @@ export function validateArtifact(metadata, runId, sha, name, repositoryId) {
 
 // Download only by authenticated numeric ID. Candidate archive URLs are ignored.
 // unzip streams one bounded file; it never extracts into the executor worktree.
-export async function readGitHubArtifact(api, owner, descriptor, filename) {
+export async function readGitHubArtifactFiles(api, owner, descriptor, filenames) {
+  const allowed = ['report.json', 'release-report.jsonl', 'backend-successor-integrity.json',
+    'admission-receipt.json', 'evidence-plan.json'];
   check(['source', 'executor'].includes(owner) && /^[1-9]\d*$/.test(descriptor.id) &&
-    ['report.json', 'release-report.jsonl', 'backend-successor-integrity.json'].includes(filename), 'GITHUB_ARTIFACT_INPUT_INVALID');
+    Array.isArray(filenames) && filenames.length > 0 && filenames.length <= 2 &&
+    filenames.every(name => allowed.includes(name)) && new Set(filenames).size === filenames.length,
+  'GITHUB_ARTIFACT_INPUT_INVALID');
   const gh = owner === 'source' ? api.gh : api.executor;
   check(typeof gh === 'function' && typeof api.artifact === 'function', 'GITHUB_ARTIFACT_RETRIEVAL_UNAVAILABLE');
   const metadata = await gh(`/actions/artifacts/${descriptor.id}`);
@@ -92,15 +96,21 @@ export async function readGitHubArtifact(api, owner, descriptor, filename) {
   try {
     const zip = join(dir, 'artifact.zip');
     writeFileSync(zip, bytes, { mode: 0o600, flag: 'wx' });
-    const names = execFileSync('unzip', ['-Z1', zip], { encoding: 'utf8', maxBuffer: 4096, stdio: ['ignore', 'pipe', 'pipe'] });
-    check(names === `${filename}\n`, 'GITHUB_ARTIFACT_CONTENTS_INVALID');
-    return execFileSync('unzip', ['-p', zip, filename], {
+    const names = execFileSync('unzip', ['-Z1', zip], { encoding: 'utf8', maxBuffer: 4096,
+      stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n').sort();
+    check(JSON.stringify(names) === JSON.stringify([...filenames].sort()), 'GITHUB_ARTIFACT_CONTENTS_INVALID');
+    return Object.fromEntries(filenames.map(filename => [filename, execFileSync('unzip', ['-p', zip, filename], {
       maxBuffer: filename === 'release-report.jsonl' ? maxAuditBytes : 2 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'pipe'] });
+      stdio: ['ignore', 'pipe', 'pipe'] })]));
   } catch (error) {
     if (error instanceof GitHubEvidenceDenied) throw error;
     throw new GitHubEvidenceDenied('GITHUB_ARTIFACT_ARCHIVE_INVALID');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+export async function readGitHubArtifact(api, owner, descriptor, filename) {
+  check(typeof filename === 'string', 'GITHUB_ARTIFACT_INPUT_INVALID');
+  return (await readGitHubArtifactFiles(api, owner, descriptor, [filename]))[filename];
 }
 
 async function verifyGitHubEvidenceCore(api, qualified, policy, readSourceDigest, now, enforceFreshness) {

@@ -104,8 +104,10 @@ test('protected workflow gives the new mutually exclusive GET-only mode just the
   const yaml = readFileSync(new URL('../../.github/workflows/provider-credential-check.yml', import.meta.url), 'utf8');
   assert.match(yaml, /render_baseline_diagnostic:[\s\S]*?type: boolean\s+default: false/);
   assert.match(yaml, /inputs\.render_baseline_diagnostic && \(\(inputs\.render_env_diagnostic \|\| inputs\.native_recovery_readback\) && 'invalid'/);
-  const step = yaml.slice(yaml.indexOf('      - name: Inspect fixed Render baseline'));
-  assert.match(step, /if: \$\{\{ inputs\.render_baseline_diagnostic \}\}/);
+  const stepStart = yaml.indexOf('      - name: Inspect fixed Render baseline');
+  const stepEnd = yaml.indexOf('\n      - name:', stepStart + 1);
+  const step = yaml.slice(stepStart, stepEnd);
+  assert.match(step, /if: \$\{\{ inputs\.render_baseline_diagnostic && !inputs\.render_env_diagnostic && !inputs\.render_commissioned_state_diagnostic && !inputs\.native_recovery_readback \}\}/);
   assert.deepEqual([...step.matchAll(/secrets\.(\w+)/g)].map(m => m[1]), ['RENDER_API_KEY']);
   assert.doesNotMatch(step, /VERCEL_TOKEN|deploy\.yml|release-control\.mjs|upload-artifact/);
   assert.throws(() => providerCheckMode({ PROVIDER_CHECK_MODE: 'invalid' }), /CONTEXT_DENIED/);

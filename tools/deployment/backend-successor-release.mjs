@@ -61,6 +61,124 @@ const healthObservationKeys = ['status', 'buildId', 'environment', 'databaseStat
   'dataProtectionKeyStoreStatus', 'paymentAvailability'];
 const nonzeroHash = value => hashPattern.test(value ?? '') && value !== '0'.repeat(64);
 
+// Shared, side-effect-free forms of the commissioned-baseline predicates. The
+// release asserts these in order; the protected GET diagnostic reports them
+// individually. Keep the release failure code and comparisons in one place.
+export function inspectCommissioningDecision(decisionBytes, decisionPin) {
+  const byteLength = decisionBytes?.length;
+  const lengthValid = Buffer.isBuffer(decisionBytes) && byteLength > 0 && byteLength <= 65536;
+  const decisionSha256 = Buffer.isBuffer(decisionBytes) ? sha256(decisionBytes) : null;
+  const pinMatches = lengthValid && decisionSha256 === decisionPin;
+  let decision, jsonValid = false;
+  if (lengthValid) {
+    try { decision = JSON.parse(decisionBytes.toString('utf8')); jsonValid = true; } catch { /* redacted diagnostic result */ }
+  }
+  const objectValid = !!decision && typeof decision === 'object' && !Array.isArray(decision);
+  const contractValid = objectValid && decision.contractVersion === decisionContract;
+  const decisionIdValid = objectValid && typeof decision.decisionId === 'string' &&
+    decision.decisionId.length > 0 && decision.decisionId.length <= 512;
+  const digestFieldsValid = objectValid && digestKeys.every(key => nonzeroHash(decision[key]));
+  const structureValid = objectValid && contractValid && decisionIdValid && digestFieldsValid;
+  return { decision, byteLength, decisionSha256, pinMatches, lengthValid, jsonValid,
+    objectValid, contractValid, decisionIdValid, digestFieldsValid, structureValid };
+}
+
+export function assertCommissioningDecision(inspection) {
+  check(inspection.lengthValid, 'BACKEND_COMMISSIONED_STATE_CHANGED');
+  check(inspection.pinMatches, 'BACKEND_COMMISSIONED_STATE_CHANGED');
+  check(inspection.jsonValid, 'BACKEND_COMMISSIONED_STATE_CHANGED');
+  check(inspection.structureValid, 'BACKEND_COMMISSIONED_STATE_CHANGED');
+  return inspection.decision;
+}
+
+export function inspectCommissionedBuildIdentity(predecessorBuildId, baselineSha) {
+  return { validSha: /^[a-f0-9]{40}$/.test(baselineSha ?? ''),
+    buildMatches: predecessorBuildId === baselineSha,
+    buildIdFormatValid: buildIdPattern.test(predecessorBuildId ?? '') };
+}
+
+export function assertCommissionedBuildIdentity(inspection) {
+  check(inspection.validSha && inspection.buildMatches, 'BACKEND_COMMISSIONED_STATE_CHANGED');
+}
+
+export function inspectHistoricalCommissioningBindings(historicalBindings, decision) {
+  const rows = [
+    ['currentConfigurationDigest', 'requiredConfigurationDigest'],
+    ['requiredAssemblyDigest', 'requiredAssemblyDigest'],
+    ['requiredRuntimeAssemblyDigest', 'requiredRuntimeAssemblyDigest']
+  ].map(([baselineKey, decisionKey]) => {
+    const expected = historicalBindings?.[baselineKey];
+    const observed = decision?.[decisionKey];
+    const known = typeof expected === 'string' && typeof observed === 'string';
+    return { key: baselineKey, expected, observed, known, pass: known && expected === observed };
+  });
+  return { rows, pass: !!historicalBindings && rows.every(row => row.pass) };
+}
+
+export function assertHistoricalCommissioningBindings(inspection) {
+  check(inspection.pass, 'BACKEND_COMMISSIONED_STATE_CHANGED');
+}
+
+export function inspectCommissionedHealth(health, baselineSha, validateHealth) {
+  let healthPass = false;
+  try { validateHealth(health, baselineSha); healthPass = true; } catch { /* use the release validator's exact predicate */ }
+  const body = health?.body?.result ?? health?.body;
+  const checks = {
+    http200: health?.status === 200,
+    statusHealthy: body?.status === 'Healthy',
+    buildMatchesLiveCommit: body?.buildId === baselineSha,
+    production: body?.environment === 'Production',
+    databaseHealthy: body?.databaseStatus === 'Healthy',
+    redisHealthy: body?.redisStatus === 'Healthy',
+    keyStoreHealthy: body?.dataProtectionKeyStoreStatus === 'Healthy',
+    recoveryClear: health?.recovery === null,
+    paymentAvailable: body?.paymentAvailability === 'Available'
+  };
+  return { healthPass, checks, paymentPass: checks.paymentAvailable };
+}
+
+export function assertCommissionedHealth(inspection) {
+  check(inspection.healthPass, 'BACKEND_COMMISSIONED_STATE_CHANGED');
+  check(inspection.paymentPass, 'BACKEND_COMMISSIONED_STATE_CHANGED');
+}
+
+export function inspectCommissionedRenderService(service, validateRender) {
+  let target = false;
+  try { validateRender(service, [], false, {}); target = true; } catch { /* report as a fixed predicate */ }
+  const d = service?.serviceDetails;
+  const checks = {
+    target,
+    plan: d?.plan === 'starter', buildPlan: d?.buildPlan === 'starter', instances: d?.numInstances === 1,
+    region: d?.region === 'frankfurt', maintenanceOff: d?.maintenanceMode?.enabled === false,
+    noServiceDisk: !!service && !service.disk, noDetailDisk: !!d && !d.disk
+  };
+  return { checks, pass: Object.values(checks).every(Boolean) };
+}
+
+export function assertCommissionedRenderService(inspection) {
+  check(inspection.pass, 'BACKEND_RENDER_DRIFT');
+}
+
+export function inspectCommissionedDeploymentHistory(deployments) {
+  const live = deployments.filter(row => row.status === 'live');
+  return { live, oneLive: live.length === 1,
+    noActive: deployments.every(row => !activeRender.has(row.status)),
+    pass: live.length === 1 && deployments.every(row => !activeRender.has(row.status)) };
+}
+
+export function assertCommissionedDeploymentHistory(inspection) {
+  check(inspection.pass, 'BACKEND_RENDER_DRIFT');
+}
+
+export function inspectCommissionedDeploymentIdentity(liveDeployment, baselineProof, laterObservation) {
+  const liveId = liveDeployment?.id;
+  const liveSha = liveDeployment?.commit?.id;
+  const original = liveId === baselineProof?.renderDeployId && liveSha === baselineProof?.renderSha;
+  const reconciled = baselineProof?.renderSha === laterObservation?.renderSha &&
+    liveId === laterObservation?.renderDeployId && liveSha === laterObservation?.renderSha;
+  return { original, reconciled, pass: original || reconciled };
+}
+
 // The legacy protected endpoint describes the earlier Held operating mode.
 // For a commissioned Normal release, record separately the evidence actually
 // checked: provider configuration readbacks, commissioning/build provenance,
@@ -252,12 +370,7 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   // 1. Authenticated commissioned-Normal baseline (read-only throughout).
   clock();
   const service = await api.render(servicePath);
-  try { validateRender(service, [], false, {}); }
-  catch { throw new BackendSuccessorReleaseDenied('BACKEND_RENDER_DRIFT'); }
-  const details = service.serviceDetails;
-  check(details.plan === 'starter' && details.buildPlan === 'starter' && details.numInstances === 1 &&
-    details.region === 'frankfurt' && details.maintenanceMode?.enabled === false &&
-    !details.disk && !service.disk, 'BACKEND_RENDER_DRIFT');
+  assertCommissionedRenderService(inspectCommissionedRenderService(service, validateRender));
   const readEnvVar = async key => {
     const envVar = await api.render(`${servicePath}/env-vars/${key}`);
     check(envVar?.key === key && typeof envVar.value === 'string', 'BACKEND_RUNTIME_CONFIGURATION_CHANGED');
@@ -278,21 +391,14 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   const decisionBytes = Buffer.from(
     await readEnvVar('App__AQGreenV2__Commissioning__DecisionJsonBase64'), 'base64');
   const decisionPin = await readEnvVar('App__AQGreenV2__Commissioning__DecisionSha256');
-  check(decisionBytes.length > 0 && decisionBytes.length <= 65536, 'BACKEND_COMMISSIONED_STATE_CHANGED');
-  check(sha256(decisionBytes) === decisionPin, 'BACKEND_COMMISSIONED_STATE_CHANGED');
-  let decision;
-  try { decision = JSON.parse(decisionBytes.toString('utf8')); }
-  catch { throw new BackendSuccessorReleaseDenied('BACKEND_COMMISSIONED_STATE_CHANGED'); }
-  check(decision && typeof decision === 'object' && !Array.isArray(decision) &&
-    decision.contractVersion === decisionContract && typeof decision.decisionId === 'string' &&
-    decision.decisionId.length > 0 && decision.decisionId.length <= 512 &&
-    digestKeys.every(key => nonzeroHash(decision[key])), 'BACKEND_COMMISSIONED_STATE_CHANGED');
+  const decisionInspection = inspectCommissioningDecision(decisionBytes, decisionPin);
+  const decision = assertCommissioningDecision(decisionInspection);
   const deploys = await deploymentHistory(api, 'render');
-  const live = deploys.filter(row => row.status === 'live');
-  check(live.length === 1 && deploys.every(row => !activeRender.has(row.status)), 'BACKEND_RENDER_DRIFT');
+  const historyInspection = inspectCommissionedDeploymentHistory(deploys);
+  assertCommissionedDeploymentHistory(historyInspection);
+  const live = historyInspection.live;
   const baselineSha = live[0].commit?.id;
-  check(/^[a-f0-9]{40}$/.test(baselineSha ?? '') && predecessorBuildId === baselineSha,
-    'BACKEND_COMMISSIONED_STATE_CHANGED');
+  assertCommissionedBuildIdentity(inspectCommissionedBuildIdentity(predecessorBuildId, baselineSha));
   // For the first combined successor, the authenticated full-release receipt
   // identifies the commissioned Render deployment, not merely its commit. A
   // later verified successor has a different legitimate live deployment and
@@ -309,22 +415,16 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
     const proof = options.validateBaselineReceipt(options.baselineRows, options.evidencePlan.baseline, q,
       options.evidencePlan.baselinePolicyProof);
     const historicalBindings = proof.origin?.d10RuntimeBindings;
-    check(historicalBindings && historicalBindings.currentConfigurationDigest === decision.requiredConfigurationDigest &&
-      historicalBindings.requiredAssemblyDigest === decision.requiredAssemblyDigest &&
-      historicalBindings.requiredRuntimeAssemblyDigest === decision.requiredRuntimeAssemblyDigest,
-    'BACKEND_COMMISSIONED_STATE_CHANGED');
-    const original = live[0].id === proof.renderDeployId && baselineSha === proof.renderSha;
+    assertHistoricalCommissioningBindings(inspectHistoricalCommissioningBindings(historicalBindings, decision));
     const observed = validateFailedFrontendRecord().observedBackend;
-    const reconciled = proof.renderSha === observed.renderSha &&
-      live[0].id === observed.renderDeployId && baselineSha === observed.renderSha;
-    check(original || reconciled, 'BACKEND_RENDER_DRIFT');
-    renderBaselineProvenance = original ? 'FULL_RELEASE_RECEIPT' : 'RECONCILED_LATER_OBSERVATION';
+    const deploymentIdentity = inspectCommissionedDeploymentIdentity(live[0], proof, observed);
+    check(deploymentIdentity.pass, 'BACKEND_RENDER_DRIFT');
+    renderBaselineProvenance = deploymentIdentity.original ? 'FULL_RELEASE_RECEIPT' : 'RECONCILED_LATER_OBSERVATION';
   }
   const health = await api.health();
-  try { validateHealth(health, baselineSha); }
-  catch { throw new BackendSuccessorReleaseDenied('BACKEND_COMMISSIONED_STATE_CHANGED'); }
+  const healthInspection = inspectCommissionedHealth(health, baselineSha, validateHealth);
+  assertCommissionedHealth(healthInspection);
   const state = (health.body.result ?? health.body).paymentAvailability;
-  check(state === 'Available', 'BACKEND_COMMISSIONED_STATE_CHANGED');
   const baselineHealthObservation = healthObservation(health);
   const compare = await api.gh(`/compare/${baselineSha}...${q.sha}`);
   const frontendPrefix = `${targets.vercel.rootDirectory}/`;

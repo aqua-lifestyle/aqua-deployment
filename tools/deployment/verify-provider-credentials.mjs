@@ -3,17 +3,28 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { clients, targets, standingPolicy, validateRender, deploymentHistory } from './release-control.mjs';
+import { clients, targets, standingPolicy, policyDigest, validateRender, validateHealth,
+  deploymentHistory, authenticateHistoricalPolicy, validateBaselineReceipt } from './release-control.mjs';
 import { validateFailedRenderReconciliation } from './historical-release-reconciliation.mjs';
 import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
-import { runtimeSettings, cleanStartRuntimeSettings } from './runtime-readiness.mjs';
+import { readGitHubArtifact, readGitHubArtifactFiles, validateArtifact } from './github-evidence.mjs';
+import { runtimeSettings, cleanStartRuntimeSettings, normalRuntimeSettings } from './runtime-readiness.mjs';
 import { memberRuntimeSettings } from './member-release.mjs';
+import { inspectCommissionedBuildIdentity, inspectCommissioningDecision, inspectCommissionedDeploymentHistory,
+  inspectCommissionedDeploymentIdentity, inspectCommissionedHealth, inspectCommissionedRenderService,
+  inspectHistoricalCommissioningBindings } from './backend-successor-release.mjs';
 const nativeSource = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
 const heldFrontend = JSON.parse(readFileSync(new URL('../../governance/held-frontend-source-evidence-20261029.json', import.meta.url)));
 
 const approvedRenderUser = 'usr-d9f04o3tqb8s73bbhjbg';
 const executor = targets.executor.repository;
 const denied = () => { throw Error('PROVIDER_CHECK_CONTEXT_DENIED'); };
+const commissionedFailure = Object.freeze({ runId: '44245360791', sha: 'e25fa6ec5d604e1f616aece4ddc9741429549bd3',
+  admissionArtifactId: '14401816374', admissionArtifactName: 'verified-admission-44245360791-1' });
+const safeHash = value => /^[a-f0-9]{64}$/.test(value ?? '') ? value : 'UNVERIFIABLE';
+const safeSha = value => /^[a-f0-9]{40}$/.test(value ?? '') ? value : 'UNVERIFIABLE';
+const safeRenderId = value => /^dep-[a-z0-9]+$/.test(value ?? '') ? value : 'UNVERIFIABLE';
+const passFailUnknown = value => value === undefined || value === null ? 'UNKNOWN' : value ? 'PASS' : 'FAIL';
 
 export function providerCheckContext(env, checkoutSha) {
   if (env.GITHUB_ACTIONS !== 'true' || env.GITHUB_EVENT_NAME !== 'workflow_dispatch' ||
@@ -29,8 +40,9 @@ export function providerCheckContext(env, checkoutSha) {
 
 export function providerCheckMode(env) {
   const mode = env.PROVIDER_CHECK_MODE ?? 'verify';
-  if (!['verify', 'native-recovery-readback', 'render-env-diagnostic', 'render-baseline-diagnostic'].includes(mode)) denied();
-  if (['render-env-diagnostic', 'render-baseline-diagnostic'].includes(mode) &&
+  if (!['verify', 'native-recovery-readback', 'render-env-diagnostic', 'render-baseline-diagnostic',
+    'render-commissioned-state-diagnostic'].includes(mode)) denied();
+  if (['render-env-diagnostic', 'render-baseline-diagnostic', 'render-commissioned-state-diagnostic'].includes(mode) &&
     (!/^[1-9]\d*$/.test(env.GITHUB_RUN_ID ?? '') || env.GITHUB_RUN_ATTEMPT !== '1')) denied();
   return mode;
 }
@@ -190,6 +202,285 @@ export async function diagnoseRenderEnvironment(env, { checkoutSha, fetcher = fe
       ...(status === undefined ? {} : { httpStatus: status }), result: 'FAIL', classification });
     return false;
   }
+}
+
+async function selectedCommissionedBaseline(api) {
+  const failed = await api.executor(`/actions/runs/${commissionedFailure.runId}`);
+  if (failed?.id !== Number(commissionedFailure.runId) || failed.run_attempt !== 1 ||
+    failed.head_sha !== commissionedFailure.sha || failed.event !== 'workflow_dispatch' ||
+    failed.head_branch !== 'main' || failed.path !== '.github/workflows/deploy.yml' ||
+    failed.status !== 'completed' || failed.conclusion !== 'failure' ||
+    failed.repository?.full_name !== executor || failed.head_repository?.full_name !== executor)
+    throw Error('FAILED_RELEASE_PROVENANCE_UNVERIFIED');
+  const repository = await api.executor('');
+  if (repository?.full_name !== executor || !Number.isSafeInteger(repository.id))
+    throw Error('EXECUTOR_REPOSITORY_UNVERIFIED');
+  const runArtifacts = await api.executor(`/actions/runs/${commissionedFailure.runId}/artifacts?per_page=100`);
+  if (!Array.isArray(runArtifacts?.artifacts) || runArtifacts.total_count !== runArtifacts.artifacts.length ||
+    runArtifacts.total_count > 100) throw Error('FAILED_RELEASE_ARTIFACT_INVENTORY_UNVERIFIED');
+  const admissionRows = runArtifacts.artifacts.filter(row => row.name === commissionedFailure.admissionArtifactName &&
+    String(row.id) === commissionedFailure.admissionArtifactId);
+  if (admissionRows.length !== 1) throw Error('FAILED_RELEASE_ADMISSION_ARTIFACT_UNVERIFIED');
+  const admissionDescriptor = validateArtifact(admissionRows[0], commissionedFailure.runId,
+    commissionedFailure.sha, commissionedFailure.admissionArtifactName, repository.id);
+  const admissionFiles = await readGitHubArtifactFiles(api, 'executor', admissionDescriptor,
+    ['admission-receipt.json', 'evidence-plan.json']);
+  let admission, plan;
+  try {
+    admission = JSON.parse(admissionFiles['admission-receipt.json'].toString('utf8'));
+    plan = JSON.parse(admissionFiles['evidence-plan.json'].toString('utf8'));
+  } catch { throw Error('FAILED_RELEASE_ADMISSION_CONTENT_UNVERIFIED'); }
+  if (admission?.contract !== 'aqua.github-evidence-admission' ||
+    admission.releaseRunId !== Number(commissionedFailure.runId) || admission.releaseRunAttempt !== 1 ||
+    admission.executorRepository !== executor || admission.executorSha !== commissionedFailure.sha ||
+    admission.qualificationOnly !== false || admission.combinedRelease !== 'post-normal-backend-frontend-v1' ||
+    plan?.policySha256 !== admission.policySha256 || !plan.baseline || !plan.baselinePolicyProof ||
+    plan.baselinePolicyProof.executorSha !== plan.baseline.sha ||
+    plan.policySha256 !== policyDigest(standingPolicy))
+    throw Error('FAILED_RELEASE_BASELINE_SELECTION_UNVERIFIED');
+
+  const baseline = plan.baseline;
+  const baselineRun = await api.executor(`/actions/runs/${baseline.runId}`);
+  if (baselineRun?.id !== Number(baseline.runId) || baselineRun.run_attempt !== baseline.runAttempt ||
+    baselineRun.head_sha !== baseline.sha || baselineRun.event !== 'workflow_dispatch' ||
+    baselineRun.head_branch !== 'main' || baselineRun.path !== '.github/workflows/deploy.yml' ||
+    baselineRun.status !== 'completed' || baselineRun.conclusion !== 'success' ||
+    baselineRun.repository?.full_name !== executor || baselineRun.head_repository?.full_name !== executor)
+    throw Error('SELECTED_BASELINE_RUN_UNVERIFIED');
+  const baselineArtifacts = await api.executor(`/actions/runs/${baseline.runId}/artifacts?per_page=100`);
+  if (!Array.isArray(baselineArtifacts?.artifacts) || baselineArtifacts.total_count !== baselineArtifacts.artifacts.length ||
+    baselineArtifacts.total_count > 100) throw Error('SELECTED_BASELINE_ARTIFACT_INVENTORY_UNVERIFIED');
+  const auditName = `production-release-audit-${baseline.runId}-${baseline.runAttempt}`;
+  const selectedAudit = baselineArtifacts.artifacts.filter(row => String(row.id) === baseline.artifactId && row.name === auditName);
+  if (selectedAudit.length !== 1) throw Error('SELECTED_BASELINE_ARTIFACT_SUBSTITUTED');
+  const auditDescriptor = validateArtifact(selectedAudit[0], baseline.runId, baseline.sha, auditName, repository.id);
+  const auditBytes = await readGitHubArtifact(api, 'executor', auditDescriptor, 'release-report.jsonl');
+  let rows;
+  try {
+    const lines = auditBytes.toString('utf8').trim().split('\n');
+    if (!lines.length || lines.length > 100) throw Error('INVALID_AUDIT_SIZE');
+    rows = lines.map(line => JSON.parse(line));
+  } catch { throw Error('SELECTED_BASELINE_AUDIT_UNVERIFIABLE'); }
+  const historicalPolicy = await authenticateHistoricalPolicy(api, auditDescriptor,
+    plan.baselinePolicyProof.policySha256);
+  const proof = validateBaselineReceipt(rows, { artifactId: baseline.artifactId, runId: baseline.runId,
+    runAttempt: baseline.runAttempt, sha: baseline.sha }, { policySha256: plan.policySha256 }, historicalPolicy);
+  if (!proof.origin?.d10RuntimeBindings) throw Error('SELECTED_BASELINE_D10_BINDINGS_UNAVAILABLE');
+  return { proof, baseline, selectedByReleaseRunId: Number(commissionedFailure.runId) };
+}
+
+// GET-only diagnostic for the exact failed combined release. All D10 checks
+// below call the same pure inspectors and assertions used by the release path.
+export async function diagnoseRenderCommissionedState(env, { checkoutSha, fetcher = fetch, emit = () => {},
+  loadBaseline = selectedCommissionedBaseline } = {}) {
+  providerCheckContext(env, checkoutSha);
+  if (providerCheckMode(env) !== 'render-commissioned-state-diagnostic') denied();
+  const report = row => emit({ contract: 'aqua.commissioned-state-read-diagnostic', version: 1,
+    executorSha: checkoutSha, runId: env.GITHUB_RUN_ID, runAttempt: 1,
+    failedReleaseRunId: commissionedFailure.runId, renderServiceId: targets.render.id, ...row });
+  if (typeof env.RENDER_API_KEY !== 'string' || !env.RENDER_API_KEY.trim() ||
+    typeof env.GH_TOKEN !== 'string' || !env.GH_TOKEN.trim()) {
+    report({ diagnosticStatus: 'INCOMPLETE', credentials: 'UNAVAILABLE', predicates: {} });
+    return false;
+  }
+
+  let artifactDownload = false, lastHttpStatus;
+  const servicePath = `/services/${targets.render.id}`;
+  const renderKeys = new Set([...Object.keys(normalRuntimeSettings),
+    'App__AQGreenV2__Commissioning__DecisionJsonBase64',
+    'App__AQGreenV2__Commissioning__DecisionSha256', 'Deployment__BuildId']);
+  const githubApiPathAllowed = (pathname, search) => {
+    if (pathname === `/repos/${executor}` && !search) return true;
+    if (pathname === `/repos/${executor}/actions/runs/${commissionedFailure.runId}` && !search) return true;
+    if (pathname === `/repos/${executor}/actions/runs/${commissionedFailure.runId}/artifacts` && search === '?per_page=100') return true;
+    if (pathname === `/repos/${executor}/actions/artifacts/${commissionedFailure.admissionArtifactId}` && !search) return true;
+    if (pathname === `/repos/${executor}/actions/artifacts/${commissionedFailure.admissionArtifactId}/zip` && !search) return true;
+    if (/^\/repos\/aqua-lifestyle\/aqua-deployment\/actions\/runs\/43429695806$/.test(pathname) && !search) return true;
+    if (pathname === `/repos/${executor}/actions/runs/43429695806/artifacts` && search === '?per_page=100') return true;
+    if (/^\/repos\/aqua-lifestyle\/aqua-deployment\/actions\/artifacts\/14040001166(?:\/zip)?$/.test(pathname) && !search) return true;
+    return /^\/repos\/aqua-lifestyle\/aqua-deployment\/contents\/tools\/deployment\/(?:approved-security-tests|unattended-policy)\.json$/.test(pathname) &&
+      search === '?ref=e42e5288502085368eb1c7c9017643f63f9d2b19';
+  };
+  const getOnlyFetch = async (url, options = {}) => {
+    const method = options.method ?? 'GET';
+    if (method !== 'GET' || options.body !== undefined) throw Error('GET_ONLY_REQUIRED');
+    const parsed = new URL(url);
+    if (parsed.origin === 'https://api.render.com') {
+      const renderPath = parsed.pathname.replace(/^\/v1(?=\/)/, '');
+      const envMatch = renderPath.match(new RegExp(`^${servicePath}/env-vars/([^/]+)$`));
+      const history = renderPath === `${servicePath}/deploys` && parsed.searchParams.get('limit') === '100' &&
+        [...parsed.searchParams.keys()].sort().join() === (parsed.searchParams.has('cursor') ? 'cursor,limit' : 'limit') &&
+        (!parsed.searchParams.has('cursor') || /^[A-Za-z0-9_-]{1,256}$/.test(parsed.searchParams.get('cursor')));
+      if (options.redirect !== 'error' ||
+        (renderPath !== servicePath && !history && !(envMatch && renderKeys.has(decodeURIComponent(envMatch[1])))))
+        throw Error('FIXED_RENDER_GET_REQUIRED');
+    } else if (url === targets.render.healthUrl) {
+      if (options.redirect !== 'error' || options.headers?.Authorization !== undefined)
+        throw Error('UNAUTHENTICATED_HEALTH_GET_REQUIRED');
+    } else if (parsed.origin === 'https://api.github.com') {
+      if (!githubApiPathAllowed(parsed.pathname, parsed.search) ||
+        !['error', 'manual'].includes(options.redirect)) throw Error('FIXED_GITHUB_GET_REQUIRED');
+      if (parsed.pathname.endsWith('/zip') && (!artifactDownload || options.redirect !== 'manual'))
+        throw Error('PINNED_ARTIFACT_DOWNLOAD_REQUIRED');
+    } else if (artifactDownload && parsed.protocol === 'https:' &&
+      (parsed.hostname.endsWith('.blob.core.windows.net') || parsed.hostname === 'pipelines.actions.githubusercontent.com')) {
+      if (options.redirect !== 'error' || options.headers?.Authorization !== undefined)
+        throw Error('UNAUTHENTICATED_ARTIFACT_GET_REQUIRED');
+    } else throw Error('FIXED_GET_DESTINATION_REQUIRED');
+    const response = await fetcher(url, options);
+    lastHttpStatus = response.status;
+    return response;
+  };
+  const api = clients({ RENDER_API_KEY: env.RENDER_API_KEY, GH_TOKEN: env.GH_TOKEN }, getOnlyFetch);
+  const readArtifactFiles = async (descriptor, names) => {
+    artifactDownload = true;
+    try { return await readGitHubArtifactFiles(api, 'executor', descriptor, names); }
+    finally { artifactDownload = false; }
+  };
+  const readArtifact = async (descriptor, name) => {
+    artifactDownload = true;
+    try { return await readGitHubArtifact(api, 'executor', descriptor, name); }
+    finally { artifactDownload = false; }
+  };
+  let baselineSelection, baselineError;
+  try { baselineSelection = await loadBaseline(api); }
+  catch (error) {
+    // Only fixed machine codes can cross the diagnostic boundary. Native/API
+    // errors can contain request details or signed provider data.
+    baselineError = /^[A-Z][A-Z0-9_]{0,127}$/.test(error?.message ?? '') ? error.message :
+      'SELECTED_BASELINE_UNAVAILABLE';
+  }
+
+  const safeRenderRead = async (check, path) => {
+    lastHttpStatus = undefined;
+    try {
+      const value = await api.render(path);
+      return { known: true, value, httpStatus: lastHttpStatus };
+    } catch {
+      return { known: false, httpStatus: lastHttpStatus, check };
+    }
+  };
+  let serviceRead;
+  try { serviceRead = await safeRenderRead('service', servicePath); }
+  catch { serviceRead = { known: false, check: 'service' }; }
+  const serviceInspection = serviceRead.known ? inspectCommissionedRenderService(serviceRead.value, validateRender) : null;
+  const serviceProfileChecks = serviceInspection ? Object.fromEntries(Object.entries(serviceInspection.checks)
+    .map(([key, value]) => [key, passFailUnknown(value)])) : { status: 'UNKNOWN' };
+
+  const normalSettings = {};
+  for (const [key, allowed] of Object.entries(normalRuntimeSettings)) {
+    const value = await safeRenderRead(key, `${servicePath}/env-vars/${key}`);
+    const matches = value.known && value.value?.key === key && typeof value.value.value === 'string' && allowed.includes(value.value.value);
+    const safeObserved = value.known && typeof value.value?.value === 'string' &&
+      [...new Set([...Object.values(normalRuntimeSettings), ...Object.values(cleanStartRuntimeSettings)].flat())]
+        .includes(value.value.value) ? value.value.value : 'OTHER_OR_UNVERIFIABLE';
+    normalSettings[key] = { result: value.known ? passFailUnknown(matches) : 'UNKNOWN',
+      expected: allowed, observed: value.known ? safeObserved : 'UNKNOWN',
+      httpStatus: value.httpStatus ?? null };
+  }
+
+  const decisionValue = await safeRenderRead('commissioning-decision',
+    `${servicePath}/env-vars/App__AQGreenV2__Commissioning__DecisionJsonBase64`);
+  const pinValue = await safeRenderRead('commissioning-decision-pin',
+    `${servicePath}/env-vars/App__AQGreenV2__Commissioning__DecisionSha256`);
+  const buildValue = await safeRenderRead('deployment-build-id', `${servicePath}/env-vars/Deployment__BuildId`);
+  const decisionBytes = decisionValue.known && typeof decisionValue.value?.value === 'string' ?
+    Buffer.from(decisionValue.value.value, 'base64') : null;
+  const decisionPin = pinValue.known && typeof pinValue.value?.value === 'string' ? pinValue.value.value : null;
+  const decisionInspection = decisionBytes ? inspectCommissioningDecision(decisionBytes, decisionPin) : null;
+
+  let historyRead;
+  try { historyRead = { known: true, deployments: await deploymentHistory(api, 'render') }; }
+  catch { historyRead = { known: false }; }
+  const historyInspection = historyRead.known ? inspectCommissionedDeploymentHistory(historyRead.deployments) : null;
+  const live = historyInspection?.live?.length === 1 ? historyInspection.live[0] : null;
+  const liveId = live && /^dep-[a-z0-9]+$/.test(live.id ?? '') ? live.id : 'UNVERIFIABLE';
+  const liveSha = safeSha(live?.commit?.id);
+  const predecessorBuildId = buildValue.known && typeof buildValue.value?.value === 'string' ? buildValue.value.value : null;
+  const buildIdentity = live && buildValue.known ? inspectCommissionedBuildIdentity(predecessorBuildId, live.commit?.id) : null;
+
+  const decision = decisionInspection?.decision;
+  const historicalBindings = baselineSelection?.proof?.origin?.d10RuntimeBindings;
+  const bindingInspection = decision && historicalBindings ?
+    inspectHistoricalCommissioningBindings(historicalBindings, decision) : null;
+  let deploymentIdentity = null;
+  if (live && baselineSelection) {
+    try { deploymentIdentity = inspectCommissionedDeploymentIdentity(live, baselineSelection.proof,
+      validateFailedFrontendRecord().observedBackend); } catch { /* pinned later observation unavailable */ }
+  }
+
+  let healthRead;
+  try { healthRead = { known: true, value: await api.health() }; }
+  catch { healthRead = { known: false }; }
+  const healthInspection = healthRead.known && live ?
+    inspectCommissionedHealth(healthRead.value, live.commit?.id, validateHealth) : null;
+  const healthResults = healthInspection ? Object.fromEntries(Object.entries(healthInspection.checks)
+    .map(([key, value]) => [key, passFailUnknown(value)])) : { status: 'UNKNOWN' };
+  const outputBindings = bindingInspection ? Object.fromEntries(bindingInspection.rows.map(row => [row.key, {
+    result: passFailUnknown(row.pass), expected: safeHash(row.expected), observed: safeHash(row.observed)
+  }])) : { status: 'UNKNOWN' };
+  const d10Decision = decisionInspection ? {
+    length: { result: passFailUnknown(decisionInspection.lengthValid), expected: '1..65536 bytes', observed: decisionInspection.byteLength },
+    sha256Pin: { result: passFailUnknown(decisionInspection.pinMatches), expected: safeHash(decisionPin), observed: safeHash(decisionInspection.decisionSha256) },
+    jsonObject: passFailUnknown(decisionInspection.objectValid),
+    contract: passFailUnknown(decisionInspection.contractValid),
+    decisionIdValidity: passFailUnknown(decisionInspection.decisionIdValid),
+    requiredDigestFields: passFailUnknown(decisionInspection.digestFieldsValid)
+  } : { length: 'UNKNOWN', sha256Pin: 'UNKNOWN', jsonObject: 'UNKNOWN', contract: 'UNKNOWN',
+    decisionIdValidity: 'UNKNOWN', requiredDigestFields: 'UNKNOWN' };
+  const currentFailures = [];
+  if (decisionInspection) {
+    if (!decisionInspection.lengthValid) currentFailures.push('decision-length');
+    if (!decisionInspection.pinMatches) currentFailures.push('decision-sha256-pin');
+    if (!decisionInspection.jsonValid) currentFailures.push('decision-json');
+    if (!decisionInspection.structureValid) currentFailures.push('decision-structure');
+  }
+  if (buildIdentity && !(buildIdentity.validSha && buildIdentity.buildMatches))
+    currentFailures.push('deployment-build-identity');
+  if (bindingInspection) for (const comparison of bindingInspection.rows)
+    if (!comparison.pass) currentFailures.push(`historical-d10-bindings:${comparison.key}`);
+  if (healthInspection && !healthInspection.healthPass) currentFailures.push('backend-health');
+  if (healthInspection && !healthInspection.paymentPass) currentFailures.push('payment-availability');
+  const hasUnknown = !baselineSelection || !serviceInspection || Object.values(normalSettings).some(x => x.result === 'UNKNOWN') ||
+    !historyInspection || !decisionInspection || !buildIdentity || !deploymentIdentity || !bindingInspection || !healthInspection;
+  report({ diagnosticStatus: hasUnknown ? 'COMPLETE_WITH_UNKNOWN' : 'COMPLETE', observedAt: new Date().toISOString(),
+    historicalFailurePredicate: 'UNKNOWN_NOT_RETAINED_IN_FAILED_RUN_AUDIT',
+    baselineEvidence: baselineSelection ? { result: 'PASS', selectedByReleaseRunId: baselineSelection.selectedByReleaseRunId,
+      runId: baselineSelection.baseline.runId, runAttempt: baselineSelection.baseline.runAttempt,
+      executorSha: safeSha(baselineSelection.baseline.sha), renderDeployId: safeRenderId(baselineSelection.proof.renderDeployId),
+      renderSha: safeSha(baselineSelection.proof.renderSha), d10Bindings: Object.fromEntries(
+        ['currentConfigurationDigest','requiredAssemblyDigest','requiredRuntimeAssemblyDigest'].map(key =>
+          [key, safeHash(historicalBindings?.[key])])) } : { result: 'UNKNOWN', code: baselineError ?? 'SELECTED_BASELINE_UNAVAILABLE' },
+    service: { result: serviceInspection ? passFailUnknown(serviceInspection.pass) : 'UNKNOWN', checks: serviceProfileChecks },
+    normalRuntimeSettings: normalSettings,
+    deploymentHistory: historyInspection ? { observedCount: historyRead.deployments.length,
+      oneLive: passFailUnknown(historyInspection.oneLive), noActiveDeployments: passFailUnknown(historyInspection.noActive),
+      deployments: historyRead.deployments.map(row => ({ id: safeRenderId(row?.id), status: row?.status,
+        commitSha: safeSha(row?.commit?.id) })), liveDeployment: live ? { id: liveId, commitSha: liveSha } : null
+    } : { result: 'UNKNOWN' },
+    deploymentIdentity: { liveCommitSha: liveSha, deploymentBuildId: safeSha(predecessorBuildId),
+      shaValid: buildIdentity ? passFailUnknown(buildIdentity.validSha) : 'UNKNOWN',
+      buildIdMatchesLiveCommit: buildIdentity ? passFailUnknown(buildIdentity.buildMatches) : 'UNKNOWN',
+      selectedReceiptOrReconciliation: deploymentIdentity ? {
+        result: passFailUnknown(deploymentIdentity.pass), originalReceiptMatch: passFailUnknown(deploymentIdentity.original),
+        laterAuthenticatedObservationMatch: passFailUnknown(deploymentIdentity.reconciled),
+        expectedOriginal: { id: safeRenderId(baselineSelection?.proof?.renderDeployId),
+          commitSha: safeSha(baselineSelection?.proof?.renderSha) },
+        expectedLaterAuthenticated: { id: safeRenderId(validateFailedFrontendRecord().observedBackend.renderDeployId),
+          commitSha: safeSha(validateFailedFrontendRecord().observedBackend.renderSha) },
+        observed: { id: liveId, commitSha: liveSha }
+      } : 'UNKNOWN' },
+    commissioningDecision: d10Decision, historicalD10Comparisons: outputBindings,
+    backendHealth: healthResults,
+    paymentAvailability: healthRead?.known ? {
+      expected: 'Available', observed: ['Available','Unavailable','Held'].includes(
+        (healthRead.value.body?.result ?? healthRead.value.body)?.paymentAvailability) ?
+        (healthRead.value.body?.result ?? healthRead.value.body).paymentAvailability : 'UNVERIFIABLE',
+      result: healthInspection ? passFailUnknown(healthInspection.paymentPass) : 'UNKNOWN'
+    } : { expected: 'Available', observed: 'UNKNOWN', result: 'UNKNOWN' },
+    currentFailingPredicates: currentFailures,
+    exactCurrentFailingPredicate: currentFailures[0] ?? (hasUnknown ? 'UNKNOWN' : 'NOT_ESTABLISHED') });
+  return true; // Diagnostic results never authorize or block a release by themselves.
 }
 
 export async function verifyProviderCredentials(env, { checkoutSha, fetcher = fetch, emit = () => {} }) {
@@ -419,6 +710,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (process.argv[2] === 'context') console.log(JSON.stringify({ check: 'trusted-main-context', result: 'PASS' }));
     else if (process.argv[2] === 'verify') {
       const operation = mode === 'render-baseline-diagnostic' ? diagnoseRenderBaseline :
+        mode === 'render-commissioned-state-diagnostic' ? diagnoseRenderCommissionedState :
         mode === 'render-env-diagnostic' ? diagnoseRenderEnvironment :
         mode === 'native-recovery-readback' ? observeNativeRecoveryBaseline : verifyProviderCredentials;
       if (!await operation(process.env, { checkoutSha, emit: row => console.log(JSON.stringify(row)) })) process.exitCode = 1;

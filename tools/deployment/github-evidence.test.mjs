@@ -8,7 +8,7 @@ import { fixture, source, previous, fixtureNow, zipFixture, runnerEnv } from './
 import { standingPolicy, policyDigest, evidencePlan, clients, admissionJobName, releaseKey } from './release-control.mjs';
 import { approvedInventory, approvedInventoryBytes, inventoryDigest, verifyApprovedDefinitions,
   verifyGitHubEvidence, verifyGitHubEvidenceForCapture, createGitHubAdmission, validateGitHubAdmission,
-  gitSourceDigest, sha256 } from './github-evidence.mjs';
+  gitSourceDigest, readGitHubArtifactFiles, sha256 } from './github-evidence.mjs';
 import { schemaSource } from './commission-schema-first.mjs';
 const now = () => fixtureNow;
 const verified = f => verifyGitHubEvidence(f.api, f.state.candidate, f.state.policy, f.readSourceDigest, now);
@@ -75,6 +75,35 @@ test('artifact ownership, digest, availability and archive contents must be veri
     await assert.rejects(f.execute());assert.equal(f.state.providerCalls,0);
   }
   const f=fixture();f.api.artifact=async()=>{throw Error('unavailable');};await assert.rejects(f.execute(),/unavailable/);assert.equal(f.state.providerCalls,0);
+});
+
+test('authenticated multi-file reads require the exact allowlisted admission members', async () => {
+  const archive = zipFixture('admission-receipt.json', '{}', { 'evidence-plan.json': '{}' });
+  const metadata = { id: 9100, name: 'verified-admission-456-1', expired: false,
+    size_in_bytes: archive.length, digest: `sha256:${sha256(archive)}`,
+    workflow_run: { id: 456, head_sha: source, head_branch: 'main', repository_id: 987, head_repository_id: 987 } };
+  const descriptor = { id: '9100', name: metadata.name, digest: metadata.digest,
+    runId: '456', sha: source, repositoryId: 987 };
+  const api = { executor: async route => {
+    assert.equal(route, '/actions/artifacts/9100'); return structuredClone(metadata);
+  }, artifact: async (owner, id) => {
+    assert.equal(owner, 'executor'); assert.equal(id, '9100'); return archive;
+  } };
+  const files = await readGitHubArtifactFiles(api, 'executor', descriptor,
+    ['admission-receipt.json', 'evidence-plan.json']);
+  assert.equal(files['admission-receipt.json'].toString(), '{}');
+  assert.equal(files['evidence-plan.json'].toString(), '{}');
+  const extraArchive = zipFixture('admission-receipt.json', '{}', { 'evidence-plan.json': '{}', 'other.json': '{}' });
+  api.artifact = async () => extraArchive;
+  api.executor = async route => {
+    const row = structuredClone(metadata); row.digest = `sha256:${sha256(extraArchive)}`; row.size_in_bytes = extraArchive.length;
+    assert.equal(route, '/actions/artifacts/9100'); return row;
+  };
+  const extraDescriptor = { ...descriptor, digest: `sha256:${sha256(extraArchive)}` };
+  await assert.rejects(readGitHubArtifactFiles(api, 'executor', descriptor,
+    ['admission-receipt.json', 'evidence-plan.json']), /ARTIFACT_SUBSTITUTED/);
+  await assert.rejects(readGitHubArtifactFiles(api, 'executor', extraDescriptor,
+    ['admission-receipt.json', 'evidence-plan.json']), /ARTIFACT_CONTENTS_INVALID/);
 });
 
 test('artifact substitution between listing, metadata and download is rejected', async () => {
