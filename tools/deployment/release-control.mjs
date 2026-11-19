@@ -591,20 +591,39 @@ export function clients(env, fetcher = fetch, reportGitHubRead = row => console.
       requireThat(['source', 'executor'].includes(owner) && positiveId(id),
         'GITHUB_ARTIFACT_INPUT_INVALID');
       const token = tokenFor(owner);
+      const failedDownload = (stage, category, httpStatus) => {
+        const error = new ReleaseFailure('GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
+        error.artifactDownloadDiagnostic = Object.freeze({ artifactId: id, stage, category,
+          ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}) });
+        return error;
+      };
+      const transportCategory = error => ({
+        AbortError: 'REQUEST_ABORTED', TimeoutError: 'REQUEST_TIMEOUT', TypeError: 'FETCH_TRANSPORT_ERROR'
+      })[error?.name] ?? ({ FIXED_GET_DESTINATION_REQUIRED: 'DESTINATION_POLICY_REJECTED',
+        FIXED_GITHUB_GET_REQUIRED: 'DESTINATION_POLICY_REJECTED', PINNED_ARTIFACT_DOWNLOAD_REQUIRED: 'DESTINATION_POLICY_REJECTED',
+        UNAUTHENTICATED_ARTIFACT_GET_REQUIRED: 'DESTINATION_POLICY_REJECTED' })[error?.message] ?? 'TRANSPORT_ERROR';
+      let stage = 'github_zip';
       try {
         const repository = owner === 'source' ? targets.repository : execution.repository;
-        const response = await fetcher(`https://api.github.com/repos/${repository}/actions/artifacts/${id}/zip`, {
-          redirect: 'manual', signal: AbortSignal.timeout(30_000),
-          headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
-        });
-        requireThat(response.status === 302, 'GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
+        let response;
+        try {
+          response = await fetcher(`https://api.github.com/repos/${repository}/actions/artifacts/${id}/zip`, {
+            redirect: 'manual', signal: AbortSignal.timeout(30_000),
+            headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+          });
+        } catch (error) { throw failedDownload(stage, transportCategory(error)); }
+        if (response.status !== 302) throw failedDownload(stage, 'HTTP_STATUS', response.status);
         const url = new URL(response.headers.get('location'));
         requireThat(url.protocol === 'https:' && !url.username && !url.password && !url.hash &&
           (!url.port || url.port === '443'), 'GITHUB_ARTIFACT_REDIRECT_INVALID');
         // GitHub supplies a short-lived archive URL. Never forward GitHub or
         // provider credentials to storage, and never log this signed URL.
-        const archive = await fetcher(url.href, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
-        requireThat(archive.ok && archive.body, 'GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
+        stage = 'redirected_storage';
+        let archive;
+        try { archive = await fetcher(url.href, { redirect: 'error', signal: AbortSignal.timeout(30_000) }); }
+        catch (error) { throw failedDownload(stage, transportCategory(error)); }
+        if (!archive.ok) throw failedDownload(stage, 'HTTP_STATUS', archive.status);
+        if (!archive.body) throw failedDownload(stage, 'EMPTY_BODY', archive.status);
         const chunks = []; let size = 0;
         for await (const chunk of archive.body) {
           size += chunk.length;
@@ -614,7 +633,7 @@ export function clients(env, fetcher = fetch, reportGitHubRead = row => console.
         return Buffer.concat(chunks);
       } catch (error) {
         if (error instanceof ReleaseFailure) throw error;
-        throw new ReleaseFailure('GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
+        throw failedDownload(stage, transportCategory(error));
       }
     },
     render: (route, body) => {

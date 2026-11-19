@@ -75,7 +75,7 @@ function fixture({ mutate = () => {}, baselineAvailable = true } = {}) {
     if (!baselineAvailable) throw Error('SELECTED_BASELINE_ARTIFACT_UNAVAILABLE');
     return { proof, baseline, selectedByReleaseRunId: 44245360791 };
   };
-  const run = () => diagnoseRenderCommissionedState(env, { checkoutSha: executorSha, fetcher, loadBaseline,
+  const run = (load = loadBaseline) => diagnoseRenderCommissionedState(env, { checkoutSha: executorSha, fetcher, loadBaseline: load,
     emit: row => reports.push(row) });
   return { env, values, service, deployment, health, decision, calls, reports, run };
 }
@@ -151,4 +151,18 @@ test('missing authenticated baseline evidence remains UNKNOWN and is not replace
   assert.equal(row.baselineEvidence.result, 'UNKNOWN');
   assert.equal(row.historicalD10Comparisons.status, 'UNKNOWN');
   assert.equal(row.diagnosticStatus, 'COMPLETE_WITH_UNKNOWN');
+});
+
+test('artifact download diagnostics report only the pinned artifact, stage, HTTP status and safe category', async () => {
+  const f = fixture();
+  const error = Error('GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
+  error.artifactDownloadDiagnostic = { artifactId: '14401816374', stage: 'redirected_storage',
+    category: 'HTTP_STATUS', httpStatus: 403 };
+  const signedUrl = 'https://storage.invalid/archive.zip?sig=private';
+  assert.equal(await f.run(async () => { throw Object.assign(error, { signedUrl }); }), true);
+  const baseline = f.reports.at(-1).baselineEvidence;
+  assert.equal(baseline.code, 'GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE');
+  assert.deepEqual(baseline.downloadFailure, { artifactId: '14401816374', stage: 'redirected_storage',
+    category: 'HTTP_STATUS', httpStatus: 403 });
+  assert.ok(!JSON.stringify(baseline).includes(signedUrl));
 });

@@ -342,13 +342,22 @@ export async function diagnoseRenderCommissionedState(env, { checkoutSha, fetche
     try { return await readGitHubArtifact(api, 'executor', descriptor, name); }
     finally { artifactDownload = false; }
   };
-  let baselineSelection, baselineError;
+  let baselineSelection, baselineError, baselineDownloadFailure;
   try { baselineSelection = await loadBaseline(api); }
   catch (error) {
     // Only fixed machine codes can cross the diagnostic boundary. Native/API
     // errors can contain request details or signed provider data.
     baselineError = /^[A-Z][A-Z0-9_]{0,127}$/.test(error?.message ?? '') ? error.message :
       'SELECTED_BASELINE_UNAVAILABLE';
+    const detail = error?.artifactDownloadDiagnostic;
+    if (/^[1-9]\d*$/.test(detail?.artifactId ?? '') &&
+      ['github_zip', 'redirected_storage'].includes(detail.stage) &&
+      ['HTTP_STATUS', 'EMPTY_BODY', 'REQUEST_ABORTED', 'REQUEST_TIMEOUT', 'FETCH_TRANSPORT_ERROR',
+        'DESTINATION_POLICY_REJECTED', 'TRANSPORT_ERROR'].includes(detail.category) &&
+      (detail.httpStatus === undefined || (Number.isInteger(detail.httpStatus) && detail.httpStatus >= 100 && detail.httpStatus <= 599))) {
+      baselineDownloadFailure = { artifactId: detail.artifactId, stage: detail.stage, category: detail.category,
+        ...(detail.httpStatus === undefined ? {} : { httpStatus: detail.httpStatus }) };
+    }
   }
 
   const safeRenderRead = async (check, path) => {
@@ -450,7 +459,8 @@ export async function diagnoseRenderCommissionedState(env, { checkoutSha, fetche
       executorSha: safeSha(baselineSelection.baseline.sha), renderDeployId: safeRenderId(baselineSelection.proof.renderDeployId),
       renderSha: safeSha(baselineSelection.proof.renderSha), d10Bindings: Object.fromEntries(
         ['currentConfigurationDigest','requiredAssemblyDigest','requiredRuntimeAssemblyDigest'].map(key =>
-          [key, safeHash(historicalBindings?.[key])])) } : { result: 'UNKNOWN', code: baselineError ?? 'SELECTED_BASELINE_UNAVAILABLE' },
+          [key, safeHash(historicalBindings?.[key])])) } : { result: 'UNKNOWN', code: baselineError ?? 'SELECTED_BASELINE_UNAVAILABLE',
+            ...(baselineDownloadFailure ? { downloadFailure: baselineDownloadFailure } : {}) },
     service: { result: serviceInspection ? passFailUnknown(serviceInspection.pass) : 'UNKNOWN', checks: serviceProfileChecks },
     normalRuntimeSettings: normalSettings,
     deploymentHistory: historyInspection ? { observedCount: historyRead.deployments.length,
