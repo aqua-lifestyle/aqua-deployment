@@ -204,7 +204,12 @@ export async function diagnoseRenderEnvironment(env, { checkoutSha, fetcher = fe
   }
 }
 
-async function selectedCommissionedBaseline(api) {
+// Baseline evidence is read only through the diagnostic's authorised artifact
+// readers, which own the pinned-download latch. Without them this path must
+// fail closed rather than download outside that latch.
+async function selectedCommissionedBaseline(api, { readArtifactFiles, readArtifact } = {}) {
+  if (typeof readArtifactFiles !== 'function' || typeof readArtifact !== 'function')
+    throw Error('GITHUB_ARTIFACT_RETRIEVAL_UNAVAILABLE');
   const failed = await api.executor(`/actions/runs/${commissionedFailure.runId}`);
   if (failed?.id !== Number(commissionedFailure.runId) || failed.run_attempt !== 1 ||
     failed.head_sha !== commissionedFailure.sha || failed.event !== 'workflow_dispatch' ||
@@ -223,7 +228,7 @@ async function selectedCommissionedBaseline(api) {
   if (admissionRows.length !== 1) throw Error('FAILED_RELEASE_ADMISSION_ARTIFACT_UNVERIFIED');
   const admissionDescriptor = validateArtifact(admissionRows[0], commissionedFailure.runId,
     commissionedFailure.sha, commissionedFailure.admissionArtifactName, repository.id);
-  const admissionFiles = await readGitHubArtifactFiles(api, 'executor', admissionDescriptor,
+  const admissionFiles = await readArtifactFiles(admissionDescriptor,
     ['admission-receipt.json', 'evidence-plan.json']);
   let admission, plan;
   try {
@@ -254,7 +259,7 @@ async function selectedCommissionedBaseline(api) {
   const selectedAudit = baselineArtifacts.artifacts.filter(row => String(row.id) === baseline.artifactId && row.name === auditName);
   if (selectedAudit.length !== 1) throw Error('SELECTED_BASELINE_ARTIFACT_SUBSTITUTED');
   const auditDescriptor = validateArtifact(selectedAudit[0], baseline.runId, baseline.sha, auditName, repository.id);
-  const auditBytes = await readGitHubArtifact(api, 'executor', auditDescriptor, 'release-report.jsonl');
+  const auditBytes = await readArtifact(auditDescriptor, 'release-report.jsonl');
   let rows;
   try {
     const lines = auditBytes.toString('utf8').trim().split('\n');
@@ -343,7 +348,7 @@ export async function diagnoseRenderCommissionedState(env, { checkoutSha, fetche
     finally { artifactDownload = false; }
   };
   let baselineSelection, baselineError, baselineDownloadFailure;
-  try { baselineSelection = await loadBaseline(api); }
+  try { baselineSelection = await loadBaseline(api, { readArtifactFiles, readArtifact }); }
   catch (error) {
     // Only fixed machine codes can cross the diagnostic boundary. Native/API
     // errors can contain request details or signed provider data.
