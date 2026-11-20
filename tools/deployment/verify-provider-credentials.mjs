@@ -204,9 +204,15 @@ export async function diagnoseRenderEnvironment(env, { checkoutSha, fetcher = fe
   }
 }
 
-// Baseline evidence is read only through the diagnostic's authorised artifact
-// readers, which own the pinned-download latch. Without them this path must
-// fail closed rather than download outside that latch.
+// Run IDs arrive as strings in release identity/admission receipts and as the
+// fixed string in this diagnostic. Canonicalise both to a validated positive
+// integer string before comparing so matching representations are accepted
+// while missing, malformed or genuinely different IDs fail closed.
+const canonicalRunId = value => {
+  const text = typeof value === 'string' ? value.trim() :
+    (typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? String(value) : null);
+  return text && /^[1-9]\d*$/.test(text) ? text : null;
+};
 async function selectedCommissionedBaseline(api, { readArtifactFiles, readArtifact } = {}) {
   if (typeof readArtifactFiles !== 'function' || typeof readArtifact !== 'function')
     throw Error('GITHUB_ARTIFACT_RETRIEVAL_UNAVAILABLE');
@@ -235,8 +241,11 @@ async function selectedCommissionedBaseline(api, { readArtifactFiles, readArtifa
     admission = JSON.parse(admissionFiles['admission-receipt.json'].toString('utf8'));
     plan = JSON.parse(admissionFiles['evidence-plan.json'].toString('utf8'));
   } catch { throw Error('FAILED_RELEASE_ADMISSION_CONTENT_UNVERIFIED'); }
+  const admissionRunId = canonicalRunId(admission?.releaseRunId);
+  const commissionedRunId = canonicalRunId(commissionedFailure.runId);
   if (admission?.contract !== 'aqua.github-evidence-admission' ||
-    admission.releaseRunId !== Number(commissionedFailure.runId) || admission.releaseRunAttempt !== 1 ||
+    admissionRunId === null || commissionedRunId === null ||
+    admissionRunId !== commissionedRunId || admission.releaseRunAttempt !== 1 ||
     admission.executorRepository !== executor || admission.executorSha !== commissionedFailure.sha ||
     admission.qualificationOnly !== false || admission.combinedRelease !== 'post-normal-backend-frontend-v1' ||
     plan?.policySha256 !== admission.policySha256 || !plan.baseline || !plan.baselinePolicyProof ||
@@ -245,8 +254,9 @@ async function selectedCommissionedBaseline(api, { readArtifactFiles, readArtifa
     throw Error('FAILED_RELEASE_BASELINE_SELECTION_UNVERIFIED');
 
   const baseline = plan.baseline;
-  const baselineRun = await api.executor(`/actions/runs/${baseline.runId}`);
-  if (baselineRun?.id !== Number(baseline.runId) || baselineRun.run_attempt !== baseline.runAttempt ||
+  const baselineRunId = canonicalRunId(baseline?.runId);
+  const baselineRun = baselineRunId === null ? null : await api.executor(`/actions/runs/${baselineRunId}`);
+  if (baselineRun === null || baselineRun?.id !== Number(baselineRunId) || baselineRun.run_attempt !== baseline.runAttempt ||
     baselineRun.head_sha !== baseline.sha || baselineRun.event !== 'workflow_dispatch' ||
     baselineRun.head_branch !== 'main' || baselineRun.path !== '.github/workflows/deploy.yml' ||
     baselineRun.status !== 'completed' || baselineRun.conclusion !== 'success' ||

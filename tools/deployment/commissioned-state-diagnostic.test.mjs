@@ -116,8 +116,9 @@ const policyBytes = readFileSync(new URL('./unattended-policy.json', import.meta
 // Authenticated GitHub API and signed storage fixture for the exact failed
 // release and its historical baseline: two pinned artifacts, real digests and
 // the working-tree policy/inventory bytes at the pinned executor commit.
-function githubFixture({ zipFailure = false } = {}) {
-  const receipt = { contract: 'aqua.github-evidence-admission', releaseRunId: 44245360791,
+function githubFixture({ zipFailure = false, admissionReleaseRunId = 44245360791, omitAdmissionReleaseRunId = false } = {}) {
+  const receipt = { contract: 'aqua.github-evidence-admission',
+    ...(omitAdmissionReleaseRunId ? {} : { releaseRunId: admissionReleaseRunId }),
     releaseRunAttempt: 1, executorRepository: targets.executor.repository, executorSha,
     qualificationOnly: false, combinedRelease: 'post-normal-backend-frontend-v1', policySha256: policySha };
   const plan = { policySha256: policySha,
@@ -385,4 +386,60 @@ test('a transport failure inside an authorised baseline read leaves the latch cl
   assert.deepEqual(row.baselineEvidence.downloadFailure,
     { artifactId: admissionId, stage: 'github_zip', category: 'FETCH_TRANSPORT_ERROR' });
   assert.equal(row.diagnosticStatus, 'COMPLETE_WITH_UNKNOWN');
+});
+
+test('a string admission releaseRunId matching the failed run is accepted', async () => {
+  const gh = githubFixture({ admissionReleaseRunId: '44245360791' });
+  const f = fixture({ github: gh.handler });
+  f.deployment.commit.id = sourceSha;
+  f.health.body.result.buildId = sourceSha;
+  f.values.Deployment__BuildId = sourceSha;
+  assert.equal(await f.runReal(), true);
+  const row = f.reports.at(-1);
+  assert.equal(row.diagnosticStatus, 'COMPLETE');
+  assert.equal(row.baselineEvidence.result, 'PASS');
+  assert.equal(row.deploymentIdentity.selectedReceiptOrReconciliation.result, 'PASS');
+  assert.deepEqual(row.currentFailingPredicates, []);
+});
+
+test('a numeric admission releaseRunId matching the failed run is accepted', async () => {
+  const gh = githubFixture({ admissionReleaseRunId: 44245360791 });
+  const f = fixture({ github: gh.handler });
+  f.deployment.commit.id = sourceSha;
+  f.health.body.result.buildId = sourceSha;
+  f.values.Deployment__BuildId = sourceSha;
+  assert.equal(await f.runReal(), true);
+  const row = f.reports.at(-1);
+  assert.equal(row.diagnosticStatus, 'COMPLETE');
+  assert.equal(row.baselineEvidence.result, 'PASS');
+});
+
+test('a genuinely different admission releaseRunId is rejected', async () => {
+  const gh = githubFixture({ admissionReleaseRunId: '99999999999' });
+  const f = fixture({ github: gh.handler });
+  assert.equal(await f.runReal(), true);
+  const row = f.reports.at(-1);
+  assert.equal(row.baselineEvidence.result, 'UNKNOWN');
+  assert.equal(row.baselineEvidence.code, 'FAILED_RELEASE_BASELINE_SELECTION_UNVERIFIED');
+  assert.equal(row.diagnosticStatus, 'COMPLETE_WITH_UNKNOWN');
+});
+
+test('malformed admission releaseRunIds fail closed', async () => {
+  for (const bad of ['abc', '', '0', '00123', 0, null, 1.5]) {
+    const gh = githubFixture({ admissionReleaseRunId: bad });
+    const f = fixture({ github: gh.handler });
+    assert.equal(await f.runReal(), true, `run for ${JSON.stringify(bad)}`);
+    const row = f.reports.at(-1);
+    assert.equal(row.baselineEvidence.result, 'UNKNOWN', String(bad));
+    assert.equal(row.baselineEvidence.code, 'FAILED_RELEASE_BASELINE_SELECTION_UNVERIFIED', String(bad));
+  }
+});
+
+test('a missing admission releaseRunId fails closed', async () => {
+  const gh = githubFixture({ omitAdmissionReleaseRunId: true });
+  const f = fixture({ github: gh.handler });
+  assert.equal(await f.runReal(), true);
+  const row = f.reports.at(-1);
+  assert.equal(row.baselineEvidence.result, 'UNKNOWN');
+  assert.equal(row.baselineEvidence.code, 'FAILED_RELEASE_BASELINE_SELECTION_UNVERIFIED');
 });
