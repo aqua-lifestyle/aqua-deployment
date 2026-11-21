@@ -103,7 +103,7 @@ export function assertCommissionedBuildIdentity(inspection) {
 
 export function inspectHistoricalCommissioningBindings(historicalBindings, decision) {
   const rows = [
-    ['currentConfigurationDigest', 'requiredConfigurationDigest'],
+    ['intendedConfigurationDigest', 'requiredConfigurationDigest'],
     ['requiredAssemblyDigest', 'requiredAssemblyDigest'],
     ['requiredRuntimeAssemblyDigest', 'requiredRuntimeAssemblyDigest']
   ].map(([baselineKey, decisionKey]) => {
@@ -265,7 +265,7 @@ export function validateBackendSuccessorReceipt(rows, descriptor, targets) {
   if (baseline.baselineRenderProvenance !== undefined) {
     const observed = validateFailedFrontendRecord().observedBackend;
     const bindings = baseline.historicalD10Bindings;
-    check(bindings && bindings.currentConfigurationDigest === decision.requiredConfigurationDigest &&
+    check(bindings && bindings.intendedConfigurationDigest === decision.requiredConfigurationDigest &&
       bindings.requiredAssemblyDigest === decision.requiredAssemblyDigest &&
       bindings.requiredRuntimeAssemblyDigest === decision.requiredRuntimeAssemblyDigest,
     'BACKEND_AUDIT_DECISION_MISMATCH');
