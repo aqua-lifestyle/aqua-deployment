@@ -103,7 +103,7 @@ function fixture({ files = [{ filename: backendModifiedPath, status: 'modified' 
   const decision = { contractVersion: 'AQGreenD10CutoverV2', decisionId: 'D10-TEST-DECISION-1',
     requiredSchemaDigest: '1'.repeat(64), requiredAssemblyDigest: '2'.repeat(64),
     requiredRuntimeAssemblyDigest: '3'.repeat(64), requiredDatabaseIdentityDigest: '4'.repeat(64),
-    requiredConfigurationDigest: '5'.repeat(64), ...decisionOverrides };
+    requiredConfigurationDigest: '6'.repeat(64), ...decisionOverrides };
   const decisionBytes = Buffer.from(JSON.stringify(decision), 'utf8');
   s.vars = { ...s.vars, Deployment__BuildId: baselineSha,
     App__AQGreenV2__Commissioning__DecisionJsonBase64: decisionBytes.toString('base64'),
@@ -630,7 +630,7 @@ function combinedFixture({ files = [
   const decision = { contractVersion: 'AQGreenD10CutoverV2', decisionId: 'D10-TEST-DECISION-1',
     requiredSchemaDigest: '1'.repeat(64), requiredAssemblyDigest: '2'.repeat(64),
     requiredRuntimeAssemblyDigest: '3'.repeat(64), requiredDatabaseIdentityDigest: '4'.repeat(64),
-    requiredConfigurationDigest: '5'.repeat(64) };
+    requiredConfigurationDigest: '6'.repeat(64) };
   const decisionBytes = Buffer.from(JSON.stringify(decision), 'utf8');
   s.vars = { ...s.vars, Deployment__BuildId: baselineSha,
     App__AQGreenV2__Commissioning__DecisionJsonBase64: decisionBytes.toString('base64'),
@@ -974,8 +974,8 @@ test('combined admission accepts the live deployment matching the full-release r
 test('combined baseline rejects historical D10 binding mismatch before provider writes', async () => {
   const f = combinedFixture();
   fullReleaseBaselinePlan(f);
-  f.options.baselineRows[0].d10RuntimeBindings.currentConfigurationDigest = '8'.repeat(64);
-  f.options.baselineRows[1].d10RuntimeBindings.currentConfigurationDigest = '8'.repeat(64);
+  f.options.baselineRows[0].d10RuntimeBindings.intendedConfigurationDigest = '8'.repeat(64);
+  f.options.baselineRows[1].d10RuntimeBindings.intendedConfigurationDigest = '8'.repeat(64);
   await assert.rejects(f.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
   assertNoProviderWrites(f);
 });

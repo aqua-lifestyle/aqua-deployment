@@ -23,13 +23,14 @@ const admissionId = '14401816374';
 const policySha = policyDigest(standingPolicy);
 const historical = Object.freeze({
   currentConfigurationDigest: 'b89aa7a738f6b02eca7b90275c6d75c5443332d67675822e84112ce6904325ee',
+  intendedConfigurationDigest: 'abeed0ec071ff8d300337c7da5f212e0479ad002203306d221e2ac1b937aebc3',
   requiredAssemblyDigest: 'cd7ae851d640b40a2761c3838282e7d367103bfedccd265f73c0c628d31f9a35',
   requiredRuntimeAssemblyDigest: '8865ebcd4a7762e70a730864ced879f19997dd3a3657cc1140b6bb0ca9a7c4d6'
 });
 const decisionFor = () => ({ contractVersion: 'AQGreenD10CutoverV2', decisionId: 'D10-REDACTED-FIXTURE',
   requiredSchemaDigest: '1'.repeat(64), requiredAssemblyDigest: historical.requiredAssemblyDigest,
   requiredRuntimeAssemblyDigest: historical.requiredRuntimeAssemblyDigest,
-  requiredDatabaseIdentityDigest: '4'.repeat(64), requiredConfigurationDigest: historical.currentConfigurationDigest });
+  requiredDatabaseIdentityDigest: '4'.repeat(64), requiredConfigurationDigest: historical.intendedConfigurationDigest });
 
 function fixture({ mutate = () => {}, baselineAvailable = true, github } = {}) {
   const env = { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch',
@@ -132,7 +133,7 @@ function githubFixture({ zipFailure = false, admissionReleaseRunId = 44245360791
   const bindings = { requiredAssemblyDigest: historical.requiredAssemblyDigest,
     requiredRuntimeAssemblyDigest: historical.requiredRuntimeAssemblyDigest,
     currentConfigurationDigest: historical.currentConfigurationDigest,
-    intendedConfigurationDigest: '5'.repeat(64), intendedEnvironmentId: 'production-release',
+    intendedConfigurationDigest: historical.intendedConfigurationDigest, intendedEnvironmentId: 'production-release',
     intendedBuildId: sourceSha };
   const rows = [
     { ...identity, phase: 'provider-read', scope: 'readiness-bindings', d10RuntimeBindings: bindings },
@@ -210,8 +211,8 @@ test('commissioned Normal baseline reports authenticated D10, provider, history,
   const row = f.reports.at(-1);
   assert.equal(row.diagnosticStatus, 'COMPLETE', JSON.stringify({ row, calls: f.calls.map(c => c.url) }));
   assert.deepEqual(row.historicalD10Comparisons, {
-    currentConfigurationDigest: { result: 'PASS', expected: historical.currentConfigurationDigest,
-      observed: historical.currentConfigurationDigest },
+    intendedConfigurationDigest: { result: 'PASS', expected: historical.intendedConfigurationDigest,
+      observed: historical.intendedConfigurationDigest },
     requiredAssemblyDigest: { result: 'PASS', expected: historical.requiredAssemblyDigest,
       observed: historical.requiredAssemblyDigest },
     requiredRuntimeAssemblyDigest: { result: 'PASS', expected: historical.requiredRuntimeAssemblyDigest,
@@ -241,7 +242,7 @@ test('commissioned-state diagnostic reports independent D10, build, service, nor
     [({ values }) => { values.App__AQGreenV2__Commissioning__DecisionSha256 = '0'.repeat(64); },
       row => assert.equal(row.commissioningDecision.sha256Pin.result, 'FAIL', JSON.stringify(row))],
     [context => rewriteDecision(context, 'requiredConfigurationDigest'),
-      row => assert.equal(row.historicalD10Comparisons.currentConfigurationDigest.result, 'FAIL')],
+      row => assert.equal(row.historicalD10Comparisons.intendedConfigurationDigest.result, 'FAIL')],
     [context => rewriteDecision(context, 'requiredAssemblyDigest'),
       row => assert.equal(row.historicalD10Comparisons.requiredAssemblyDigest.result, 'FAIL')],
     [context => rewriteDecision(context, 'requiredRuntimeAssemblyDigest'),
@@ -307,8 +308,8 @@ test('selected baseline downloads both pinned artifacts through the authorised r
   assert.equal(row.baselineEvidence.renderDeployId, liveId);
   assert.equal(row.baselineEvidence.renderSha, sourceSha);
   assert.deepEqual(row.historicalD10Comparisons, {
-    currentConfigurationDigest: { result: 'PASS', expected: historical.currentConfigurationDigest,
-      observed: historical.currentConfigurationDigest },
+    intendedConfigurationDigest: { result: 'PASS', expected: historical.intendedConfigurationDigest,
+      observed: historical.intendedConfigurationDigest },
     requiredAssemblyDigest: { result: 'PASS', expected: historical.requiredAssemblyDigest,
       observed: historical.requiredAssemblyDigest },
     requiredRuntimeAssemblyDigest: { result: 'PASS', expected: historical.requiredRuntimeAssemblyDigest,
