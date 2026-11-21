@@ -68,6 +68,42 @@ re-derived before deployment. Audit-based entries retain artifact ID, canonical
 rows digest, producer fingerprints and original terminal failure code. Qualification
 success does not erase a failure in an earlier attempt of the same run.
 
+### Exact commissioned-state producer
+
+Executor run `44245360791/1` failed during the read-only commissioned-state
+validation, before the successor-input staging phase. GitHub authenticates its
+failed production step and the two-row `evidence-selected`, `failed` audit in
+artifact `14400929767` (ZIP SHA-256
+`59e1dae082d9ac8dbc0ebbbff7515029410663c99b4fa39b0eed834d27f490ea`).
+The terminal code is `BACKEND_COMMISSIONED_STATE_CHANGED`; no mutation-intent
+phase or deployment ID is recorded. The producing merge was approved by a
+standing-policy administrator. Its workflow SHA-256 is
+`f6ba04f14306641249e2c503e3c21e40d0900e8e28f39f5792a1744a213d3254`
+and controller SHA-256 is
+`6075af09753be291935cb2f05991aeea21b0f5a72c23fb530044716d211aa79c`.
+
+The reviewed producer places synchronous audit intents before Render environment
+staging, deploy requests and the migrator job; before Vercel file uploads and
+deployment requests; and before the member receiver's negative write probes.
+The database migration is initiated only by the audited Render one-off job.
+The extra fingerprint is accepted **only** at immutable executor revision
+`e25fa6ec5d604e1f616aece4ddc9741429549bd3`, with both exact file digests.
+All existing artifact, administrator-merge, audit-row and provider-effect checks
+still apply. This recognizes a failed pre-mutation attempt as history; it does
+not create a successful predecessor, provider reconciliation, retry or release
+authorization. The GET-only commissioned-state diagnostic is not admission
+evidence or a substitute for these checks.
+
+The full-history read found two earlier failed production attempts with the
+same controller digest but *different* executor revisions: `44040840143/1`
+(`ae4f6bda2ab89a414cecffa8cc3c50965860721a`, terminal code
+`PROTECTED_RUNTIME_READINESS_FAILED`) and `43935894260/1`
+(`3b0a6484f07765c5905d72b45cbb9841d2529be1`, terminal code
+`BACKEND_RENDER_DRIFT`). Their two-row audits have no mutation-intent phase,
+but the exact-revision pin above does **not** approve either producer. They
+remain fail-closed in current admission; this correction alone does not make
+the complete prior-release history classifiable or authorize another dispatch.
+
 The exact historical recognition of runs **40850715880/1** and **40883686654/1**
 executes first and retains its original pins and evidence requirements. The pinned
 member-continuation route also executes first. The general audit route cannot

@@ -138,6 +138,57 @@ test('reviewed baseline-drift producer requires a complete no-mutation audit and
   }
 });
 
+test('the exact commissioned-state producer recognizes only its complete prewrite failure', () => {
+  // Synthetic values in the authenticated 44245360791/1 audit's two-row format;
+  // no production audit contents are copied into the test suite.
+  const historicalSha = 'e25fa6ec5d604e1f616aece4ddc9741429549bd3';
+  const historicalProducer = { executorSha: historicalSha,
+    workflowSha256: sha256(readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url))),
+    controllerSha256: '6075af09753be291935cb2f05991aeea21b0f5a72c23fb530044716d211aa79c' };
+  const historicalRows = rows.map(row => {
+    const { schemaFirstEvidenceSha256, recoveryMode, ...rest } = row;
+    return { ...rest, sha: 'c'.repeat(40), ciRunId: '123', ciRunAttempt: 1,
+      releaseRunId: '44245360791', executorSha: historicalSha,
+      backendSuccessor: 'post-normal-backend-v1', combinedRelease: 'post-normal-backend-frontend-v1',
+      ...(row.phase === 'failed' ? { code: 'BACKEND_COMMISSIONED_STATE_CHANGED' } : {}) };
+  });
+  const input = { run: run(44245360791, { num: 86, sha: historicalSha }), attempt: 1,
+    production: failedJob(undefined, 'failure'), audit: {
+      descriptor: { artifactId: '14400929767', runId: '44245360791', runAttempt: 1, sha: historicalSha },
+      producer: historicalProducer, rows: historicalRows } };
+  const recognized = recognize(input);
+  assert.equal(recognized.basis, 'audit-verified-never-mutated');
+  assert.equal(recognized.terminalFailureCode, 'BACKEND_COMMISSIONED_STATE_CHANGED');
+  assert.equal(recognized.rowsSha256, objectDigest(historicalRows));
+  assert.equal(recognized.renderDeployId, undefined);
+  assert.equal(recognized.vercelDeployId, undefined);
+  assert.equal(input.run.conclusion, 'failure');
+  const substituteRevision = (x, sha) => {
+    x.run.headSha = sha; x.audit.producer.executorSha = sha;
+    x.audit.descriptor.sha = sha; x.audit.rows.forEach(r => r.executorSha = sha);
+  };
+  for (const [label, change, expected] of [
+    ['other revision, same bytes', x => substituteRevision(x, 'd'.repeat(40)), /WRITE_AHEAD_CONTRACT_UNSUPPORTED/],
+    ['earlier producer 44040840143 is not approved by this pin',
+      x => substituteRevision(x, 'ae4f6bda2ab89a414cecffa8cc3c50965860721a'), /WRITE_AHEAD_CONTRACT_UNSUPPORTED/],
+    ['earlier producer 43935894260 is not approved by this pin',
+      x => substituteRevision(x, '3b0a6484f07765c5905d72b45cbb9841d2529be1'), /WRITE_AHEAD_CONTRACT_UNSUPPORTED/],
+    ['changed controller fingerprint', x => x.audit.producer.controllerSha256 = 'd'.repeat(64), /WRITE_AHEAD_CONTRACT_UNSUPPORTED/],
+    ['changed workflow fingerprint', x => x.audit.producer.workflowSha256 = 'd'.repeat(64), /WRITE_AHEAD_CONTRACT_UNSUPPORTED/],
+    ['missing row', x => x.audit.rows.pop(), /PRIOR_AUDIT_INCOMPLETE/],
+    ['wrong attempt', x => x.audit.rows[1].releaseRunAttempt = 2, /PRIOR_RUN_IDENTITY_BINDING_FAILED/],
+    ['different purpose', x => x.audit.rows[1].combinedRelease = 'post-normal-backend-v1', /PRIOR_AUDIT_IDENTITY_CHANGED/],
+    ['mutating Render stage', x => x.audit.rows.splice(1, 0, { ...x.audit.rows[0], phase: 'backend-successor-staging' }), /PRIOR_MUTATION_PHASE_REQUIRES_RECONCILIATION/],
+    ['migration requested', x => x.audit.rows.splice(1, 0, { ...x.audit.rows[0], phase: 'backend-schema-job-requesting' }), /PRIOR_MUTATION_PHASE_REQUIRES_RECONCILIATION/],
+    ['mutating Vercel stage', x => x.audit.rows.splice(1, 0, { ...x.audit.rows[0], phase: 'frontend-vercel-files-requesting' }), /PRIOR_MUTATION_PHASE_REQUIRES_RECONCILIATION/],
+    ['provider effect', x => x.audit.rows[1].renderDeployId = 'dep-acknowledged', /PRIOR_DEPLOYMENT_ID_REQUIRES_RECONCILIATION/],
+    ['unknown failure', x => x.audit.rows[1].code = 'UNKNOWN_FAILURE', /PRIOR_AUDIT_TERMINAL_OUTCOME_UNRECOGNIZABLE/]
+  ]) {
+    const changed = structuredClone(input); change(changed);
+    assert.throws(() => recognize(changed), expected, label);
+  }
+});
+
 test('attempted, acknowledged or ambiguous provider writes always require reconciliation', () => {
   for (const phase of ['render-requesting', 'render-requested', 'render-ready', 'vercel-files-requesting',
     'vercel-files-uploaded', 'vercel-requesting', 'vercel-requested']) {
