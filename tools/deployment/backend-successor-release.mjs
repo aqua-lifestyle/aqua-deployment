@@ -24,8 +24,11 @@ export const backendSuccessorPayloadKey = 'App__AQGreenV2__D10__BackendSuccessor
 export const backendSuccessorPinKey = 'App__AQGreenV2__D10__BackendSuccessorSha256';
 export const backendSuccessorWriteKeys = Object.freeze([backendSuccessorPayloadKey, backendSuccessorPinKey]);
 // Baseline decision evidence and the pinned build identity carried into the
-// successor payload. No secret-bearing variable is ever readable here.
+// successor payload. Read back only the two values this executor itself stages;
+// compare in memory without logging raw values. Other secret-bearing variables
+// remain inaccessible through the fixed Render client.
 export const backendSuccessorReadKeys = Object.freeze([
+  ...backendSuccessorWriteKeys,
   'App__AQGreenV2__Commissioning__DecisionJsonBase64',
   'App__AQGreenV2__Commissioning__DecisionSha256', 'Deployment__BuildId']);
 

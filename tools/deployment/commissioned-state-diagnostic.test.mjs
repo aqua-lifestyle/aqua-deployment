@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { diagnoseRenderCommissionedState } from './verify-provider-credentials.mjs';
+import { diagnoseRenderCommissionedState, selectedInterruptedStaging } from './verify-provider-credentials.mjs';
+import { backendSuccessorPayloadKey, backendSuccessorPinKey } from './backend-successor-release.mjs';
 import { normalRuntimeSettings } from './runtime-readiness.mjs';
 import { targets, standingPolicy, policyDigest } from './release-control.mjs';
 import { sha256 } from './github-evidence.mjs';
@@ -21,6 +22,9 @@ const baselineRunId = '43429695806';
 const auditId = 14040001166;
 const admissionId = '14401816374';
 const policySha = policyDigest(standingPolicy);
+const syntheticStageBytes = Buffer.from(JSON.stringify({ contractVersion: 'AQGreenD10BackendSuccessorV1',
+  successorRevisionSha256: 'a'.repeat(40), schemaTransition: 'none' }));
+const syntheticStagePin = sha256(syntheticStageBytes);
 const historical = Object.freeze({
   currentConfigurationDigest: 'b89aa7a738f6b02eca7b90275c6d75c5443332d67675822e84112ce6904325ee',
   intendedConfigurationDigest: 'abeed0ec071ff8d300337c7da5f212e0479ad002203306d221e2ac1b937aebc3',
@@ -32,7 +36,7 @@ const decisionFor = () => ({ contractVersion: 'AQGreenD10CutoverV2', decisionId:
   requiredRuntimeAssemblyDigest: historical.requiredRuntimeAssemblyDigest,
   requiredDatabaseIdentityDigest: '4'.repeat(64), requiredConfigurationDigest: historical.intendedConfigurationDigest });
 
-function fixture({ mutate = () => {}, baselineAvailable = true, github } = {}) {
+function fixture({ mutate = () => {}, baselineAvailable = true, github, missingStagedKey } = {}) {
   const env = { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch',
     GITHUB_REPOSITORY: targets.executor.repository, GITHUB_REPOSITORY_ID: '1423239668',
     GITHUB_REF: 'refs/heads/main', GITHUB_REF_PROTECTED: 'true', GITHUB_SHA: executorSha,
@@ -48,7 +52,9 @@ function fixture({ mutate = () => {}, baselineAvailable = true, github } = {}) {
     App__WeeklyCommissions__Enabled: 'true', App__FinancialOperations__Enabled: 'true',
     App__AQGreenV2__Commissioning__Enabled: 'true', Deployment__BuildId: liveSha,
     App__AQGreenV2__Commissioning__DecisionJsonBase64: decisionBytes.toString('base64'),
-    App__AQGreenV2__Commissioning__DecisionSha256: createHash('sha256').update(decisionBytes).digest('hex') };
+    App__AQGreenV2__Commissioning__DecisionSha256: createHash('sha256').update(decisionBytes).digest('hex'),
+    [backendSuccessorPayloadKey]: syntheticStageBytes.toString('base64'),
+    [backendSuccessorPinKey]: syntheticStagePin };
   const service = { id: targets.render.id, name: targets.render.name,
     repo: `https://github.com/${targets.repository}`, branch: 'main', suspended: 'not_suspended',
     autoDeployTrigger: 'off', autoDeploy: 'no', rootDir: '',
@@ -56,7 +62,7 @@ function fixture({ mutate = () => {}, baselineAvailable = true, github } = {}) {
       region: 'frankfurt', maintenanceMode: { enabled: false }, disk: null,
       healthCheckPath: '/api/health', envSpecificDetails: { dockerContext: '.', dockerfilePath: './docker/api/Dockerfile',
         preDeployCommand: '', dockerCommand: '' } } };
-  const deployment = { id: liveId, status: 'live', commit: { id: liveSha } };
+  const deployment = { id: liveId, status: 'live', commit: { id: liveSha }, createdAt: '2026-11-21T10:00:00Z' };
   const health = { status: 200, recovery: null, receiver: 'Schema54', body: { result: {
     status: 'Healthy', buildId: liveSha, environment: 'Production', databaseStatus: 'Healthy',
     redisStatus: 'Healthy', dataProtectionKeyStoreStatus: 'Healthy', paymentAvailability: 'Available' } } };
@@ -81,6 +87,7 @@ function fixture({ mutate = () => {}, baselineAvailable = true, github } = {}) {
     if (renderPath === `/services/${targets.render.id}`) return Response.json(service);
     if (renderPath === `/services/${targets.render.id}/deploys`) return Response.json([{ deploy: deployment }]);
     const key = decodeURIComponent(renderPath.split('/').at(-1));
+    if (key === missingStagedKey) return Response.json({}, { status: 404 });
     assert.ok(Object.hasOwn(values, key), `allowlisted setting ${key}`);
     return Response.json({ key, value: values[key] });
   };
@@ -91,13 +98,90 @@ function fixture({ mutate = () => {}, baselineAvailable = true, github } = {}) {
     if (!baselineAvailable) throw Error('SELECTED_BASELINE_ARTIFACT_UNAVAILABLE');
     return { proof, baseline, selectedByReleaseRunId: 44245360791 };
   };
+  const noStaging = async () => { throw Error('STAGING_EVIDENCE_NOT_IN_BASELINE_FIXTURE'); };
   const run = (load = loadBaseline) => diagnoseRenderCommissionedState(env, { checkoutSha: executorSha, fetcher, loadBaseline: load,
+    loadStaging: noStaging,
     emit: row => reports.push(row) });
   // The real baseline loader: no injected selection, GitHub artifact readers only.
   const runReal = () => diagnoseRenderCommissionedState(env, { checkoutSha: executorSha, fetcher,
+    loadStaging: noStaging,
     emit: row => reports.push(row) });
-  return { env, values, service, deployment, health, decision, calls, reports, run, runReal };
+  const runStaging = (loadStaging = async () => ({ pin: syntheticStagePin, payloadBytes: syntheticStageBytes.length,
+    artifactId: '14747883309', archiveSha256: 'f'.repeat(64), createdAt: '2026-11-22T09:08:19Z',
+    baselineRenderDeployId: liveId })) => diagnoseRenderCommissionedState(env,
+    { checkoutSha: executorSha, fetcher, loadBaseline, loadStaging, emit: row => reports.push(row) });
+  return { env, values, service, deployment, health, decision, calls, reports, run, runReal, runStaging };
 }
+
+test('protected commissioned-state diagnostic compares only the two staged keys without emitting their values', async () => {
+  const f = fixture();
+  assert.equal(await f.runStaging(), true);
+  const row = f.reports.at(-2);
+  assert.equal(row.contract, 'aqua.successor-staging-read-diagnostic');
+  assert.deepEqual([row.stagedPayload, row.stagedPin], ['MATCH', 'MATCH']);
+  assert.equal(row.evidence.auditArtifactId, '14747883309');
+  assert.equal(row.deploymentHistory.current.id, liveId);
+  assert.deepEqual(row.deploymentHistory.postRunDeployments, []);
+  const staged = f.calls.filter(call => [backendSuccessorPayloadKey, backendSuccessorPinKey]
+    .some(key => call.url.endsWith('/env-vars/' + key)));
+  assert.deepEqual(staged.map(call => call.url.split('/').at(-1)),
+    [backendSuccessorPayloadKey, backendSuccessorPinKey]);
+  assert.ok(f.calls.every(call => (call.options.method ?? 'GET') === 'GET' && call.options.body === undefined));
+  for (const secret of [f.env.RENDER_API_KEY, f.env.GH_TOKEN, f.values[backendSuccessorPayloadKey],
+    f.values[backendSuccessorPinKey]]) assert.ok(!JSON.stringify(f.reports).includes(secret));
+});
+
+test('staging diagnostic reports a provider-recorded post-run deployment without claiming its cause', async () => {
+  const f = fixture({ mutate: ({ deployment }) => {
+    deployment.id = 'dep-syntheticlater'; deployment.createdAt = '2026-11-22T09:09:00Z';
+  } });
+  assert.equal(await f.runStaging(), true);
+  const history = f.reports.at(-2).deploymentHistory;
+  assert.equal(history.current.id, 'dep-syntheticlater');
+  assert.deepEqual(history.postRunDeployments, [{ id: 'dep-syntheticlater', status: 'live',
+    commitSha: liveSha, createdAt: '2026-11-22T09:09:00.000Z' }]);
+  const untrusted = fixture({ mutate: ({ deployment }) => { delete deployment.createdAt; } });
+  assert.equal(await untrusted.runStaging(), true);
+  assert.equal(untrusted.reports.at(-2).deploymentHistory.postRunDeployments, 'UNVERIFIED');
+});
+
+test('staging diagnostic cannot read any other secret-bearing Render key or file', async () => {
+  const f = fixture(), before = f.calls.length;
+  assert.equal(await f.runStaging(async api => {
+    for (const route of [`/services/${targets.render.id}/env-vars/${backendSuccessorPayloadKey}Extra`,
+      `/services/${targets.render.id}/env-vars/App__AQGreenV2__Commissioning__VerifiedAuthorityJsonBase64`,
+      `/services/${targets.render.id}/secret-files/keyfile`])
+      await assert.rejects(api.render(route), /SECRET_BEARING_RENDER_READ_FORBIDDEN/);
+    return { pin: syntheticStagePin, payloadBytes: syntheticStageBytes.length,
+      artifactId: '14747883309', archiveSha256: 'f'.repeat(64), createdAt: '2026-11-22T09:08:19Z',
+      baselineRenderDeployId: liveId };
+  }), true);
+  assert.ok(f.calls.slice(before).every(call => !call.url.includes('Extra') &&
+    !call.url.includes('VerifiedAuthority') && !call.url.includes('secret-files')));
+});
+
+test('staged value mismatch and null or unavailable evidence remain distinct without disclosing values', async () => {
+  for (const [change, expected] of [
+    [f => f.values[backendSuccessorPayloadKey] = Buffer.from('different synthetic payload').toString('base64'), ['MISMATCH','MATCH']],
+    [f => f.values[backendSuccessorPinKey] = 'a'.repeat(64), ['MATCH','MISMATCH']],
+    [f => f.values[backendSuccessorPinKey] = null, ['MATCH','UNVERIFIED']]
+  ]) {
+    const f = fixture(); change(f);
+    assert.equal(await f.runStaging(), true);
+    const row = f.reports.at(-2);
+    assert.deepEqual([row.stagedPayload,row.stagedPin], expected);
+    assert.ok(!JSON.stringify(row).includes(f.values[backendSuccessorPayloadKey]));
+  }
+  const absent = fixture();
+  assert.equal(await absent.runStaging(async () => { throw Error('untrusted provider response'); }), true);
+  assert.deepEqual([absent.reports.at(-2).stagedPayload,absent.reports.at(-2).stagedPin], ['UNVERIFIED','UNVERIFIED']);
+  assert.ok(!absent.calls.some(call => call.url.includes('/env-vars/' + backendSuccessorPayloadKey) ||
+    call.url.includes('/env-vars/' + backendSuccessorPinKey)));
+  const inaccessible = fixture({ missingStagedKey: backendSuccessorPinKey });
+  assert.equal(await inaccessible.runStaging(), true);
+  assert.deepEqual([inaccessible.reports.at(-2).stagedPayload, inaccessible.reports.at(-2).stagedPin],
+    ['MATCH', 'UNVERIFIED'], 'a 404 cannot prove absence rather than inaccessible or inherited configuration');
+});
 
 const downloadRejected = error => error.message === 'GITHUB_ARTIFACT_DOWNLOAD_UNAVAILABLE' &&
   error.artifactDownloadDiagnostic.stage === 'github_zip' &&
@@ -443,4 +527,105 @@ test('a missing admission releaseRunId fails closed', async () => {
   const row = f.reports.at(-1);
   assert.equal(row.baselineEvidence.result, 'UNKNOWN');
   assert.equal(row.baselineEvidence.code, 'FAILED_RELEASE_BASELINE_SELECTION_UNVERIFIED');
+});
+
+// The real selector is exercised with a disposable, digest-pinned GitHub ZIP;
+// neither the historical audit bytes nor a provider value enters this fixture.
+function interruptedStagingFixture({ changeRows = () => {}, changeRun = () => {}, changeArtifact = () => {} } = {}) {
+  const runId = '45006063824', producerSha = 'd0cf6e0e424f3762756ed4c7beff83db7b9adeda', artifactId = 14747883309;
+  const identity = { version: 4, repository: targets.repository, sha: '58b18b2f5a76769a660c2ae834bd6e0c02263ebf',
+    ciRunId: '44236824305', ciRunAttempt: 2, releaseRunId: runId, releaseRunAttempt: 1,
+    executorRepository: targets.executor.repository, executorSha: producerSha, policySha256: policySha,
+    environment: targets.environment, profile: targets.profile, renderServiceId: targets.render.id,
+    vercelProjectId: targets.vercel.id, vercelTeamId: targets.vercel.teamId,
+    backendSuccessor: 'post-normal-backend-v1', combinedRelease: 'post-normal-backend-frontend-v1' };
+  const rows = [
+    { ...identity, phase: 'evidence-selected', authorizationId: 'a'.repeat(64),
+      evidenceSha256: 'b'.repeat(64), inventorySha256: standingPolicy.authorization.inventorySha256,
+      evidenceArtifactId: '14709678648' },
+    { ...identity, phase: 'backend-baseline-selected', baselineRenderDeployId: liveId, baselineRenderSha: liveSha },
+    { ...identity, phase: 'backend-decision-verified' },
+    { ...identity, phase: 'backend-classified', schemaTransition: 'additive' },
+    { ...identity, phase: 'backend-successor-staging', stagedSchemaTransition: 'none',
+      payloadBytes: syntheticStageBytes.length, payloadPinSha256: syntheticStagePin },
+    { ...identity, phase: 'failed', code: 'SECRET_BEARING_RENDER_READ_FORBIDDEN' }
+  ];
+  const intact = Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  const intactArchive = zipFixture('release-report.jsonl', intact);
+  changeRows(rows);
+  const bytes = Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  const archive = zipFixture('release-report.jsonl', bytes);
+  const expected = { runId, executorSha: producerSha, sourceSha: identity.sha, ciRunId: identity.ciRunId,
+    ciRunAttempt: 2, artifactId: String(artifactId), archiveSha256: sha256(intactArchive),
+    reportSha256: sha256(intact), expectedPayloadSha256: syntheticStagePin,
+    payloadBytes: syntheticStageBytes.length };
+  const run = { id: Number(runId), run_number: 88, run_attempt: 1, head_sha: producerSha,
+    status: 'completed', conclusion: 'failure', event: 'workflow_dispatch', head_branch: 'main',
+    actor: { login: 'aqualifestyleclub', id: 307076734 },
+    path: '.github/workflows/deploy.yml', repository: { full_name: targets.executor.repository },
+    head_repository: { full_name: targets.executor.repository }, created_at: '2026-11-22T09:08:19Z' };
+  changeRun(run);
+  const jobs = ['Qualify immutable source candidate', 'Verify approved GitHub evidence before provider access',
+    'Capture prospective provider baseline', 'Unattended recovery release'].map((name, i) => ({
+    name, run_id: run.id, run_attempt: 1, status: 'completed',
+    conclusion: i === 2 ? 'skipped' : i === 3 ? 'failure' : 'success',
+    steps: i === 3 ? [{ name: 'Revalidate policy, provenance, providers and recovery before automatic deployment',
+      conclusion: 'failure' }] : [] }));
+  const metadata = { id: artifactId, name: `production-release-audit-${runId}-1`, expired: false,
+    size_in_bytes: archive.length, digest: 'sha256:' + sha256(archive),
+    workflow_run: { id: run.id, head_sha: producerSha, head_branch: 'main',
+      repository_id: repositoryId, head_repository_id: repositoryId } };
+  changeArtifact(metadata);
+  const handler = async (url, options, env) => {
+    const parsed = new URL(url);
+    if (parsed.hostname.endsWith('.blob.core.windows.net')) {
+      assert.equal(options.headers?.Authorization, undefined);
+      return new Response(archive, { status: 200 });
+    }
+    assert.equal(parsed.origin, 'https://api.github.com');
+    assert.equal(options.headers.Authorization, `Bearer ${env.GH_TOKEN}`);
+    const route = parsed.pathname.replace(/^\/repos\/aqua-lifestyle\/aqua-deployment/, '');
+    if (route === `/actions/artifacts/${artifactId}/zip`)
+      return new Response(null, { status: 302, headers: {
+        location: `https://aquadeploymentdiag.blob.core.windows.net/artifacts/${artifactId}.zip?sig=fixture` } });
+    if (route === `/actions/runs/${runId}`) return Response.json(run);
+    if (route === `/actions/runs/${runId}/attempts/1/jobs`) return Response.json({ total_count: 4, jobs });
+    if (route === '') return Response.json({ id: repositoryId, full_name: targets.executor.repository });
+    if (route === `/actions/runs/${runId}/artifacts`) return Response.json({ total_count: 1, artifacts: [metadata] });
+    if (route === `/actions/artifacts/${artifactId}`) return Response.json(metadata);
+    throw Error('Unexpected GitHub route');
+  };
+  return { handler, expected };
+}
+
+test('fixed protected GET path authenticates original staging intent before reading either value', async () => {
+  const github = interruptedStagingFixture(), f = fixture({ github: github.handler });
+  assert.equal(await f.runStaging((api, reader) => selectedInterruptedStaging(api, reader, github.expected)), true);
+  const report = f.reports.at(-2);
+  assert.equal(report.evidence.status, 'MATCH');
+  assert.deepEqual([report.stagedPayload, report.stagedPin], ['MATCH', 'MATCH']);
+  assert.equal(report.deploymentHistory.current.id, liveId);
+  assert.deepEqual(report.deploymentHistory.postRunDeployments, []);
+  const artifactStorage = f.calls.filter(call => new URL(call.url).hostname.endsWith('.blob.core.windows.net'));
+  assert.equal(artifactStorage.length, 1);
+  assert.equal(artifactStorage[0].options.headers?.Authorization, undefined);
+  assert.ok(f.calls.every(call => (call.options.method ?? 'GET') === 'GET' && call.options.body === undefined));
+  for (const secret of [f.env.RENDER_API_KEY, f.env.GH_TOKEN, f.values[backendSuccessorPayloadKey],
+    f.values[backendSuccessorPinKey]]) assert.ok(!JSON.stringify(f.reports).includes(secret));
+});
+
+test('foreign, changed or incomplete original audit cannot unlock the two staged-value reads', async () => {
+  for (const options of [
+    { changeRun: run => run.head_sha = 'f'.repeat(40) },
+    { changeArtifact: metadata => metadata.expired = true },
+    { changeRows: rows => rows[4].phase = 'backend-render-requesting' },
+    { changeRows: rows => rows[4].payloadPinSha256 = 'f'.repeat(64) }
+  ]) {
+    const github = interruptedStagingFixture(options), f = fixture({ github: github.handler });
+    assert.equal(await f.runStaging((api, reader) => selectedInterruptedStaging(api, reader, github.expected)), true);
+    assert.equal(f.reports.at(-2).evidence.status, 'UNVERIFIED');
+    assert.deepEqual([f.reports.at(-2).stagedPayload, f.reports.at(-2).stagedPin], ['UNVERIFIED', 'UNVERIFIED']);
+    assert.ok(!f.calls.some(call => [backendSuccessorPayloadKey, backendSuccessorPinKey]
+      .some(key => call.url.endsWith('/env-vars/' + key))));
+  }
 });
