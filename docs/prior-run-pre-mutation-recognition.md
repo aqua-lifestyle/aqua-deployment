@@ -68,6 +68,37 @@ re-derived before deployment. Audit-based entries retain artifact ID, canonical
 rows digest, producer fingerprints and original terminal failure code. Qualification
 success does not erase a failure in an earlier attempt of the same run.
 
+### Exact post-Normal pre-mutation producers
+
+The three separate administrator-approved merges below share workflow SHA-256
+`f6ba04f14306641249e2c503e3c21e40d0900e8e28f39f5792a1744a213d3254`
+and controller SHA-256
+`6075af09753be291935cb2f05991aeea21b0f5a72c23fb530044716d211aa79c`.
+Their imported backend modules differ. Each entire producer revision was
+reviewed: synchronous audit intents precede Render environment staging, deploy
+requests and the migrator job; Vercel file uploads and deployment requests;
+and the member receiver's negative write probes. Database migration is
+initiated only by the audited Render one-off job. The approved fingerprints
+are bound to **exactly these three revisions**, never another commit carrying
+the same controller bytes.
+
+| Original failed run | Exact executor revision (merged PR) | Terminal code | Authenticated audit artifact (ZIP SHA-256) |
+| --- | --- | --- | --- |
+| `43935894260/1` | `3b0a6484f07765c5905d72b45cbb9841d2529be1` (#66) | `BACKEND_RENDER_DRIFT` | `14261895081` (`4850d146301e939082a8f457331f08146c2504482d0dd8fb7601498adc6b182e`) |
+| `44040840143/1` | `ae4f6bda2ab89a414cecffa8cc3c50965860721a` (#68) | `PROTECTED_RUNTIME_READINESS_FAILED` | `14309447129` (`f0690d6f723c9cae680af982f5589ad0466d7a7e837a7771dc407c42d1cfa1ab`) |
+| `44245360791/1` | `e25fa6ec5d604e1f616aece4ddc9741429549bd3` (#69) | `BACKEND_COMMISSIONED_STATE_CHANGED` | `14400929767` (`59e1dae082d9ac8dbc0ebbbff7515029410663c99b4fa39b0eed834d27f490ea`) |
+
+Each authenticated original production step failed; each bound audit has only
+`evidence-selected`, `failed`, with no mutation-intent phase or deployment ID.
+The complete more-recent history also includes successful full-release baseline
+`43429695806/1`, exact reconciled **Vercel effect** `43630374712/1`, and
+production-skipped failures `43876722924/1` and `44949386492/1`. Neither an
+acknowledged effect nor a skipped job is reclassified as a successful release.
+All existing artifact, administrator-merge, audit-row and provider-effect checks
+still apply. This recognition creates no provider reconciliation, retry or
+release authority. The GET-only commissioned-state diagnostic is not admission
+evidence or a substitute for these checks.
+
 The exact historical recognition of runs **40850715880/1** and **40883686654/1**
 executes first and retains its original pins and evidence requirements. The pinned
 member-continuation route also executes first. The general audit route cannot

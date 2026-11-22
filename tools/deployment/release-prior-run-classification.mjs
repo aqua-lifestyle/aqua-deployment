@@ -73,6 +73,24 @@ const controllerDigests = new Set([
   'e4b76c1a5ca22d047675e5f1d7964bd20f9c413d3bc540cd29f7406834c585ab'
 ]);
 
+// Three separately reviewed combined-release producers stopped before staging.
+// Their controller bytes match, but imported backend modules differ. Bind the
+// additional fingerprint only to these three immutable, reviewed revisions.
+const reviewedCombinedPrewriteProducers = Object.freeze({
+  executorShas: Object.freeze([
+    '3b0a6484f07765c5905d72b45cbb9841d2529be1', // 43935894260/1: Render baseline drift
+    'ae4f6bda2ab89a414cecffa8cc3c50965860721a', // 44040840143/1: readiness read failure
+    'e25fa6ec5d604e1f616aece4ddc9741429549bd3'  // 44245360791/1: commissioned state
+  ]),
+  workflowSha256: 'f6ba04f14306641249e2c503e3c21e40d0900e8e28f39f5792a1744a213d3254',
+  controllerSha256: '6075af09753be291935cb2f05991aeea21b0f5a72c23fb530044716d211aa79c'
+});
+const reviewedProducer = ({ executorSha, workflowSha256, controllerSha256 }) =>
+  workflowDigests.has(workflowSha256) && (controllerDigests.has(controllerSha256) ||
+    reviewedCombinedPrewriteProducers.executorShas.includes(executorSha) &&
+    workflowSha256 === reviewedCombinedPrewriteProducers.workflowSha256 &&
+    controllerSha256 === reviewedCombinedPrewriteProducers.controllerSha256);
+
 export async function authenticatePreMutationProducer(read, executorSha) {
   check(shaPattern.test(executorSha), 'PRIOR_PRODUCER_REVISION_UNVERIFIABLE');
   const digests = [];
@@ -85,7 +103,7 @@ export async function authenticatePreMutationProducer(read, executorSha) {
     check(bytes.length === file.size, 'PRIOR_PRODUCER_SOURCE_INCOMPLETE');
     digests.push(sha256(bytes));
   }
-  check(workflowDigests.has(digests[0]) && controllerDigests.has(digests[1]),
+  check(reviewedProducer({ executorSha, workflowSha256: digests[0], controllerSha256: digests[1] }),
     'PRIOR_PRODUCER_WRITE_AHEAD_CONTRACT_UNSUPPORTED');
   return { executorSha, workflowSha256: digests[0], controllerSha256: digests[1] };
 }
@@ -174,8 +192,9 @@ function validatePriorAuditRows(rows, run, attempt, descriptor) {
       row.executorSha === run.headSha, 'PRIOR_RUN_IDENTITY_BINDING_FAILED');
     // Every retained row must describe the same exact execution identity.
     check(['repository', 'sha', 'ciRunId', 'ciRunAttempt', 'policySha256', 'environment', 'profile',
-      'renderServiceId', 'vercelProjectId', 'vercelTeamId', 'executorRepository', 'executorSha',
-      'releaseRunId', 'releaseRunAttempt', 'frontendRelease'].every(key => row[key] === baseline[key]),
+       'renderServiceId', 'vercelProjectId', 'vercelTeamId', 'executorRepository', 'executorSha',
+       'releaseRunId', 'releaseRunAttempt', 'frontendRelease', 'backendSuccessor', 'combinedRelease']
+      .every(key => row[key] === baseline[key]),
     'PRIOR_AUDIT_IDENTITY_CHANGED');
     check(knownPhases.has(row.phase), 'PRIOR_AUDIT_PHASE_UNRECOGNIZED');
     if (row.phase === 'provider-read') check(providerReadScopes.has(row.scope), 'PRIOR_AUDIT_READ_SCOPE_UNRECOGNIZED');
@@ -220,8 +239,8 @@ export function classifyPriorFailedRun({ run, attempt, production, audit } = {})
     'PRIOR_PRODUCTION_STEP_UNVERIFIABLE');
   check(audit && typeof audit === 'object' && audit.descriptor && Array.isArray(audit.rows),
     'PRIOR_AUDIT_AUTHENTICATED_EVIDENCE_REQUIRED');
-  check(audit.producer?.executorSha === run.headSha && workflowDigests.has(audit.producer.workflowSha256) &&
-    controllerDigests.has(audit.producer.controllerSha256), 'PRIOR_PRODUCER_WRITE_AHEAD_CONTRACT_UNSUPPORTED');
+  check(audit.producer?.executorSha === run.headSha && reviewedProducer(audit.producer),
+    'PRIOR_PRODUCER_WRITE_AHEAD_CONTRACT_UNSUPPORTED');
   check(audit.descriptor.runId === String(run.id) && audit.descriptor.runAttempt === attempt &&
     audit.descriptor.sha === run.headSha, 'PRIOR_AUDIT_DESCRIPTOR_BINDING_FAILED');
   const captured = validatePriorAuditRows(audit.rows, run, attempt, audit.descriptor);
