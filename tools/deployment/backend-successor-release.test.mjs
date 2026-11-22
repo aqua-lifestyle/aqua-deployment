@@ -211,6 +211,56 @@ function assertNoProviderWrites(f) {
   assert.equal(f.s.uploads ?? 0, 0, 'no Vercel file uploads');
 }
 
+// Exercise the release through the actual fixed-target Render client rather than
+// the fixture's permissive Render adapter. Never retain the staged values here.
+function protectRender(f, alterResponse = value => value) {
+  const underlying = f.api.render, requests = [];
+  const protectedClient = clients({ RENDER_API_KEY: 'synthetic-render-key' }, async (url, init) => {
+    const parsed = new URL(url);
+    assert.equal(parsed.origin, 'https://api.render.com');
+    const route = parsed.pathname.replace(/^\/v1/, '') + parsed.search;
+    requests.push({ method: init.method, route });
+    return Response.json(alterResponse(await underlying(route, init.body ? JSON.parse(init.body) : undefined),
+      { route, method: init.method }));
+  });
+  f.api.render = protectedClient.render;
+  return requests;
+}
+
+test('protected Render client reads both exact staged values during initial and additive restart', async () => {
+  const repo = sourceRepository();
+  try {
+    for (const [files, expectedRounds] of [[undefined, 1], [[
+      { filename: migrationPath, status: 'added' }, { filename: designerPath, status: 'added' },
+      { filename: snapshotPath, status: 'modified' }, { filename: backendModifiedPath, status: 'modified' }
+    ], 2]]) {
+      const f = fixture({ repo, ...(files ? { files } : {}) }), requests = protectRender(f);
+      await f.execute();
+      const stageCalls = requests.filter(x => x.route.includes('/env-vars/App__AQGreenV2__D10__BackendSuccessor'));
+      assert.deepEqual(stageCalls.map(x => [x.method, x.route.split('/').at(-1)]),
+        Array.from({ length: expectedRounds }, () => [
+          ['PUT', backendSuccessorPayloadKey], ['GET', backendSuccessorPayloadKey],
+          ['PUT', backendSuccessorPinKey], ['GET', backendSuccessorPinKey]
+        ]).flat());
+      assert.equal(f.s.puts.length, expectedRounds * 2);
+      assert.equal(f.s.audit.at(-1).phase, 'backend-deployed');
+      for (const put of f.s.puts.filter(x => x.key === backendSuccessorPayloadKey))
+        assert.ok(!JSON.stringify(f.s.audit).includes(put.value), 'raw base64 payload stays out of the audit');
+    }
+  } finally { repo.close(); }
+});
+
+test('protected Render client refuses a changed stored payload before requesting any deploy', async () => {
+  const f = fixture();
+  protectRender(f, (value, request) => request.method === 'GET' &&
+    request.route.endsWith('/env-vars/' + backendSuccessorPayloadKey) ?
+    { key: backendSuccessorPayloadKey, value: 'different-synthetic-value' } : value);
+  await assert.rejects(f.execute(), /BACKEND_STAGING_UNVERIFIED/);
+  assert.deepEqual(f.s.audit.slice(-1).map(row => row.phase), ['backend-successor-staging']);
+  assert.equal(f.s.puts.length, 1);
+  assert.equal(f.s.posts.length, 0);
+});
+
 test('ordinary backend dispatch accepts the merged main sha and freezes a distinct purpose', () => {
   const dispatch = { sha: 'b'.repeat(40), ci_run_id: '43597833117', ci_run_attempt: '1',
     release_mode: backendSuccessorMode };
@@ -586,6 +636,8 @@ test('render client restricts env access to the settings and successor allowlist
   await api.render(`${servicePath}/deploys`, { commitId: 'b'.repeat(40), clearCache: 'do_not_clear' });
   await api.render(`${servicePath}/env-vars/${backendSuccessorPayloadKey}`, { value: 'payload' });
   await api.render(`${servicePath}/env-vars/${backendSuccessorPinKey}`, { value: 'p'.repeat(64) });
+  await api.render(`${servicePath}/env-vars/${backendSuccessorPayloadKey}`);
+  await api.render(`${servicePath}/env-vars/${backendSuccessorPinKey}`);
   assert.deepEqual(calls.filter(row => row.method === 'PUT').map(row => row.url),
     [`${servicePath}/env-vars/${backendSuccessorPayloadKey}`,
       `${servicePath}/env-vars/${backendSuccessorPinKey}`].map(url =>
@@ -594,6 +646,9 @@ test('render client restricts env access to the settings and successor allowlist
   for (const [route, body] of [
     [`${servicePath}/env-vars/App__AQGreenV2__Commissioning__VerifiedAuthorityJsonBase64`, undefined],
     [`${servicePath}/env-vars/SomeForeignKey`, undefined],
+    [`${servicePath}/env-vars/${backendSuccessorPayloadKey}Extra`, undefined],
+    [`/services/srv-foreign/env-vars/${backendSuccessorPayloadKey}`, undefined],
+    [`${servicePath}/env-vars`, undefined],
     [`${servicePath}/secret-files/keyfile`, undefined],
     [`${servicePath}/env-vars/App__Recovery__Enabled`, { value: 'true' }],
     [`${servicePath}/env-vars/${backendSuccessorPayloadKey}Extra`, { value: 'x' }]])

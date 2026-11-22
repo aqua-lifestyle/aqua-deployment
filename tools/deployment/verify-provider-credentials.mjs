@@ -7,12 +7,13 @@ import { clients, targets, standingPolicy, policyDigest, validateRender, validat
   deploymentHistory, authenticateHistoricalPolicy, validateBaselineReceipt } from './release-control.mjs';
 import { validateFailedRenderReconciliation } from './historical-release-reconciliation.mjs';
 import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
-import { readGitHubArtifact, readGitHubArtifactFiles, validateArtifact } from './github-evidence.mjs';
+import { readGitHubArtifact, readGitHubArtifactFiles, validateArtifact, sha256 } from './github-evidence.mjs';
 import { runtimeSettings, cleanStartRuntimeSettings, normalRuntimeSettings } from './runtime-readiness.mjs';
 import { memberRuntimeSettings } from './member-release.mjs';
 import { inspectCommissionedBuildIdentity, inspectCommissioningDecision, inspectCommissionedDeploymentHistory,
   inspectCommissionedDeploymentIdentity, inspectCommissionedHealth, inspectCommissionedRenderService,
-  inspectHistoricalCommissioningBindings } from './backend-successor-release.mjs';
+  inspectHistoricalCommissioningBindings, backendSuccessorPayloadKey, backendSuccessorPinKey,
+  backendSuccessorMode, combinedMode } from './backend-successor-release.mjs';
 const nativeSource = JSON.parse(readFileSync(new URL('./native-recovery-source.json', import.meta.url)));
 const heldFrontend = JSON.parse(readFileSync(new URL('../../governance/held-frontend-source-evidence-20261029.json', import.meta.url)));
 
@@ -21,6 +22,12 @@ const executor = targets.executor.repository;
 const denied = () => { throw Error('PROVIDER_CHECK_CONTEXT_DENIED'); };
 const commissionedFailure = Object.freeze({ runId: '44245360791', sha: 'e25fa6ec5d604e1f616aece4ddc9741429549bd3',
   admissionArtifactId: '14401816374', admissionArtifactName: 'verified-admission-44245360791-1' });
+const interruptedStaging = Object.freeze({ runId: '45006063824', executorSha: 'd0cf6e0e424f3762756ed4c7beff83db7b9adeda',
+  sourceSha: '58b18b2f5a76769a660c2ae834bd6e0c02263ebf', ciRunId: '44236824305', ciRunAttempt: 2,
+  artifactId: '14747883309', archiveSha256: 'f86468c27c7850d88a9f1a968281b03a1f0924a93e5360342c38e71c46b71b5e',
+  reportSha256: 'cd969c98b7e4738c2b060370f273f2ea8bb7293aeb801de967f0d2c6614d52fd',
+  expectedPayloadSha256: 'c577c8fd72c6a78cc981e469acb53030bd70550b98ec7b6e32fdba826368ade8',
+  payloadBytes: 1238 });
 const safeHash = value => /^[a-f0-9]{64}$/.test(value ?? '') ? value : 'UNVERIFIABLE';
 const safeSha = value => /^[a-f0-9]{40}$/.test(value ?? '') ? value : 'UNVERIFIABLE';
 const safeRenderId = value => /^dep-[a-z0-9]+$/.test(value ?? '') ? value : 'UNVERIFIABLE';
@@ -284,10 +291,73 @@ async function selectedCommissionedBaseline(api, { readArtifactFiles, readArtifa
   return { proof, baseline, selectedByReleaseRunId: Number(commissionedFailure.runId) };
 }
 
+// Authenticate the original write-ahead intent, never an operator-supplied
+// expected value. The intent hash is not evidence of a successful provider PUT.
+export async function selectedInterruptedStaging(api, readArtifact, pin = interruptedStaging) {
+  const run = await api.executor(`/actions/runs/${pin.runId}`);
+  const jobs = await api.executor(`/actions/runs/${pin.runId}/attempts/1/jobs?per_page=100`);
+  const production = jobs?.jobs?.find(job => job.name === 'Unattended recovery release');
+  if (run?.id !== Number(pin.runId) || run.run_number !== 88 || run.run_attempt !== 1 ||
+    run.head_sha !== pin.executorSha || run.status !== 'completed' || run.conclusion !== 'failure' ||
+    run.event !== 'workflow_dispatch' || run.head_branch !== 'main' || run.path !== '.github/workflows/deploy.yml' ||
+    run.actor?.login !== 'aqualifestyleclub' || run.actor?.id !== 307076734 ||
+    run.repository?.full_name !== executor || run.head_repository?.full_name !== executor ||
+    !Number.isFinite(Date.parse(run.created_at)) ||
+    jobs?.total_count !== 4 || jobs.jobs.length !== 4 || new Set(jobs.jobs.map(job => job.name)).size !== 4 ||
+    jobs.jobs.some(job => job.run_id !== run.id || job.run_attempt !== 1 || job.status !== 'completed') ||
+    jobs.jobs.find(job => job.name === 'Qualify immutable source candidate')?.conclusion !== 'success' ||
+    jobs.jobs.find(job => job.name === 'Verify approved GitHub evidence before provider access')?.conclusion !== 'success' ||
+    jobs.jobs.find(job => job.name === 'Capture prospective provider baseline')?.conclusion !== 'skipped' ||
+    production?.conclusion !== 'failure' || production.steps?.filter(step => step.conclusion === 'failure').length !== 1 ||
+    production.steps?.filter(step =>
+      step.name === 'Revalidate policy, provenance, providers and recovery before automatic deployment' &&
+      step.conclusion === 'failure').length !== 1) throw Error('INTERRUPTED_STAGING_RUN_UNVERIFIABLE');
+  const repository = await api.executor('');
+  const inventory = await api.executor(`/actions/runs/${pin.runId}/artifacts?per_page=100`);
+  const name = `production-release-audit-${pin.runId}-1`;
+  const matches = inventory?.artifacts?.filter(row => row.name === name && String(row.id) === pin.artifactId);
+  if (repository?.full_name !== executor || !Number.isSafeInteger(repository.id) ||
+    inventory?.total_count !== inventory.artifacts?.length || inventory.total_count > 100 || matches?.length !== 1)
+    throw Error('INTERRUPTED_STAGING_ARTIFACT_UNVERIFIABLE');
+  const descriptor = validateArtifact(matches[0], pin.runId, pin.executorSha, name, repository.id);
+  if (descriptor.digest !== `sha256:${pin.archiveSha256}`) throw Error('INTERRUPTED_STAGING_ARTIFACT_UNVERIFIABLE');
+  const bytes = await readArtifact(descriptor, 'release-report.jsonl');
+  if (sha256(bytes) !== pin.reportSha256) throw Error('INTERRUPTED_STAGING_AUDIT_UNVERIFIABLE');
+  let rows;
+  try { rows = bytes.toString('utf8').trim().split('\n').map(JSON.parse); }
+  catch { throw Error('INTERRUPTED_STAGING_AUDIT_UNVERIFIABLE'); }
+  const phases = ['evidence-selected', 'backend-baseline-selected', 'backend-decision-verified',
+    'backend-classified', 'backend-successor-staging', 'failed'];
+  const identity = ['repository', 'sha', 'ciRunId', 'ciRunAttempt', 'releaseRunId', 'releaseRunAttempt',
+    'executorRepository', 'executorSha', 'policySha256', 'environment', 'profile', 'renderServiceId',
+    'vercelProjectId', 'vercelTeamId', 'backendSuccessor', 'combinedRelease'];
+  const first = rows?.[0], baseline = rows?.[1], classified = rows?.[3], staging = rows?.[4];
+  if (rows?.length !== phases.length || rows.some((row, index) => row.phase !== phases[index] ||
+    identity.some(key => row[key] !== first[key]) || row.renderDeployId !== undefined ||
+    row.vercelDeployId !== undefined || row.jobId !== undefined) ||
+    first?.version !== 4 || first.repository !== targets.repository || first.sha !== pin.sourceSha ||
+    first.ciRunId !== pin.ciRunId || first.ciRunAttempt !== pin.ciRunAttempt ||
+    first.releaseRunId !== pin.runId || first.releaseRunAttempt !== 1 ||
+    first.executorRepository !== executor || first.executorSha !== pin.executorSha ||
+    first.policySha256 !== policyDigest(standingPolicy) || first.environment !== targets.environment ||
+    first.profile !== targets.profile || first.renderServiceId !== targets.render.id ||
+    first.vercelProjectId !== targets.vercel.id || first.vercelTeamId !== targets.vercel.teamId ||
+    first.backendSuccessor !== backendSuccessorMode || first.combinedRelease !== combinedMode ||
+    baseline?.baselineRenderDeployId !== 'dep-dbru710n74is738ah8bg' ||
+    baseline?.baselineRenderSha !== 'b8d86e5e60997483423b273d5f426c08b411f573' ||
+    classified?.schemaTransition !== 'additive' || staging?.stagedSchemaTransition !== 'none' ||
+    staging?.payloadBytes !== pin.payloadBytes || staging?.payloadPinSha256 !== pin.expectedPayloadSha256 ||
+    rows.at(-1)?.code !== 'SECRET_BEARING_RENDER_READ_FORBIDDEN')
+    throw Error('INTERRUPTED_STAGING_AUDIT_UNVERIFIABLE');
+  return { pin: pin.expectedPayloadSha256, payloadBytes: staging.payloadBytes,
+    artifactId: pin.artifactId, archiveSha256: pin.archiveSha256, createdAt: run.created_at,
+    baselineRenderDeployId: baseline.baselineRenderDeployId };
+}
+
 // GET-only diagnostic for the exact failed combined release. All D10 checks
 // below call the same pure inspectors and assertions used by the release path.
 export async function diagnoseRenderCommissionedState(env, { checkoutSha, fetcher = fetch, emit = () => {},
-  loadBaseline = selectedCommissionedBaseline } = {}) {
+  loadBaseline = selectedCommissionedBaseline, loadStaging = selectedInterruptedStaging } = {}) {
   providerCheckContext(env, checkoutSha);
   if (providerCheckMode(env) !== 'render-commissioned-state-diagnostic') denied();
   const report = row => emit({ contract: 'aqua.commissioned-state-read-diagnostic', version: 1,
@@ -301,7 +371,7 @@ export async function diagnoseRenderCommissionedState(env, { checkoutSha, fetche
 
   let artifactDownload = false, lastHttpStatus;
   const servicePath = `/services/${targets.render.id}`;
-  const renderKeys = new Set([...Object.keys(normalRuntimeSettings),
+  const renderKeys = new Set([...Object.keys(normalRuntimeSettings), backendSuccessorPayloadKey, backendSuccessorPinKey,
     'App__AQGreenV2__Commissioning__DecisionJsonBase64',
     'App__AQGreenV2__Commissioning__DecisionSha256', 'Deployment__BuildId']);
   const githubApiPathAllowed = (pathname, search) => {
@@ -310,6 +380,11 @@ export async function diagnoseRenderCommissionedState(env, { checkoutSha, fetche
     if (pathname === `/repos/${executor}/actions/runs/${commissionedFailure.runId}/artifacts` && search === '?per_page=100') return true;
     if (pathname === `/repos/${executor}/actions/artifacts/${commissionedFailure.admissionArtifactId}` && !search) return true;
     if (pathname === `/repos/${executor}/actions/artifacts/${commissionedFailure.admissionArtifactId}/zip` && !search) return true;
+    if (pathname === `/repos/${executor}/actions/runs/${interruptedStaging.runId}` && !search) return true;
+    if (pathname === `/repos/${executor}/actions/runs/${interruptedStaging.runId}/attempts/1/jobs` && search === '?per_page=100') return true;
+    if (pathname === `/repos/${executor}/actions/runs/${interruptedStaging.runId}/artifacts` && search === '?per_page=100') return true;
+    if (pathname === `/repos/${executor}/actions/artifacts/${interruptedStaging.artifactId}` && !search) return true;
+    if (pathname === `/repos/${executor}/actions/artifacts/${interruptedStaging.artifactId}/zip` && !search) return true;
     if (/^\/repos\/aqua-lifestyle\/aqua-deployment\/actions\/runs\/43429695806$/.test(pathname) && !search) return true;
     if (pathname === `/repos/${executor}/actions/runs/43429695806/artifacts` && search === '?per_page=100') return true;
     if (/^\/repos\/aqua-lifestyle\/aqua-deployment\/actions\/artifacts\/14040001166(?:\/zip)?$/.test(pathname) && !search) return true;
@@ -467,6 +542,46 @@ export async function diagnoseRenderCommissionedState(env, { checkoutSha, fetche
   if (healthInspection && !healthInspection.paymentPass) currentFailures.push('payment-availability');
   const hasUnknown = !baselineSelection || !serviceInspection || Object.values(normalSettings).some(x => x.result === 'UNKNOWN') ||
     !historyInspection || !decisionInspection || !buildIdentity || !deploymentIdentity || !bindingInspection || !healthInspection;
+  let stagingProof;
+  try { stagingProof = await loadStaging(api, readArtifact); }
+  catch { /* Missing, changed or inaccessible intent cannot authorize a stored-value comparison. */ }
+  const readStagedValue = async (key, isPayload) => {
+    if (!stagingProof) return 'UNVERIFIED';
+    const readback = await safeRenderRead(key, `${servicePath}/env-vars/${key}`);
+    if (!readback.known || readback.httpStatus !== 200 || readback.value?.key !== key) return 'UNVERIFIED';
+    const value = readback.value.value;
+    // A null or masked provider field does not establish that the key is absent.
+    if (value === null) return 'UNVERIFIED';
+    if (typeof value !== 'string') return 'UNVERIFIED';
+    if (!isPayload) return /^[a-f0-9]{64}$/.test(value) ?
+      (value === stagingProof.pin ? 'MATCH' : 'MISMATCH') : 'UNVERIFIED';
+    // Canonical bounded base64 prevents masked or malformed provider responses
+    // from becoming a false mismatch; only actual bytes can be compared.
+    if (value.length > 32768 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return 'UNVERIFIED';
+    const bytes = Buffer.from(value, 'base64');
+    if (bytes.toString('base64') !== value) return 'UNVERIFIED';
+    return bytes.length === stagingProof.payloadBytes && sha256(bytes) === stagingProof.pin ? 'MATCH' : 'MISMATCH';
+  };
+  const stagedPayload = await readStagedValue(backendSuccessorPayloadKey, true);
+  const stagedPin = await readStagedValue(backendSuccessorPinKey, false);
+  const safeTime = value => typeof value === 'string' &&
+    /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(value) && Number.isFinite(Date.parse(value)) ?
+    new Date(value).toISOString() : null;
+  const datedDeployments = historyRead.known ? historyRead.deployments.map(row => ({
+    id: safeRenderId(row?.id), status: row?.status, commitSha: safeSha(row?.commit?.id),
+    createdAt: safeTime(row?.createdAt) })) : null;
+  const historyIdentified = datedDeployments?.length > 0 && datedDeployments.every(row => row.id !== 'UNVERIFIABLE') &&
+    new Set(datedDeployments.map(row => row.id)).size === datedDeployments.length;
+  const postRunDeployments = stagingProof && historyIdentified && datedDeployments.every(row => row.createdAt) ?
+    datedDeployments.filter(row => Date.parse(row.createdAt) >= Date.parse(stagingProof.createdAt)) : 'UNVERIFIED';
+  report({ contract: 'aqua.successor-staging-read-diagnostic', version: 1,
+    failedReleaseRunId: interruptedStaging.runId, observedAt: new Date().toISOString(),
+    evidence: stagingProof ? { status: 'MATCH', auditArtifactId: stagingProof.artifactId,
+      archiveSha256: stagingProof.archiveSha256 } : { status: 'UNVERIFIED' },
+    stagedPayload: stagedPayload, stagedPin: stagedPin,
+    deploymentHistory: historyIdentified ? { status: historyInspection?.pass ? 'MATCH' : 'UNVERIFIED',
+      current: live ? { id: liveId, status: live.status, commitSha: liveSha } : 'UNVERIFIED',
+      postRunDeployments } : { status: 'UNVERIFIED' } });
   report({ diagnosticStatus: hasUnknown ? 'COMPLETE_WITH_UNKNOWN' : 'COMPLETE', observedAt: new Date().toISOString(),
     historicalFailurePredicate: 'UNKNOWN_NOT_RETAINED_IN_FAILED_RUN_AUDIT',
     baselineEvidence: baselineSelection ? { result: 'PASS', selectedByReleaseRunId: baselineSelection.selectedByReleaseRunId,
