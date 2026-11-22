@@ -138,28 +138,32 @@ test('reviewed baseline-drift producer requires a complete no-mutation audit and
   }
 });
 
-test('the exact commissioned-state producer recognizes only its complete prewrite failure', () => {
-  // Synthetic values in the authenticated 44245360791/1 audit's two-row format;
-  // no production audit contents are copied into the test suite.
-  const historicalSha = 'e25fa6ec5d604e1f616aece4ddc9741429549bd3';
+// Synthetic values in the authenticated 43935894260/1, 44040840143/1 and
+// 44245360791/1 two-row audit format; no production contents are copied.
+const combinedPrewriteInput = (runId, runNumber, historicalSha, artifactId, failureCode) => {
   const historicalProducer = { executorSha: historicalSha,
     workflowSha256: sha256(readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url))),
     controllerSha256: '6075af09753be291935cb2f05991aeea21b0f5a72c23fb530044716d211aa79c' };
   const historicalRows = rows.map(row => {
     const { schemaFirstEvidenceSha256, recoveryMode, ...rest } = row;
     return { ...rest, sha: 'c'.repeat(40), ciRunId: '123', ciRunAttempt: 1,
-      releaseRunId: '44245360791', executorSha: historicalSha,
+      releaseRunId: String(runId), executorSha: historicalSha,
       backendSuccessor: 'post-normal-backend-v1', combinedRelease: 'post-normal-backend-frontend-v1',
-      ...(row.phase === 'failed' ? { code: 'BACKEND_COMMISSIONED_STATE_CHANGED' } : {}) };
+      ...(row.phase === 'failed' ? { code: failureCode } : {}) };
   });
-  const input = { run: run(44245360791, { num: 86, sha: historicalSha }), attempt: 1,
+  return { run: run(runId, { num: runNumber, sha: historicalSha }), attempt: 1,
     production: failedJob(undefined, 'failure'), audit: {
-      descriptor: { artifactId: '14400929767', runId: '44245360791', runAttempt: 1, sha: historicalSha },
+      descriptor: { artifactId, runId: String(runId), runAttempt: 1, sha: historicalSha },
       producer: historicalProducer, rows: historicalRows } };
+};
+
+test('the exact commissioned-state producer recognizes only its complete prewrite failure', () => {
+  const input = combinedPrewriteInput(44245360791, 86, 'e25fa6ec5d604e1f616aece4ddc9741429549bd3',
+    '14400929767', 'BACKEND_COMMISSIONED_STATE_CHANGED');
   const recognized = recognize(input);
   assert.equal(recognized.basis, 'audit-verified-never-mutated');
   assert.equal(recognized.terminalFailureCode, 'BACKEND_COMMISSIONED_STATE_CHANGED');
-  assert.equal(recognized.rowsSha256, objectDigest(historicalRows));
+  assert.equal(recognized.rowsSha256, objectDigest(input.audit.rows));
   assert.equal(recognized.renderDeployId, undefined);
   assert.equal(recognized.vercelDeployId, undefined);
   assert.equal(input.run.conclusion, 'failure');
@@ -169,10 +173,6 @@ test('the exact commissioned-state producer recognizes only its complete prewrit
   };
   for (const [label, change, expected] of [
     ['other revision, same bytes', x => substituteRevision(x, 'd'.repeat(40)), /WRITE_AHEAD_CONTRACT_UNSUPPORTED/],
-    ['earlier producer 44040840143 is not approved by this pin',
-      x => substituteRevision(x, 'ae4f6bda2ab89a414cecffa8cc3c50965860721a'), /WRITE_AHEAD_CONTRACT_UNSUPPORTED/],
-    ['earlier producer 43935894260 is not approved by this pin',
-      x => substituteRevision(x, '3b0a6484f07765c5905d72b45cbb9841d2529be1'), /WRITE_AHEAD_CONTRACT_UNSUPPORTED/],
     ['changed controller fingerprint', x => x.audit.producer.controllerSha256 = 'd'.repeat(64), /WRITE_AHEAD_CONTRACT_UNSUPPORTED/],
     ['changed workflow fingerprint', x => x.audit.producer.workflowSha256 = 'd'.repeat(64), /WRITE_AHEAD_CONTRACT_UNSUPPORTED/],
     ['missing row', x => x.audit.rows.pop(), /PRIOR_AUDIT_INCOMPLETE/],
@@ -186,6 +186,34 @@ test('the exact commissioned-state producer recognizes only its complete prewrit
   ]) {
     const changed = structuredClone(input); change(changed);
     assert.throws(() => recognize(changed), expected, label);
+  }
+});
+
+test('the two other reviewed revisions retain their failed status and exact prewrite evidence', () => {
+  for (const [runId, number, sha, artifact, code] of [
+    [44040840143, 85, 'ae4f6bda2ab89a414cecffa8cc3c50965860721a', '14309447129', 'PROTECTED_RUNTIME_READINESS_FAILED'],
+    [43935894260, 84, '3b0a6484f07765c5905d72b45cbb9841d2529be1', '14261895081', 'BACKEND_RENDER_DRIFT']
+  ]) {
+    const input = combinedPrewriteInput(runId, number, sha, artifact, code);
+    const accepted = recognize(input);
+    assert.equal(accepted.basis, 'audit-verified-never-mutated');
+    assert.equal(accepted.terminalFailureCode, code);
+    assert.equal(accepted.auditArtifactId, artifact);
+    assert.equal(accepted.renderDeployId, undefined);
+    assert.equal(accepted.vercelDeployId, undefined);
+    assert.equal(input.run.conclusion, 'failure');
+    for (const change of [
+      x => x.audit.producer.controllerSha256 = 'd'.repeat(64),
+      x => x.audit.producer.workflowSha256 = 'd'.repeat(64),
+      x => x.audit.rows[1].releaseRunId = '999',
+      x => x.audit.rows[1].backendSuccessor = undefined,
+      x => x.audit.rows.splice(1, 0, { ...x.audit.rows[0], phase: 'backend-schema-job-requesting' }),
+      x => x.audit.rows.splice(1, 0, { ...x.audit.rows[0], phase: 'frontend-vercel-requesting' }),
+      x => x.audit.rows[1].vercelDeployId = 'dpl-Acknowledged'
+    ]) {
+      const changed = structuredClone(input); change(changed);
+      assert.throws(() => recognize(changed), PriorRunNotRecognized);
+    }
   }
 });
 
