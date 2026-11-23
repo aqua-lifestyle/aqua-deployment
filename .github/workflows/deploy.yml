@@ -245,10 +245,6 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
-        if: inputs.release_mode == 'post-normal-backend-v1' || inputs.release_mode == 'post-normal-backend-frontend-v1'
-        with:
-          dotnet-version: 8.0.x
       - name: Build reviewed D10 canonical digest helper
         if: inputs.release_mode == 'post-normal-backend-v1' || inputs.release_mode == 'post-normal-backend-frontend-v1'
         run: dotnet build tools/deployment/d10-decision-digest/D10DecisionDigest.csproj --configuration Release
