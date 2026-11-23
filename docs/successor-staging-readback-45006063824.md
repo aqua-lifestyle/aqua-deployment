@@ -53,3 +53,31 @@ after each PUT, both before the initial Render deployment and after the additive
 migrator job. It still compares full stored values before proceeding; a read
 failure or mismatch fails closed. Its protected-client tests exercise both
 staging rounds and all four PUT/GET pairs, with unauthorized keys denied.
+
+## Later acknowledged Render update failure
+
+Executor run `45098115310/1` remains **failed**. Its authenticated audit
+`14784681111` records both staged keys, an acknowledged Render deployment
+`dep-dc1q0d3l550s73f78dbg`, then
+`PROVIDER_DEPLOYMENT_FAILED_INSPECT_RELEASE_REPORT`; no migrator job or Vercel
+request was made by this attempt. Existing authenticated Render CLI access
+observed the target as `update_failed` at the qualified source, while the
+original `dep-dbru710n74is738ah8bg` remained live. The CLI returned only its
+latest 20 deployments, not a full historical inventory. Bounded service logs
+show `D10_BACKEND_SUCCESSOR_PREDECESSOR_DECISION_CHANGED` during the update;
+they lack the deployment ID, so causal linkage is an inference, and the
+provider-issued failure reason remains **UNKNOWN**. The startup mismatch has
+not been corrected. No separate business-owner authorization record issued
+before the original run was available; its status remains **UNVERIFIED** even
+though GitHub identifies the triggering account.
+
+`governance/render-update-failed-reconciliation-45098115310.json` is an exact,
+whole-file-pinned factual record, not a success, retry, rollout or financial
+permission. The history planner reauthenticates the failed run, its audit and
+operational GitHub admission. Before a first subsequent verified successor may
+stage either key, the full current Render history must consist of the original
+authenticated 133-row snapshot plus exactly the recorded `update_failed`
+deployment; unknown later operations or changed provider statuses deny. Only
+a separately owner-authorized, freshly qualified release with the unchanged
+live provider/database/financial safeguards could proceed. A history-plan PASS
+does not fix the D10 startup mismatch or justify a new production dispatch.

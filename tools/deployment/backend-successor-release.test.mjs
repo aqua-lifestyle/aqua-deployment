@@ -279,6 +279,47 @@ test('reconciled staging still denies a changed full Render history before any p
   }
 });
 
+test('one exact acknowledged failed Render deployment is accounted for before and after a new successor', async () => {
+  const repo = sourceRepository();
+  try {
+    const additiveFiles = [{ filename: migrationPath, status: 'added' },
+      { filename: designerPath, status: 'added' }, { filename: snapshotPath, status: 'modified' },
+      { filename: backendModifiedPath, status: 'modified' }];
+    const prepare = files => {
+      const f = fixture({ repo, ...(files ? { files } : {}) });
+      const previous = f.s.deploys.map(row => ({ id: row.id, status: row.status, commitSha: row.commit.id }));
+      const failed = { id: 'dep-acknowledged', status: 'update_failed', commit: { id: f.candidateSha } };
+      f.s.deploys.push(failed);
+      const priorHistorySha256 = objectDigest(previous);
+      const expectedHistorySha256 = objectDigest([...previous,
+        { id: failed.id, status: failed.status, commitSha: failed.commit.id }].sort((a, b) => a.id.localeCompare(b.id)));
+      f.options.evidencePlan.historicalReconciliations = [
+        { runId: '45006063824', renderHistorySha256: priorHistorySha256 },
+        { runId: '45098115310', priorHistorySha256, expectedHistorySha256,
+          renderDeployId: failed.id, renderStatus: failed.status, sourceSha: f.candidateSha }
+      ];
+      return f;
+    };
+    for (const files of [undefined, additiveFiles]) {
+      const f = prepare(files);
+      await f.execute();
+      assert.equal(f.s.audit.at(-1).phase, 'backend-deployed');
+      assert.equal(f.s.posts.length, files ? 3 : 1);
+    }
+    for (const mutate of [
+      f => f.s.deploys.find(row => row.id === 'dep-acknowledged').status = 'build_failed',
+      f => f.s.deploys.push({ id: 'dep-other', status: 'update_failed', commit: { id: 'c'.repeat(40) } }),
+      f => f.s.deploys.splice(f.s.deploys.findIndex(row => row.id === 'dep-acknowledged'), 1),
+      f => f.options.evidencePlan.historicalReconciliations[1].expectedHistorySha256 = 'f'.repeat(64),
+      f => f.options.evidencePlan.historicalReconciliations.shift()
+    ]) {
+      const f = prepare(); mutate(f);
+      await assert.rejects(f.execute(), /BACKEND_RENDER_DRIFT/);
+      assertNoProviderWrites(f);
+    }
+  } finally { repo.close(); }
+});
+
 test('ordinary backend dispatch accepts the merged main sha and freezes a distinct purpose', () => {
   const dispatch = { sha: 'b'.repeat(40), ci_run_id: '43597833117', ci_run_attempt: '1',
     release_mode: backendSuccessorMode };

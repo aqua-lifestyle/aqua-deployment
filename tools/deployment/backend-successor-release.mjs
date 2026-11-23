@@ -402,12 +402,21 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   // successor, require the complete Render history to remain the diagnostic's
   // authenticated snapshot; a later successful successor has its own receipt.
   const interrupted = options.evidencePlan.historicalReconciliations?.filter(row => row.runId === '45006063824') ?? [];
+  const failedRender = options.evidencePlan.historicalReconciliations?.filter(row => row.runId === '45098115310') ?? [];
+  check(failedRender.length === 0 || interrupted.length === 1, 'BACKEND_RENDER_DRIFT');
   if (interrupted.length && !(options.evidencePlan.backendReleases?.length || options.evidencePlan.combinedReleases?.length)) {
     const projected = deploys.map(row => ({ id: row.id, status: row.status, commitSha: row.commit?.id }));
-    check(interrupted.length === 1 && /^[a-f0-9]{64}$/.test(interrupted[0].renderHistorySha256 ?? '') &&
+    const acknowledged = failedRender[0];
+    check(interrupted.length === 1 && failedRender.length <= 1 &&
+      /^[a-f0-9]{64}$/.test(interrupted[0].renderHistorySha256 ?? '') &&
+      (!acknowledged || acknowledged.priorHistorySha256 === interrupted[0].renderHistorySha256 &&
+        acknowledged.renderStatus === 'update_failed' && acknowledged.sourceSha === q.sha &&
+        projected.filter(row => row.id === acknowledged.renderDeployId &&
+          row.status === acknowledged.renderStatus && row.commitSha === q.sha).length === 1) &&
       new Set(projected.map(row => row.id)).size === projected.length && projected.every(row =>
         /^dep-[a-z0-9]+$/.test(row.id ?? '') && /^[a-f0-9]{40}$/.test(row.commitSha ?? '')) &&
-      objectDigest(projected.sort((a, b) => a.id.localeCompare(b.id))) === interrupted[0].renderHistorySha256,
+      objectDigest(projected.sort((a, b) => a.id.localeCompare(b.id))) ===
+        (acknowledged?.expectedHistorySha256 ?? interrupted[0].renderHistorySha256),
     'BACKEND_RENDER_DRIFT');
   }
   const historyInspection = inspectCommissionedDeploymentHistory(deploys);
@@ -614,9 +623,13 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   clock();
   const endHistory = await deploymentHistory(api, 'render');
   const endLive = endHistory.filter(row => row.status === 'live');
+  const acknowledgedFailed = failedRender.length === 1 ? row => row.id === failedRender[0].renderDeployId &&
+    row.status === 'update_failed' && row.commit?.id === q.sha : () => false;
   check(endHistory.every(row => !activeRender.has(row.status)) && endLive.length === 1 &&
     endLive[0].id === finalDeployId && endLive[0].commit?.id === q.sha &&
-    endHistory.filter(row => row.commit?.id === q.sha).length === (schemaTransition === 'additive' ? 2 : 1),
+    endHistory.filter(row => row.commit?.id === q.sha && !acknowledgedFailed(row)).length ===
+      (schemaTransition === 'additive' ? 2 : 1) &&
+    (failedRender.length === 0 || endHistory.filter(acknowledgedFailed).length === 1),
   'BACKEND_DEPLOYMENT_UNVERIFIABLE');
   const endHealth = await api.health();
   try { validateHealth(endHealth, q.sha); }
