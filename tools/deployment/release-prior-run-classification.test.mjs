@@ -13,7 +13,8 @@ const rows = readFileSync(new URL('./fixtures/prior-run-prod-read-failure-audit-
   .trim().split('\n').map(line => JSON.parse(line));
 const mergedSha = '110ab4fb83bbf9291fcf23d6332b430de4390c6c';
 const producer = {executorSha: mergedSha,
-  workflowSha256: sha256(readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url))),
+  // Fingerprints of each producing commit, not the mutable current workflow.
+  workflowSha256: '394069c4fd0c480d59e8c70e98d9de674fc8f43e8792b58ad43abd433279aea8',
   controllerSha256: 'e4b76c1a5ca22d047675e5f1d7964bd20f9c413d3bc540cd29f7406834c585ab'};
 const run = (id, o = {}) => ({id, runNumber: o.num ?? 12, runAttempt: o.attempts ?? 1, headSha: o.sha ?? mergedSha,
   status: o.status ?? 'completed', conclusion: o.conclusion ?? 'failure',
@@ -142,7 +143,7 @@ test('reviewed baseline-drift producer requires a complete no-mutation audit and
 // 44245360791/1 two-row audit format; no production contents are copied.
 const combinedPrewriteInput = (runId, runNumber, historicalSha, artifactId, failureCode) => {
   const historicalProducer = { executorSha: historicalSha,
-    workflowSha256: sha256(readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url))),
+    workflowSha256: 'f6ba04f14306641249e2c503e3c21e40d0900e8e28f39f5792a1744a213d3254',
     controllerSha256: '6075af09753be291935cb2f05991aeea21b0f5a72c23fb530044716d211aa79c' };
   const historicalRows = rows.map(row => {
     const { schemaFirstEvidenceSha256, recoveryMode, ...rest } = row;

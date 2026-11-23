@@ -54,6 +54,31 @@ migrator job. It still compares full stored values before proceeding; a read
 failure or mismatch fails closed. Its protected-client tests exercise both
 staging rounds and all four PUT/GET pairs, with unauthorized keys denied.
 
+## Proposed next-candidate D10 source and digest contract
+
+The first future backend successor must read the existing service-level
+`App__AQGreenV2__Commissioning__DecisionPath` and require exactly
+`environment:App:AQGreenV2:Commissioning:DecisionJsonBase64` before either
+successor configuration write. It authenticates the selected base64 decision
+against `App__AQGreenV2__Commissioning__DecisionSha256` (raw bytes), then
+rechecks the selector, encoded decision and pin immediately before each Render
+deployment request, including an additive restart. An absent, file-selected,
+different or unreadable selector denies; the executor does not set it or change
+commissioning configuration. Existing baseline, historical, financial and
+provider checks remain required.
+
+Only `predecessorDecisionSha256` in the new successor payload uses the .NET
+canonical digest of that typed decision. The raw decision pin and audit hashes
+remain raw-byte hashes; the successor payload itself retains its raw-byte pin.
+The reviewed helper's typed model, canonical writer, startup selector and
+runtime acceptance source are constrained to the pinned candidate source
+contracts. Drift or helper failure denies before staging. This contract makes
+no assertion about the decision source selected by the earlier failed process.
+The currently effective service-level DecisionPath has not been authenticated
+by the retained diagnostics and remains **UNVERIFIED**; if it is absent or
+file-selected, an owner-authorized separate configuration decision is needed
+before any later release can pass this gate.
+
 ## Later acknowledged Render update failure
 
 Executor run `45098115310/1` remains **failed**. Its authenticated audit
