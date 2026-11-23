@@ -17,7 +17,7 @@ import { freezeCandidate, validateDispatchInputs, verifyCandidate, createAuditWr
 import { normalRuntimeSettings, validateReadiness } from './runtime-readiness.mjs';
 import { runnerEnv, fixture as controllerFixture, fixtureNow, zipFixture,
   frontendFixtureArchive } from './fixtures/provider.mjs';
-import { sha256, verifyGitHubEvidence, createGitHubAdmission } from './github-evidence.mjs';
+import { sha256, objectDigest, verifyGitHubEvidence, createGitHubAdmission } from './github-evidence.mjs';
 import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
 import { schemaSource } from './commission-schema-first.mjs';
 
@@ -259,6 +259,24 @@ test('protected Render client refuses a changed stored payload before requesting
   assert.deepEqual(f.s.audit.slice(-1).map(row => row.phase), ['backend-successor-staging']);
   assert.equal(f.s.puts.length, 1);
   assert.equal(f.s.posts.length, 0);
+});
+
+test('reconciled staging still denies a changed full Render history before any provider write', async () => {
+  const original = fixture();
+  const observed = original.s.deploys.map(row => ({ id: row.id, status: row.status, commitSha: row.commit.id }));
+  const proof = { runId: '45006063824', renderHistorySha256: objectDigest(observed) };
+  original.options.evidencePlan.historicalReconciliations = [proof];
+  await original.execute();
+  for (const change of [
+    rows => rows.push({ id: 'dep-foreign', status: 'update_failed', commit: { id: 'c'.repeat(40) } }),
+    rows => rows[0].status = 'deactivated'
+  ]) {
+    const drift = fixture();
+    drift.options.evidencePlan.historicalReconciliations = [proof];
+    change(drift.s.deploys);
+    await assert.rejects(drift.execute(), /BACKEND_RENDER_DRIFT/);
+    assertNoProviderWrites(drift);
+  }
 });
 
 test('ordinary backend dispatch accepts the merged main sha and freezes a distinct purpose', () => {

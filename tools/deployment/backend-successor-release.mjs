@@ -397,6 +397,19 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   const decisionInspection = inspectCommissioningDecision(decisionBytes, decisionPin);
   const decision = assertCommissioningDecision(decisionInspection);
   const deploys = await deploymentHistory(api, 'render');
+  // A factual acknowledgement of the interrupted configuration write is not
+  // permission to ignore a later provider operation. Before the first verified
+  // successor, require the complete Render history to remain the diagnostic's
+  // authenticated snapshot; a later successful successor has its own receipt.
+  const interrupted = options.evidencePlan.historicalReconciliations?.filter(row => row.runId === '45006063824') ?? [];
+  if (interrupted.length && !(options.evidencePlan.backendReleases?.length || options.evidencePlan.combinedReleases?.length)) {
+    const projected = deploys.map(row => ({ id: row.id, status: row.status, commitSha: row.commit?.id }));
+    check(interrupted.length === 1 && /^[a-f0-9]{64}$/.test(interrupted[0].renderHistorySha256 ?? '') &&
+      new Set(projected.map(row => row.id)).size === projected.length && projected.every(row =>
+        /^dep-[a-z0-9]+$/.test(row.id ?? '') && /^[a-f0-9]{40}$/.test(row.commitSha ?? '')) &&
+      objectDigest(projected.sort((a, b) => a.id.localeCompare(b.id))) === interrupted[0].renderHistorySha256,
+    'BACKEND_RENDER_DRIFT');
+  }
   const historyInspection = inspectCommissionedDeploymentHistory(deploys);
   assertCommissionedDeploymentHistory(historyInspection);
   const live = historyInspection.live;
