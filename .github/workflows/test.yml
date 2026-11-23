@@ -35,4 +35,5 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --ignore-scripts
+      - run: dotnet build tools/deployment/d10-decision-digest/D10DecisionDigest.csproj --configuration Release
       - run: node --test tools/deployment/*.test.mjs

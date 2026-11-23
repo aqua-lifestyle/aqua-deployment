@@ -28,7 +28,8 @@ import { validateInventory } from './mandatory-security.mjs';
 import { HistoricalReconciliationDenied, isReconciledHistoricalRun, validateHistoricalContext,
   validateHistoricalArtifact, validateHistoricalAudit, selectTargetFailure,
   interruptedSuccessorRunId, validateInterruptedSuccessorRecord,
-  authenticateInterruptedSuccessorDiagnostic } from './historical-release-reconciliation.mjs';
+  authenticateInterruptedSuccessorDiagnostic, failedSuccessorRenderRunId,
+  authenticateFailedSuccessorAdmission } from './historical-release-reconciliation.mjs';
 import { partialReleaseRunId, reconcilePartialRelease, partialRenderReuse,
   validatePartialRenderOrigin } from './partial-release-reconciliation.mjs';
 import { readinessCandidateSha, readinessStartingBackend, validateReadinessStartingBackend,
@@ -1110,6 +1111,11 @@ export async function evidencePlan(api, candidate, policy) {
           await validateExecutorApproval(api, { executorSha: diagnostic.executorSha,
             policySha256: candidate.policySha256 }, policy);
           diagnosticProof = await authenticateInterruptedSuccessorDiagnostic(api);
+        }
+        if (String(run.id) === failedSuccessorRenderRunId) {
+          await validateExecutorApproval(api, { executorSha: run.head_sha,
+            policySha256: candidate.policySha256 }, policy);
+          diagnosticProof = await authenticateFailedSuccessorAdmission(api);
         }
         const proof = validateHistoricalAudit(await readReleaseAudit(api, descriptor), descriptor, pin, targets, diagnosticProof);
         historicalReconciliations.push(proof);

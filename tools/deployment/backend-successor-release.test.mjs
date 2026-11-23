@@ -20,6 +20,7 @@ import { runnerEnv, fixture as controllerFixture, fixtureNow, zipFixture,
 import { sha256, objectDigest, verifyGitHubEvidence, createGitHubAdmission } from './github-evidence.mjs';
 import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
 import { schemaSource } from './commission-schema-first.mjs';
+import { canonicalDecisionDigest } from './d10-decision-digest.mjs';
 
 const baselineSha = 'b8d86e5e60997483423b273d5f426c08b411f573';
 const executorSha = 'd'.repeat(40);
@@ -106,6 +107,7 @@ function fixture({ files = [{ filename: backendModifiedPath, status: 'modified' 
     requiredConfigurationDigest: '6'.repeat(64), ...decisionOverrides };
   const decisionBytes = Buffer.from(JSON.stringify(decision), 'utf8');
   s.vars = { ...s.vars, Deployment__BuildId: baselineSha,
+    App__AQGreenV2__Commissioning__DecisionPath: 'environment:App:AQGreenV2:Commissioning:DecisionJsonBase64',
     App__AQGreenV2__Commissioning__DecisionJsonBase64: decisionBytes.toString('base64'),
     App__AQGreenV2__Commissioning__DecisionSha256: sha256(decisionBytes), ...vars };
   s.deploys = [{ id: 'dep-commissioned', status: 'live', commit: { id: baselineSha } }];
@@ -195,7 +197,7 @@ function fixture({ files = [{ filename: backendModifiedPath, status: 'modified' 
     deploymentHistory, waitFor, releaseKey, evidencePlan: { policySha256: q.policySha256,
       verifiedReleases: [], priorFailedRuns: [], baseline: null, resume: null, resumeChain: [],
       backendReleases: [] }, attempts: 3, pause: async () => {},
-    guard: async () => {}, validateAdmission: () => {},
+    guard: async () => {}, validateAdmission: () => {}, verifyDecisionContract: () => {},
     env: repo ? { SOURCE_DIR: repo.dir } : undefined, now };
   const report = createAuditWriter(q, row => s.audit.push(row));
   report({ phase: 'evidence-selected', authorizationId: 'a'.repeat(64), evidenceSha256: 'b'.repeat(64),
@@ -279,6 +281,47 @@ test('reconciled staging still denies a changed full Render history before any p
   }
 });
 
+test('one exact acknowledged failed Render deployment is accounted for before and after a new successor', async () => {
+  const repo = sourceRepository();
+  try {
+    const additiveFiles = [{ filename: migrationPath, status: 'added' },
+      { filename: designerPath, status: 'added' }, { filename: snapshotPath, status: 'modified' },
+      { filename: backendModifiedPath, status: 'modified' }];
+    const prepare = files => {
+      const f = fixture({ repo, ...(files ? { files } : {}) });
+      const previous = f.s.deploys.map(row => ({ id: row.id, status: row.status, commitSha: row.commit.id }));
+      const failed = { id: 'dep-acknowledged', status: 'update_failed', commit: { id: f.candidateSha } };
+      f.s.deploys.push(failed);
+      const priorHistorySha256 = objectDigest(previous);
+      const expectedHistorySha256 = objectDigest([...previous,
+        { id: failed.id, status: failed.status, commitSha: failed.commit.id }].sort((a, b) => a.id.localeCompare(b.id)));
+      f.options.evidencePlan.historicalReconciliations = [
+        { runId: '45006063824', renderHistorySha256: priorHistorySha256 },
+        { runId: '45098115310', priorHistorySha256, expectedHistorySha256,
+          renderDeployId: failed.id, renderStatus: failed.status, sourceSha: f.candidateSha }
+      ];
+      return f;
+    };
+    for (const files of [undefined, additiveFiles]) {
+      const f = prepare(files);
+      await f.execute();
+      assert.equal(f.s.audit.at(-1).phase, 'backend-deployed');
+      assert.equal(f.s.posts.length, files ? 3 : 1);
+    }
+    for (const mutate of [
+      f => f.s.deploys.find(row => row.id === 'dep-acknowledged').status = 'build_failed',
+      f => f.s.deploys.push({ id: 'dep-other', status: 'update_failed', commit: { id: 'c'.repeat(40) } }),
+      f => f.s.deploys.splice(f.s.deploys.findIndex(row => row.id === 'dep-acknowledged'), 1),
+      f => f.options.evidencePlan.historicalReconciliations[1].expectedHistorySha256 = 'f'.repeat(64),
+      f => f.options.evidencePlan.historicalReconciliations.shift()
+    ]) {
+      const f = prepare(); mutate(f);
+      await assert.rejects(f.execute(), /BACKEND_RENDER_DRIFT/);
+      assertNoProviderWrites(f);
+    }
+  } finally { repo.close(); }
+});
+
 test('ordinary backend dispatch accepts the merged main sha and freezes a distinct purpose', () => {
   const dispatch = { sha: 'b'.repeat(40), ci_run_id: '43597833117', ci_run_attempt: '1',
     release_mode: backendSuccessorMode };
@@ -357,7 +400,8 @@ test('no-schema successor stages the pinned input, deploys the candidate once an
     'releaseRunId', 'schemaTransition', 'successorRevisionSha256', 'successorSchemaSha256',
     'successorAssemblySha256', 'successorApplicationSha256', 'successorCoreSha256'].sort());
   assert.equal(payload.contractVersion, 'AQGreenD10BackendSuccessorV1');
-  assert.equal(payload.predecessorDecisionSha256, sha256(f.decisionBytes));
+  assert.equal(payload.predecessorDecisionSha256, canonicalDecisionDigest(f.decisionBytes));
+  assert.notEqual(payload.predecessorDecisionSha256, sha256(f.decisionBytes));
   assert.equal(payload.predecessorSchemaSha256, '1'.repeat(64));
   assert.equal(payload.predecessorAssemblySha256, '2'.repeat(64));
   assert.equal(payload.predecessorRuntimeAssemblySha256, '3'.repeat(64));
@@ -381,6 +425,32 @@ test('no-schema successor stages the pinned input, deploys the candidate once an
   assert.equal(receipt.renderSha, f.candidateSha);
   assert.equal(receipt.payloadPinSha256, f.s.puts[1].value);
   assert.equal(f.s.deploys.filter(row => row.status === 'live').length, 1);
+});
+
+test('selector and exact pinned decision are re-read after initial staging and before deploy', async () => {
+  for (const key of ['App__AQGreenV2__Commissioning__DecisionPath',
+    'App__AQGreenV2__Commissioning__DecisionJsonBase64',
+    'App__AQGreenV2__Commissioning__DecisionSha256']) {
+    const f = fixture();
+    const render = f.api.render;
+    f.api.render = async (route, body) => {
+      const result = await render(route, body);
+      if (body !== undefined && route.endsWith(`/env-vars/${backendSuccessorPinKey}`))
+        f.s.vars[key] = 'changed';
+      return result;
+    };
+    await assert.rejects(f.execute(), /BACKEND_DECISION_SOURCE_UNVERIFIED/);
+    assert.equal(f.s.puts.length, 2, 'only acknowledged successor staging writes occurred');
+    assert.equal(f.s.posts.length, 0, 'no Render deploy or migrator job');
+    assert.equal(f.s.audit.at(-1).phase, 'backend-successor-staged');
+  }
+});
+
+test('candidate contract source identity is required before staging either key', async () => {
+  const f = fixture();
+  f.options.verifyDecisionContract = () => { throw Error('BACKEND_DECISION_CANONICAL_CONTRACT_UNVERIFIED'); };
+  await assert.rejects(f.execute(), /BACKEND_DECISION_CANONICAL_CONTRACT_UNVERIFIED/);
+  assertNoProviderWrites(f);
 });
 
 test('additive successor runs the candidate migrator once-off and restarts on the additive input', async () => {
@@ -425,6 +495,31 @@ test('additive successor runs the candidate migrator once-off and restarts on th
   } finally { repo.close(); }
 });
 
+test('additive restart rechecks selector, decision and pin after staging and before deploy_only', async () => {
+  const repo = sourceRepository();
+  try {
+    for (const key of ['App__AQGreenV2__Commissioning__DecisionPath',
+      'App__AQGreenV2__Commissioning__DecisionJsonBase64',
+      'App__AQGreenV2__Commissioning__DecisionSha256']) {
+      const f = fixture({ repo, files: [{ filename: migrationPath, status: 'added' },
+        { filename: designerPath, status: 'added' }, { filename: snapshotPath, status: 'modified' },
+        { filename: backendModifiedPath, status: 'modified' }] });
+      const render = f.api.render;
+      let stage = 0;
+      f.api.render = async (route, body) => {
+        const result = await render(route, body);
+        if (body !== undefined && route.endsWith(`/env-vars/${backendSuccessorPinKey}`) && ++stage === 2)
+          f.s.vars[key] = 'changed';
+        return result;
+      };
+      await assert.rejects(f.execute(), /BACKEND_DECISION_SOURCE_UNVERIFIED/);
+      assert.equal(f.s.puts.length, 4, 'both staged payload and pin read back');
+      assert.equal(f.s.posts.length, 2, 'initial Render deploy and migrator job, no restart');
+      assert.equal(f.s.audit.at(-1).phase, 'backend-successor-restart-staged');
+    }
+  } finally { repo.close(); }
+});
+
 test('runtime and commissioned-state drift denies before any provider write', async () => {
   const stoppedPayments = fixture({ paymentAvailability: 'Held' });
   await assert.rejects(stoppedPayments.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
@@ -445,6 +540,14 @@ test('runtime and commissioned-state drift denies before any provider write', as
   const buildId = fixture({ vars: { Deployment__BuildId: '9'.repeat(40) } });
   await assert.rejects(buildId.execute(), /BACKEND_COMMISSIONED_STATE_CHANGED/);
   assertNoProviderWrites(buildId);
+  for (const selector of [undefined, '/etc/secrets/decision.json',
+    'environment:App:AQGreenV2:Commissioning:VerifiedAuthorityJsonBase64',
+    'environment:App:AQGreenV2:Commissioning:DecisionJsonBase64 ']) {
+    const selected = fixture();
+    selected.s.vars.App__AQGreenV2__Commissioning__DecisionPath = selector;
+    await assert.rejects(selected.execute(), /BACKEND_DECISION_SOURCE_UNVERIFIED/);
+    assertNoProviderWrites(selected);
+  }
   const competing = fixture();
   competing.s.deploys.push({ id: 'dep-second', status: 'live', commit: { id: 'c'.repeat(40) } });
   await assert.rejects(competing.execute(), /BACKEND_RENDER_DRIFT/);
@@ -648,6 +751,7 @@ test('render client restricts env access to the settings and successor allowlist
   const servicePath = `/services/${targets.render.id}`;
   await api.render(servicePath);
   await api.render(`${servicePath}/env-vars/App__AQGreenV2__Commissioning__DecisionJsonBase64`);
+  await api.render(`${servicePath}/env-vars/App__AQGreenV2__Commissioning__DecisionPath`);
   await api.render(`${servicePath}/env-vars/App__AQGreenV2__Commissioning__DecisionSha256`);
   await api.render(`${servicePath}/env-vars/Deployment__BuildId`);
   await api.render(`${servicePath}/env-vars/App__AutomaticPayouts__Enabled`);
@@ -663,6 +767,7 @@ test('render client restricts env access to the settings and successor allowlist
   assert.equal(calls.filter(row => row.method === 'POST').length, 1);
   for (const [route, body] of [
     [`${servicePath}/env-vars/App__AQGreenV2__Commissioning__VerifiedAuthorityJsonBase64`, undefined],
+    [`${servicePath}/env-vars/App__AQGreenV2__Commissioning__DecisionPath`, { value: '/etc/secrets/decision.json' }],
     [`${servicePath}/env-vars/SomeForeignKey`, undefined],
     [`${servicePath}/env-vars/${backendSuccessorPayloadKey}Extra`, undefined],
     [`/services/srv-foreign/env-vars/${backendSuccessorPayloadKey}`, undefined],
@@ -706,6 +811,7 @@ function combinedFixture({ files = [
     requiredConfigurationDigest: '6'.repeat(64) };
   const decisionBytes = Buffer.from(JSON.stringify(decision), 'utf8');
   s.vars = { ...s.vars, Deployment__BuildId: baselineSha,
+    App__AQGreenV2__Commissioning__DecisionPath: 'environment:App:AQGreenV2:Commissioning:DecisionJsonBase64',
     App__AQGreenV2__Commissioning__DecisionJsonBase64: decisionBytes.toString('base64'),
     App__AQGreenV2__Commissioning__DecisionSha256: sha256(decisionBytes) };
   s.deploys = [{ id: 'dep-commissioned', status: 'live', commit: { id: baselineSha } }];
@@ -840,7 +946,7 @@ function combinedFixture({ files = [
     evidencePlan: { policySha256: q.policySha256, verifiedReleases: [], priorFailedRuns: [],
       baseline: null, resume: null, resumeChain: [], backendReleases: [],
       frontendReleases: [], combinedReleases: [] }, attempts: 3, pause: async () => {},
-    guard: async () => {}, validateAdmission: () => {},
+    guard: async () => {}, validateAdmission: () => {}, verifyDecisionContract: () => {},
     ...(repo ? { env: { SOURCE_DIR: repo.dir } } : {}), now };
   const report = createAuditWriter(q, row => s.audit.push(row));
   report({ phase: 'evidence-selected', authorizationId: 'a'.repeat(64), evidenceSha256: 'b'.repeat(64),

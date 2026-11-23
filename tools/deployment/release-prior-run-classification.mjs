@@ -45,6 +45,9 @@ const positiveAttempt = value => Number.isSafeInteger(value) && value > 0;
 // producing revision. These are code fingerprints, never run-ID exceptions.
 const workflowDigests = new Set([
   sha256(readFileSync(new URL('../../.github/workflows/deploy.yml', import.meta.url))),
+  // The previously reviewed production workflow, now superseded only by the
+  // reviewed helper build steps; retain its historical producer identity.
+  'f6ba04f14306641249e2c503e3c21e40d0900e8e28f39f5792a1744a213d3254',
   // Preserve the reviewed pre-routing producer; only credential-step env changes.
   '018d52b64d1acbeabef5d60704fbc200d4fd0036632489a228559c68f4610f8d',
   '01d3e74bbdcee105c159a321c52d1016d4e7c0157ab8d873f280bb6b52f5b92e',

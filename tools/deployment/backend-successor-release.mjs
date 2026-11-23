@@ -13,6 +13,7 @@ import { objectDigest, sha256, validateArtifact, readGitHubArtifact } from './gi
 import { normalRuntimeSettings } from './runtime-readiness.mjs';
 import { deployCombinedFrontendPhase, verifyFrontendIncumbent } from './frontend-release.mjs';
 import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
+import { canonicalDecisionDigest, verifyDecisionContract } from './d10-decision-digest.mjs';
 
 export const backendSuccessorMode = 'post-normal-backend-v1';
 // Combined release mode: one dispatch that performs the full backend successor
@@ -29,12 +30,17 @@ export const backendSuccessorWriteKeys = Object.freeze([backendSuccessorPayloadK
 // remain inaccessible through the fixed Render client.
 export const backendSuccessorReadKeys = Object.freeze([
   ...backendSuccessorWriteKeys,
+  'App__AQGreenV2__Commissioning__DecisionPath',
   'App__AQGreenV2__Commissioning__DecisionJsonBase64',
   'App__AQGreenV2__Commissioning__DecisionSha256', 'Deployment__BuildId']);
 
 export class BackendSuccessorReleaseDenied extends Error {}
 const check = (ok, code) => { if (!ok) throw new BackendSuccessorReleaseDenied(code); };
 const decisionContract = 'AQGreenD10CutoverV2';
+const decisionSelectorKey = 'App__AQGreenV2__Commissioning__DecisionPath';
+const decisionPayloadKey = 'App__AQGreenV2__Commissioning__DecisionJsonBase64';
+const decisionPinKey = 'App__AQGreenV2__Commissioning__DecisionSha256';
+const decisionSelector = 'environment:App:AQGreenV2:Commissioning:DecisionJsonBase64';
 const successorContract = 'AQGreenD10BackendSuccessorV1';
 const backendRoot = 'AqualLifeStyle/9.4.2/aspnet-core/';
 const migrationsPath = `${backendRoot}src/AqualLifeStyle.EntityFrameworkCore/Migrations/`;
@@ -374,9 +380,9 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   clock();
   const service = await api.render(servicePath);
   assertCommissionedRenderService(inspectCommissionedRenderService(service, validateRender));
-  const readEnvVar = async key => {
+  const readEnvVar = async (key, code = 'BACKEND_RUNTIME_CONFIGURATION_CHANGED') => {
     const envVar = await api.render(`${servicePath}/env-vars/${key}`);
-    check(envVar?.key === key && typeof envVar.value === 'string', 'BACKEND_RUNTIME_CONFIGURATION_CHANGED');
+    check(envVar?.key === key && typeof envVar.value === 'string', code);
     return envVar.value;
   };
   const readNormalSettingsDigest = async () => {
@@ -391,23 +397,45 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   const baselineProviderConfigurationSha256 = await readNormalSettingsDigest();
   const predecessorBuildId = await readEnvVar('Deployment__BuildId');
   check(buildIdPattern.test(predecessorBuildId), 'BACKEND_RUNTIME_CONFIGURATION_CHANGED');
-  const decisionBytes = Buffer.from(
-    await readEnvVar('App__AQGreenV2__Commissioning__DecisionJsonBase64'), 'base64');
-  const decisionPin = await readEnvVar('App__AQGreenV2__Commissioning__DecisionSha256');
+  check(await readEnvVar(decisionSelectorKey, 'BACKEND_DECISION_SOURCE_UNVERIFIED') === decisionSelector,
+    'BACKEND_DECISION_SOURCE_UNVERIFIED');
+  const decisionEncoded = await readEnvVar(decisionPayloadKey);
+  const decisionBytes = Buffer.from(decisionEncoded, 'base64');
+  check(decisionEncoded === decisionBytes.toString('base64'), 'BACKEND_COMMISSIONED_STATE_CHANGED');
+  const decisionPin = await readEnvVar(decisionPinKey);
   const decisionInspection = inspectCommissioningDecision(decisionBytes, decisionPin);
   const decision = assertCommissioningDecision(decisionInspection);
+  (options.verifyDecisionContract ?? verifyDecisionContract)(options.env?.SOURCE_DIR, q.sha);
+  const predecessorDecisionDigest = canonicalDecisionDigest(decisionBytes);
+  const verifyDecisionBinding = async () => {
+    check(await readEnvVar(decisionSelectorKey, 'BACKEND_DECISION_SOURCE_UNVERIFIED') === decisionSelector &&
+      await readEnvVar(decisionPayloadKey, 'BACKEND_DECISION_SOURCE_UNVERIFIED') === decisionEncoded &&
+      await readEnvVar(decisionPinKey, 'BACKEND_DECISION_SOURCE_UNVERIFIED') === decisionPin,
+    'BACKEND_DECISION_SOURCE_UNVERIFIED');
+    check(inspectCommissioningDecision(decisionBytes, decisionPin).pinMatches,
+      'BACKEND_DECISION_SOURCE_UNVERIFIED');
+  };
   const deploys = await deploymentHistory(api, 'render');
   // A factual acknowledgement of the interrupted configuration write is not
   // permission to ignore a later provider operation. Before the first verified
   // successor, require the complete Render history to remain the diagnostic's
   // authenticated snapshot; a later successful successor has its own receipt.
   const interrupted = options.evidencePlan.historicalReconciliations?.filter(row => row.runId === '45006063824') ?? [];
+  const failedRender = options.evidencePlan.historicalReconciliations?.filter(row => row.runId === '45098115310') ?? [];
+  check(failedRender.length === 0 || interrupted.length === 1, 'BACKEND_RENDER_DRIFT');
   if (interrupted.length && !(options.evidencePlan.backendReleases?.length || options.evidencePlan.combinedReleases?.length)) {
     const projected = deploys.map(row => ({ id: row.id, status: row.status, commitSha: row.commit?.id }));
-    check(interrupted.length === 1 && /^[a-f0-9]{64}$/.test(interrupted[0].renderHistorySha256 ?? '') &&
+    const acknowledged = failedRender[0];
+    check(interrupted.length === 1 && failedRender.length <= 1 &&
+      /^[a-f0-9]{64}$/.test(interrupted[0].renderHistorySha256 ?? '') &&
+      (!acknowledged || acknowledged.priorHistorySha256 === interrupted[0].renderHistorySha256 &&
+        acknowledged.renderStatus === 'update_failed' && acknowledged.sourceSha === q.sha &&
+        projected.filter(row => row.id === acknowledged.renderDeployId &&
+          row.status === acknowledged.renderStatus && row.commitSha === q.sha).length === 1) &&
       new Set(projected.map(row => row.id)).size === projected.length && projected.every(row =>
         /^dep-[a-z0-9]+$/.test(row.id ?? '') && /^[a-f0-9]{40}$/.test(row.commitSha ?? '')) &&
-      objectDigest(projected.sort((a, b) => a.id.localeCompare(b.id))) === interrupted[0].renderHistorySha256,
+      objectDigest(projected.sort((a, b) => a.id.localeCompare(b.id))) ===
+        (acknowledged?.expectedHistorySha256 ?? interrupted[0].renderHistorySha256),
     'BACKEND_RENDER_DRIFT');
   }
   const historyInspection = inspectCommissionedDeploymentHistory(deploys);
@@ -528,7 +556,7 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
     await verifyFrontendIncumbent(api, q, options) : null;
   // 3. Stage the successor input through the existing environment channel.
   const buildPayload = transition => {
-    const payload = { contractVersion: successorContract, predecessorDecisionSha256: sha256(decisionBytes),
+    const payload = { contractVersion: successorContract, predecessorDecisionSha256: predecessorDecisionDigest,
       predecessorSchemaSha256: decision.requiredSchemaDigest,
       predecessorAssemblySha256: decision.requiredAssemblyDigest,
       predecessorRuntimeAssemblySha256: decision.requiredRuntimeAssemblyDigest,
@@ -568,6 +596,7 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   await guard();
   clock();
   options.validateAdmission();
+  await verifyDecisionBinding();
   audit({ phase: 'backend-render-requesting' });
   const requested = await api.render(`${servicePath}/deploys`,
     { commitId: q.sha, clearCache: 'do_not_clear' });
@@ -600,6 +629,7 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
     await guard();
     clock();
     options.validateAdmission();
+    await verifyDecisionBinding();
     audit({ phase: 'backend-restart-requesting' });
     const restart = await api.render(`${servicePath}/deploys`, { deployMode: 'deploy_only' });
     check(deployIdPattern.test(restart?.id ?? ''), 'BACKEND_RENDER_DEPLOYMENT_ID_UNAVAILABLE');
@@ -614,9 +644,13 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
   clock();
   const endHistory = await deploymentHistory(api, 'render');
   const endLive = endHistory.filter(row => row.status === 'live');
+  const acknowledgedFailed = failedRender.length === 1 ? row => row.id === failedRender[0].renderDeployId &&
+    row.status === 'update_failed' && row.commit?.id === q.sha : () => false;
   check(endHistory.every(row => !activeRender.has(row.status)) && endLive.length === 1 &&
     endLive[0].id === finalDeployId && endLive[0].commit?.id === q.sha &&
-    endHistory.filter(row => row.commit?.id === q.sha).length === (schemaTransition === 'additive' ? 2 : 1),
+    endHistory.filter(row => row.commit?.id === q.sha && !acknowledgedFailed(row)).length ===
+      (schemaTransition === 'additive' ? 2 : 1) &&
+    (failedRender.length === 0 || endHistory.filter(acknowledgedFailed).length === 1),
   'BACKEND_DEPLOYMENT_UNVERIFIABLE');
   const endHealth = await api.health();
   try { validateHealth(endHealth, q.sha); }

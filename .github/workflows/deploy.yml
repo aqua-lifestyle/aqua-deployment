@@ -245,6 +245,9 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
+      - name: Build reviewed D10 canonical digest helper
+        if: inputs.release_mode == 'post-normal-backend-v1' || inputs.release_mode == 'post-normal-backend-frontend-v1'
+        run: dotnet build tools/deployment/d10-decision-digest/D10DecisionDigest.csproj --configuration Release
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           artifact-ids: ${{ needs.candidate.outputs.artifact-id }}
