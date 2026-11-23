@@ -26,7 +26,9 @@ import { GitHubEvidenceDenied, canonical, inventoryDigest, maxArtifactBytes,
   readGitHubArtifact, readAuditFile, validateArtifact, objectDigest, sha256 } from './github-evidence.mjs';
 import { validateInventory } from './mandatory-security.mjs';
 import { HistoricalReconciliationDenied, isReconciledHistoricalRun, validateHistoricalContext,
-  validateHistoricalArtifact, validateHistoricalAudit, selectTargetFailure } from './historical-release-reconciliation.mjs';
+  validateHistoricalArtifact, validateHistoricalAudit, selectTargetFailure,
+  interruptedSuccessorRunId, validateInterruptedSuccessorRecord,
+  authenticateInterruptedSuccessorDiagnostic } from './historical-release-reconciliation.mjs';
 import { partialReleaseRunId, reconcilePartialRelease, partialRenderReuse,
   validatePartialRenderOrigin } from './partial-release-reconciliation.mjs';
 import { readinessCandidateSha, readinessStartingBackend, validateReadinessStartingBackend,
@@ -636,6 +638,37 @@ export function clients(env, fetcher = fetch, reportGitHubRead = row => console.
         throw failedDownload(stage, transportCategory(error));
       }
     },
+    // Only the retained GET-only diagnostic job is eligible for historical
+    // reconciliation. Keep GitHub authentication off the signed log redirect.
+    diagnosticJobLog: async id => {
+      requireThat(String(id) === '137293951125', 'DIAGNOSTIC_JOB_LOG_NOT_APPROVED');
+      const token = executorToken();
+      try {
+        const response = await fetcher(`https://api.github.com/repos/${execution.repository}/actions/jobs/${id}/logs`, {
+          redirect: 'manual', signal: AbortSignal.timeout(30_000),
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+        });
+        requireThat(response.status === 302, 'DIAGNOSTIC_JOB_LOG_UNAVAILABLE');
+        const url = new URL(response.headers.get('location'));
+        requireThat(url.protocol === 'https:' && !url.username && !url.password && !url.hash &&
+          (!url.port || url.port === '443') &&
+          (url.hostname.endsWith('.blob.core.windows.net') || url.hostname === 'pipelines.actions.githubusercontent.com'),
+        'DIAGNOSTIC_JOB_LOG_REDIRECT_INVALID');
+        const log = await fetcher(url.href, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+        requireThat(log.ok && log.body, 'DIAGNOSTIC_JOB_LOG_UNAVAILABLE');
+        const chunks = []; let size = 0;
+        for await (const chunk of log.body) {
+          size += chunk.length;
+          requireThat(size <= 256 * 1024, 'DIAGNOSTIC_JOB_LOG_TOO_LARGE');
+          chunks.push(Buffer.from(chunk));
+        }
+        requireThat(size > 0, 'DIAGNOSTIC_JOB_LOG_UNAVAILABLE');
+        return Buffer.concat(chunks);
+      } catch (error) {
+        if (error instanceof ReleaseFailure) throw error;
+        throw new ReleaseFailure('DIAGNOSTIC_JOB_LOG_UNAVAILABLE');
+      }
+    },
     render: (route, body) => {
       const prefix = `/services/${targets.render.id}/env-vars/`;
       const key = route.startsWith(prefix) ? route.slice(prefix.length) : undefined;
@@ -1069,7 +1102,16 @@ export async function evidencePlan(api, candidate, policy) {
         const pin = validateHistoricalContext(run, attempt, production, candidate, targets);
         const descriptor = await auditArtifact(api, run, attempt);
         validateHistoricalArtifact(pin, descriptor, await releaseApi(api)(`/actions/artifacts/${descriptor.artifactId}`));
-        const proof = validateHistoricalAudit(await readReleaseAudit(api, descriptor), descriptor, pin, targets);
+        let diagnosticProof;
+        if (String(run.id) === interruptedSuccessorRunId) {
+          await validateExecutorApproval(api, { executorSha: run.head_sha,
+            policySha256: candidate.policySha256 }, policy);
+          const diagnostic = validateInterruptedSuccessorRecord().diagnostic;
+          await validateExecutorApproval(api, { executorSha: diagnostic.executorSha,
+            policySha256: candidate.policySha256 }, policy);
+          diagnosticProof = await authenticateInterruptedSuccessorDiagnostic(api);
+        }
+        const proof = validateHistoricalAudit(await readReleaseAudit(api, descriptor), descriptor, pin, targets, diagnosticProof);
         historicalReconciliations.push(proof);
         if (proof.renderContinuation === true) readinessRenderContinuation = proof;
         continue;

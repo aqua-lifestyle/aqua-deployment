@@ -19,6 +19,157 @@ const pins = Object.freeze({
 const failedRenderDigest = 'da3ab4875cc0c608c675f8588565318d2cf922e4056f4e93c867154c90f8b5f6';
 export const reconciledTargetFailureRunId = '43397240173';
 const targetFailureDigest = '6ccba9e307bc303f47ddd7d555c1f64681249bb733c9536636fc33a57a755972';
+export const interruptedSuccessorRunId = '45006063824';
+const interruptedSuccessorDigest = '9fda395ac84957fba80d3e6256bff95321b56b2bff2082bd3d5d18df1590dc33';
+const authenticatedSuccessorDiagnostics = new WeakSet();
+
+export function validateInterruptedSuccessorRecord(bytes = readFileSync(
+  new URL('../../governance/backend-successor-staging-reconciliation-45006063824.json', import.meta.url))) {
+  check(Buffer.isBuffer(bytes) && sha256(bytes) === interruptedSuccessorDigest, 'INTERRUPTED_SUCCESSOR_RECORD_CHANGED');
+  const r = JSON.parse(bytes), o = r.originalRun, s = r.source, a = r.originalAudit, d = r.diagnostic, scope = r.scope;
+  check(r.contract === 'aqua.exact-failed-backend-successor-staging-reconciliation' && r.version === 1 &&
+    o.id === interruptedSuccessorRunId && o.number === 88 && o.attempt === 1 &&
+    o.executorSha === 'd0cf6e0e424f3762756ed4c7beff83db7b9adeda' &&
+    o.actor?.login === 'aqualifestyleclub' && o.actor.id === 307076734 &&
+    o.productionJobId === '137158208723' && o.policySha256 === 'e95602526973af088b512801f084616f31187ebe5acb20584ff3df0ba6e4020e' &&
+    o.conclusion === 'failure' && o.productionConclusion === 'failure' &&
+    o.terminalCode === 'SECRET_BEARING_RENDER_READ_FORBIDDEN' &&
+    s.repository === 'aqua-lifestyle/aqua-lifestyle' && s.sha === '58b18b2f5a76769a660c2ae834bd6e0c02263ebf' &&
+    s.ciRunId === '44236824305' && s.ciRunAttempt === 2 && s.backendSuccessor === 'post-normal-backend-v1' &&
+    s.combinedRelease === 'post-normal-backend-frontend-v1' &&
+    a.artifactId === '14747883309' && a.archiveSha256 === 'f86468c27c7850d88a9f1a968281b03a1f0924a93e5360342c38e71c46b71b5e' &&
+    a.reportSha256 === 'cd969c98b7e4738c2b060370f273f2ea8bb7293aeb801de967f0d2c6614d52fd' &&
+    a.rowsSha256 === 'a7740c4dda0c484b15e4e807ea8776359e7aaf3c0a379987be6d2fd1fc349fe2' &&
+    objectDigest(a.phases) === objectDigest(['evidence-selected','backend-baseline-selected','backend-decision-verified',
+      'backend-classified','backend-successor-staging','failed']) &&
+    a.payloadPinSha256 === 'c577c8fd72c6a78cc981e469acb53030bd70550b98ec7b6e32fdba826368ade8' &&
+    a.payloadBytes === 1238 && a.schemaTransition === 'additive' && a.stagedSchemaTransition === 'none' &&
+    a.baselineRenderDeployId === 'dep-dbru710n74is738ah8bg' &&
+    a.baselineRenderSha === 'b8d86e5e60997483423b273d5f426c08b411f573' &&
+    d.runId === '45050378040' && d.attempt === 1 && d.jobId === '137293951125' &&
+    d.executorSha === '4e8a63ab4731530d29ed68a9d9c913dfbb3a01c4' &&
+    d.jobLogSha256 === '7e70b2e4b890a19ad81877e376f9603b43b81444d064a3a1691203171425d6c6' &&
+    d.stagingRowSha256 === '59ba345533e83e59a33cbadb33ce250a0ba2f08dd9ee9767f9cd8a1414039247' &&
+    d.commissionedRowSha256 === '5a065d1830e94c6567b91a1d986094e517eee12ada825f2e779b790528823bb9' &&
+    d.stagingObservedAt === '2026-11-22T17:36:34.065Z' && d.commissionedObservedAt === '2026-11-22T17:36:34.066Z' &&
+    d.payload === 'MATCH' && d.pin === 'UNVERIFIED' && d.deploymentHistoryCount === 133 &&
+    d.renderHistorySha256 === '99893f3502ad2057b4e8a72a73e55f28ca300cc9388d5af934764040fe7d08df' &&
+    Array.isArray(d.postRunDeployments) && d.postRunDeployments.length === 0 &&
+    d.liveRenderDeployId === a.baselineRenderDeployId && d.liveRenderSha === a.baselineRenderSha &&
+    scope.outcome === 'ACKNOWLEDGED_PARTIAL_RENDER_CONFIGURATION_WRITE' &&
+    scope.environment === 'production-release' && scope.profile === 'normal-integrated' &&
+    scope.renderServiceId === 'srv-d9f0k8e1a83c73d8n1b0' &&
+    scope.vercelProjectId === 'prj_6qL1e43KhsWrRshY5GxdmGl3HGMz' &&
+    scope.vercelTeamId === 'team_Hc3BWfhTLfwLzwbgbtaasBUY' &&
+    scope.originalFailurePreserved === true && scope.pinValueEstablished === false &&
+    scope.noRecordedPostRunDeployment === true && scope.configurationTriggeredRestartAbsenceEstablished === false &&
+    scope.databaseWriteAbsenceEstablishedByHealth === false &&
+    ['successfulReleasePredecessor','automaticResumeAuthorized','replayAuthorized','providerDeploymentAuthorized',
+      'migrationAuthorized','financialActivationAuthorized'].every(key => scope[key] === false) &&
+    scope.providerHistoryMustRemainUnchangedBeforeStaging === true &&
+    scope.newReleaseRequiresFreshAdmissionAndLiveChecks === true,
+  'INTERRUPTED_SUCCESSOR_RECORD_INVALID');
+  return r;
+}
+
+// GitHub's retained, bounded job log is the original diagnostic report. No
+// provider credential, raw Render value or log text leaves this read-only path.
+export async function authenticateInterruptedSuccessorDiagnostic(api, r = validateInterruptedSuccessorRecord()) {
+  const d = r.diagnostic;
+  const run = await api.executor(`/actions/runs/${d.runId}`);
+  const jobs = await api.executor(`/actions/runs/${d.runId}/attempts/1/jobs?per_page=100`);
+  const job = jobs?.jobs?.[0];
+  check(run?.id === Number(d.runId) && run.run_attempt === 1 && run.run_number === 18 &&
+    run.head_sha === d.executorSha && run.status === 'completed' && run.conclusion === 'success' &&
+    run.event === 'workflow_dispatch' && run.head_branch === 'main' &&
+    run.path === '.github/workflows/provider-credential-check.yml' &&
+    run.repository?.full_name === 'aqua-lifestyle/aqua-deployment' &&
+    run.head_repository?.full_name === 'aqua-lifestyle/aqua-deployment' &&
+    run.actor?.login === 'Xolani-M' && run.actor?.id === 86495928 &&
+    jobs?.total_count === 1 && jobs.jobs.length === 1 && job?.id === Number(d.jobId) &&
+    job.run_id === run.id && job.run_attempt === 1 && job.status === 'completed' && job.conclusion === 'success' &&
+    job.steps?.filter(step => step.name === 'Validate trusted main context without provider credentials' &&
+      step.conclusion === 'success').length === 1 &&
+    job.steps.filter(step => step.name === 'Diagnose commissioned baseline with fixed GET-only evidence' &&
+      step.conclusion === 'success').length === 1 &&
+    ['Verify fixed provider identities and GET permissions only','Diagnose allowlisted Render environment reads only',
+      'Inspect fixed Render baseline with GET only'].every(name => job.steps.filter(step =>
+        step.name === name && step.conclusion === 'skipped').length === 1),
+  'INTERRUPTED_SUCCESSOR_DIAGNOSTIC_EXECUTION_CHANGED');
+  check(typeof api.diagnosticJobLog === 'function', 'INTERRUPTED_SUCCESSOR_DIAGNOSTIC_LOG_UNAVAILABLE');
+  const log = await api.diagnosticJobLog(d.jobId);
+  check(Buffer.isBuffer(log) && log.length > 0 && log.length <= 256 * 1024 &&
+    sha256(log) === d.jobLogSha256, 'INTERRUPTED_SUCCESSOR_DIAGNOSTIC_LOG_CHANGED');
+  const selected = [];
+  for (const line of log.toString('utf8').split('\n')) {
+    const start = line.indexOf('{');
+    if (start < 0) continue;
+    try {
+      const row = JSON.parse(line.slice(start));
+      if (row?.check === 'trusted-main-context' ||
+        ['aqua.successor-staging-read-diagnostic','aqua.commissioned-state-read-diagnostic'].includes(row?.contract))
+        selected.push(row);
+    } catch { /* The whole-log digest still authenticates non-JSON runner lines. */ }
+  }
+  const [context, stage, commissioned] = selected;
+  const healthKeys = ['http200','statusHealthy','buildMatchesLiveCommit','production','databaseHealthy',
+    'redisHealthy','keyStoreHealthy','recoveryClear','paymentAvailable'];
+  const history = commissioned?.deploymentHistory?.deployments;
+  const identifiedHistory = Array.isArray(history) && history.length === d.deploymentHistoryCount &&
+    new Set(history.map(row => row.id)).size === history.length && history.every(row =>
+      /^dep-[a-z0-9]+$/.test(row?.id ?? '') && /^[a-f0-9]{40}$/.test(row?.commitSha ?? '') &&
+      typeof row?.status === 'string');
+  check(selected.length === 3 && context?.check === 'trusted-main-context' && context.result === 'PASS' &&
+    stage?.contract === 'aqua.successor-staging-read-diagnostic' && objectDigest(stage) === d.stagingRowSha256 &&
+    stage.runId === d.runId && stage.runAttempt === 1 && stage.executorSha === d.executorSha &&
+    stage.failedReleaseRunId === r.originalRun.id && stage.observedAt === d.stagingObservedAt &&
+    stage.evidence?.status === 'MATCH' && stage.evidence.auditArtifactId === r.originalAudit.artifactId &&
+    stage.evidence.archiveSha256 === r.originalAudit.archiveSha256 &&
+    stage.stagedPayload === 'MATCH' && stage.stagedPin === 'UNVERIFIED' &&
+    stage.deploymentHistory?.status === 'MATCH' &&
+    stage.deploymentHistory.current?.id === r.originalAudit.baselineRenderDeployId &&
+    stage.deploymentHistory.current.status === 'live' &&
+    stage.deploymentHistory.current.commitSha === r.originalAudit.baselineRenderSha &&
+    Array.isArray(stage.deploymentHistory.postRunDeployments) &&
+    stage.deploymentHistory.postRunDeployments.length === 0 &&
+    commissioned?.contract === 'aqua.commissioned-state-read-diagnostic' &&
+    objectDigest(commissioned) === d.commissionedRowSha256 && commissioned.runId === d.runId &&
+    commissioned.executorSha === d.executorSha && commissioned.observedAt === d.commissionedObservedAt &&
+    commissioned.diagnosticStatus === 'COMPLETE' && commissioned.service?.result === 'PASS' &&
+    commissioned.baselineEvidence?.result === 'PASS' &&
+    Object.keys(commissioned.normalRuntimeSettings ?? {}).length === 15 &&
+    Object.values(commissioned.normalRuntimeSettings).every(row => row.result === 'PASS') &&
+    commissioned.deploymentHistory?.observedCount === d.deploymentHistoryCount &&
+    identifiedHistory && objectDigest([...history].sort((a, b) => a.id.localeCompare(b.id))) === d.renderHistorySha256 &&
+    commissioned.deploymentHistory.oneLive === 'PASS' &&
+    commissioned.deploymentHistory.noActiveDeployments === 'PASS' &&
+    commissioned.deploymentHistory.liveDeployment?.id === d.liveRenderDeployId &&
+    commissioned.deploymentHistory.liveDeployment.commitSha === d.liveRenderSha &&
+    commissioned.commissioningDecision?.sha256Pin?.result === 'PASS' &&
+    ['intendedConfigurationDigest','requiredAssemblyDigest','requiredRuntimeAssemblyDigest'].every(key =>
+      commissioned.historicalD10Comparisons?.[key]?.result === 'PASS') &&
+    healthKeys.every(key => commissioned.backendHealth?.[key] === 'PASS') &&
+    commissioned.paymentAvailability?.result === 'PASS' &&
+    Array.isArray(commissioned.currentFailingPredicates) && commissioned.currentFailingPredicates.length === 0 &&
+    commissioned.exactCurrentFailingPredicate === 'NOT_ESTABLISHED' &&
+    Number.isFinite(Date.parse(run.created_at)) && Number.isFinite(Date.parse(run.updated_at)) &&
+    Date.parse(run.created_at) <= Date.parse(d.stagingObservedAt) &&
+    Date.parse(d.stagingObservedAt) <= Date.parse(d.commissionedObservedAt) &&
+    Date.parse(d.commissionedObservedAt) <= Date.parse(run.updated_at),
+  'INTERRUPTED_SUCCESSOR_DIAGNOSTIC_EVIDENCE_CHANGED');
+  const unchanged = await api.executor(`/actions/runs/${d.runId}`);
+  check(unchanged.id === run.id && unchanged.run_attempt === run.run_attempt &&
+    unchanged.head_sha === run.head_sha && unchanged.updated_at === run.updated_at &&
+    unchanged.conclusion === 'success', 'INTERRUPTED_SUCCESSOR_DIAGNOSTIC_CHANGED');
+  const proof = Object.freeze({ runId: d.runId, jobId: d.jobId, executorSha: d.executorSha,
+    jobLogSha256: d.jobLogSha256, stagingRowSha256: d.stagingRowSha256,
+    commissionedRowSha256: d.commissionedRowSha256, payload: 'MATCH', pin: 'UNVERIFIED',
+    liveRenderDeployId: d.liveRenderDeployId, liveRenderSha: d.liveRenderSha,
+    renderHistorySha256: d.renderHistorySha256,
+    observedAt: d.stagingObservedAt });
+  authenticatedSuccessorDiagnostics.add(proof);
+  return proof;
+}
 
 export function validateTargetFailureRecord(bytes = readFileSync(
   new URL('../../governance/render-failure-reconciliation-43397240173.json', import.meta.url))) {
@@ -253,10 +404,44 @@ export function validateReconciliationRecords(bytes = Object.fromEntries(Object.
 }
 
 export function isReconciledHistoricalRun(runId) {
-  return ['40850715880', '40883686654', '41527223264', '41822854444', '41868204651', reconciledTargetFailureRunId].includes(String(runId));
+  return ['40850715880', '40883686654', '41527223264', '41822854444', '41868204651',
+    reconciledTargetFailureRunId, interruptedSuccessorRunId].includes(String(runId));
 }
 
 export function validateHistoricalContext(run, attempt, production, candidate, targets) {
+  if (String(run.id) === interruptedSuccessorRunId) {
+    const r = validateInterruptedSuccessorRecord(), o = r.originalRun, s = r.source;
+    check(run.id === Number(o.id) && run.run_number === o.number && run.run_attempt === o.attempt && attempt === o.attempt &&
+      run.head_sha === o.executorSha && run.status === 'completed' && run.conclusion === o.conclusion &&
+      run.actor?.login === o.actor.login && run.actor?.id === o.actor.id &&
+      run.repository?.full_name === 'aqua-lifestyle/aqua-deployment' &&
+      run.head_repository?.full_name === 'aqua-lifestyle/aqua-deployment' &&
+      run.head_branch === 'main' && run.event === 'workflow_dispatch' &&
+      run.path === '.github/workflows/deploy.yml' && run.name === 'Qualified production executor' &&
+      production.id === Number(o.productionJobId) && production.run_id === run.id &&
+      production.run_attempt === attempt && production.status === 'completed' &&
+      production.conclusion === o.productionConclusion && production.name === 'Unattended recovery release' &&
+      production.steps?.filter(step => step.conclusion === 'failure').length === 1 &&
+      production.steps.filter(step => step.name ===
+        'Revalidate policy, provenance, providers and recovery before automatic deployment' &&
+        step.conclusion === 'failure').length === 1,
+    'INTERRUPTED_SUCCESSOR_EXECUTION_CHANGED');
+    check(candidate.qualificationOnly === false && candidate.memberRelease === undefined &&
+      candidate.frontendRelease === undefined && candidate.backendSuccessor === s.backendSuccessor &&
+      candidate.combinedRelease === s.combinedRelease && candidate.sha === s.sha &&
+      candidate.repository === s.repository && candidate.releaseRunAttempt === 1 &&
+      candidate.releaseRunId !== o.id && candidate.executorSha !== o.executorSha &&
+      candidate.policySha256 === o.policySha256 &&
+      candidate.environment === r.scope.environment && candidate.profile === r.scope.profile &&
+      candidate.renderServiceId === r.scope.renderServiceId &&
+      candidate.vercelProjectId === r.scope.vercelProjectId && candidate.vercelTeamId === r.scope.vercelTeamId &&
+      candidate.executorRepository === 'aqua-lifestyle/aqua-deployment' &&
+      targets.repository === s.repository && targets.executor?.repository === candidate.executorRepository &&
+      targets.render.id === r.scope.renderServiceId && targets.vercel.id === r.scope.vercelProjectId &&
+      targets.vercel.teamId === r.scope.vercelTeamId,
+    'INTERRUPTED_SUCCESSOR_CANDIDATE_OR_TARGET_CHANGED');
+    return o;
+  }
   if (String(run.id) === reconciledTargetFailureRunId) return validateTargetFailureContext(run, attempt, production, candidate, targets);
   if (['41822854444','41868204651'].includes(String(run.id))) return validateReadinessFailureContext(run, attempt, production, candidate);
   if (String(run.id) === '41527223264') return validateFailedRenderContext(run, attempt, production, candidate, targets);
@@ -289,6 +474,18 @@ export function validateHistoricalContext(run, attempt, production, candidate, t
 }
 
 export function validateHistoricalArtifact(pin, descriptor, metadata) {
+  if (pin.id === interruptedSuccessorRunId) {
+    const r = validateInterruptedSuccessorRecord(), o = r.originalRun, a = r.originalAudit;
+    check(objectDigest(pin) === objectDigest(o) && descriptor.runId === o.id &&
+      descriptor.runAttempt === o.attempt && descriptor.sha === o.executorSha && descriptor.artifactId === a.artifactId &&
+      String(metadata?.id) === a.artifactId && metadata.name === `production-release-audit-${o.id}-1` &&
+      metadata.expired === false && metadata.digest === 'sha256:' + a.archiveSha256 &&
+      metadata.workflow_run?.id === Number(o.id) && metadata.workflow_run.head_sha === o.executorSha &&
+      metadata.workflow_run.head_branch === 'main' && metadata.workflow_run.repository_id === 1423239668 &&
+      metadata.workflow_run.head_repository_id === 1423239668,
+    'INTERRUPTED_SUCCESSOR_ARTIFACT_CHANGED');
+    return;
+  }
   if (pin.runId === reconciledTargetFailureRunId) return validateTargetFailureArtifact(pin, descriptor, metadata);
   if (['41822854444','41868204651'].includes(pin.runId)) return validateReadinessFailureArtifact(pin, descriptor, metadata);
   if (pin.runId === '41527223264') return validateFailedRenderArtifact(pin, descriptor, metadata);
@@ -300,7 +497,58 @@ export function validateHistoricalArtifact(pin, descriptor, metadata) {
     metadata.workflow_run?.head_repository_id === record.executorRepositoryId, 'ORIGINAL_ARTIFACT_REQUIRED');
 }
 
-export function validateHistoricalAudit(rows, descriptor, pin, targets) {
+// Injectable only for synthetic contract tests. The released history path always
+// calls this with the whole-file-pinned record, never candidate-supplied data.
+export function validateInterruptedSuccessorAudit(rows, descriptor, pin, targets, diagnosticProof,
+  r = validateInterruptedSuccessorRecord()) {
+  const o = r.originalRun, a = r.originalAudit, s = r.source;
+  const expected = { version: 4, repository: s.repository, sha: s.sha, ciRunId: s.ciRunId,
+    ciRunAttempt: s.ciRunAttempt, releaseRunId: o.id, releaseRunAttempt: o.attempt,
+    executorRepository: 'aqua-lifestyle/aqua-deployment', executorSha: o.executorSha,
+    policySha256: o.policySha256, environment: r.scope.environment, profile: r.scope.profile,
+    renderServiceId: r.scope.renderServiceId, vercelProjectId: r.scope.vercelProjectId,
+    vercelTeamId: r.scope.vercelTeamId, backendSuccessor: s.backendSuccessor,
+    combinedRelease: s.combinedRelease };
+  const approvedDiagnostic = { runId: r.diagnostic.runId, jobId: r.diagnostic.jobId,
+    executorSha: r.diagnostic.executorSha, jobLogSha256: r.diagnostic.jobLogSha256,
+    stagingRowSha256: r.diagnostic.stagingRowSha256,
+    commissionedRowSha256: r.diagnostic.commissionedRowSha256, payload: 'MATCH', pin: 'UNVERIFIED',
+    liveRenderDeployId: r.diagnostic.liveRenderDeployId, liveRenderSha: r.diagnostic.liveRenderSha,
+    renderHistorySha256: r.diagnostic.renderHistorySha256,
+    observedAt: r.diagnostic.stagingObservedAt };
+  check(objectDigest(pin) === objectDigest(o) && descriptor.runId === o.id &&
+    descriptor.runAttempt === o.attempt && descriptor.sha === o.executorSha &&
+    descriptor.artifactId === a.artifactId && Array.isArray(rows) &&
+    rows.length === a.phases.length && objectDigest(rows) === a.rowsSha256 &&
+    rows.every((row, index) => row.phase === a.phases[index] &&
+      Object.entries(expected).every(([key, value]) => row[key] === value) &&
+      row.renderDeployId === undefined && row.vercelDeployId === undefined && row.jobId === undefined) &&
+    rows[1].baselineRenderDeployId === a.baselineRenderDeployId &&
+    rows[1].baselineRenderSha === a.baselineRenderSha && rows[3].schemaTransition === a.schemaTransition &&
+    rows[4].stagedSchemaTransition === a.stagedSchemaTransition &&
+    rows[4].payloadPinSha256 === a.payloadPinSha256 && rows[4].payloadBytes === a.payloadBytes &&
+    rows.at(-1).code === o.terminalCode &&
+    targets.render.id === r.scope.renderServiceId && targets.vercel.id === r.scope.vercelProjectId &&
+    targets.vercel.teamId === r.scope.vercelTeamId &&
+    authenticatedSuccessorDiagnostics.has(diagnosticProof) &&
+    objectDigest(diagnosticProof) === objectDigest(approvedDiagnostic),
+  'INTERRUPTED_SUCCESSOR_EFFECT_UNVERIFIABLE');
+  return Object.freeze({ runId: o.id, runAttempt: o.attempt, executorSha: o.executorSha,
+    artifactId: a.artifactId, archiveSha256: a.archiveSha256, rowsSha256: a.rowsSha256,
+    originalConclusion: 'failure', terminalFailureCode: o.terminalCode, outcome: r.scope.outcome,
+    payload: 'MATCH', pin: 'UNVERIFIED', baselineRenderDeployId: a.baselineRenderDeployId,
+    diagnosticRunId: r.diagnostic.runId, diagnosticLogSha256: r.diagnostic.jobLogSha256,
+    renderHistorySha256: r.diagnostic.renderHistorySha256,
+    noRecordedPostRunDeployment: true, configurationTriggeredRestartAbsenceEstablished: false,
+    databaseWriteAbsenceEstablishedByHealth: false,
+    reconciliationSha256: interruptedSuccessorDigest, successfulFullReleasePredecessor: false,
+    automaticResumeAuthorized: false, replayAuthority: false, deploymentAuthority: false,
+    migrationAuthority: false, financialAuthority: false });
+}
+
+export function validateHistoricalAudit(rows, descriptor, pin, targets, diagnosticProof) {
+  if (pin.id === interruptedSuccessorRunId)
+    return validateInterruptedSuccessorAudit(rows, descriptor, pin, targets, diagnosticProof);
   if (pin.runId === reconciledTargetFailureRunId) return validateTargetFailureAudit(rows, descriptor, pin, targets);
   if (['41822854444','41868204651'].includes(pin.runId)) return validateReadinessFailureAudit(rows, descriptor, pin);
   if (pin.runId === '41527223264') return validateFailedRenderAudit(rows, descriptor, pin, targets);

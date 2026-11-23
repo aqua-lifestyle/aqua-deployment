@@ -25,9 +25,28 @@ The same existing Render deployment-history GETs report the observed live ID,
 status and revision and, only when provider creation timestamps are usable,
 deployments recorded since the failed run. Unavailable timestamps produce
 `UNVERIFIED` chronology. These observations neither prove the cause of a
-provider rollout nor reconcile the prior mutation-intent audit. No admission
-path is changed; exact provider-effect reconciliation remains a separate owner
-decision after authenticated observations exist.
+provider rollout nor themselves reconcile the prior mutation-intent audit.
+
+## Proposed exact-run factual reconciliation
+
+`governance/backend-successor-staging-reconciliation-45006063824.json` pins the
+original failed run/audit and the one protected diagnostic's job, bounded log
+digest and sanitized observation digests. The existing history planner checks
+the GitHub job log through a fixed, credential-isolated redirect, validates the
+original six audit rows, and retains the actual `backend-successor-staging`
+mutation intent. This records a persisted run-specific payload, **unverified**
+pin, no *recorded* new Render deployment, and no independent proof that a
+configuration-triggered restart did not happen. It never declares zero writes,
+financial eligibility, successful release, rollback or automatic continuation.
+Only the exact original application revision and combined release purpose can
+consume the factual proof in a new first-attempt history plan. Provider and
+database conditions must be checked fresh by the release path: before the first
+verified successor, the complete live Render deployment history must still
+match the diagnostic's authenticated 133-row identity/status/source snapshot.
+Any new or changed deployment denies before staging; a later verified successor
+is governed by its own release receipt instead. Stale
+CI or a missing diagnostic log denies admission. Neither this record nor the
+diagnostic authorizes another production dispatch.
 
 The release controller also reads back exactly these two executor-staged keys
 after each PUT, both before the initial Render deployment and after the additive
