@@ -107,7 +107,7 @@ test('protected workflow gives the new mutually exclusive GET-only mode just the
   const stepStart = yaml.indexOf('      - name: Inspect fixed Render baseline');
   const stepEnd = yaml.indexOf('\n      - name:', stepStart + 1);
   const step = yaml.slice(stepStart, stepEnd);
-  assert.match(step, /if: \$\{\{ inputs\.render_baseline_diagnostic && !inputs\.render_env_diagnostic && !inputs\.render_commissioned_state_diagnostic && !inputs\.native_recovery_readback \}\}/);
+  assert.match(step, /if: \$\{\{ inputs\.render_baseline_diagnostic && !inputs\.render_env_diagnostic && !inputs\.render_commissioned_state_diagnostic && !inputs\.native_recovery_readback && !inputs\.render_decision_path_diagnostic \}\}/);
   assert.deepEqual([...step.matchAll(/secrets\.(\w+)/g)].map(m => m[1]), ['RENDER_API_KEY']);
   assert.doesNotMatch(step, /VERCEL_TOKEN|deploy\.yml|release-control\.mjs|upload-artifact/);
   assert.throws(() => providerCheckMode({ PROVIDER_CHECK_MODE: 'invalid' }), /CONTEXT_DENIED/);
