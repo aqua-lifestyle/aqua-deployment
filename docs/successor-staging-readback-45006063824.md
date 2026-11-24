@@ -78,6 +78,12 @@ The currently effective service-level DecisionPath has not been authenticated
 by the retained diagnostics and remains **UNVERIFIED**; if it is absent or
 file-selected, an owner-authorized separate configuration decision is needed
 before any later release can pass this gate.
+The existing protected `provider-credential-check.yml` offers an opt-in,
+mutually exclusive `render_decision_path_diagnostic` mode for a separately
+authorized, single service-level GET. Its report contains only MATCH, MISMATCH,
+MISSING or UNVERIFIED, the fixed key/service and HTTP status; it does not read
+linked groups, reveal the value, stage configuration or authorize a release.
+Until that mode is authorized and executed, the selector remains **UNVERIFIED**.
 
 ## Later acknowledged Render update failure
 

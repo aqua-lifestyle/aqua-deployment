@@ -48,10 +48,51 @@ export function providerCheckContext(env, checkoutSha) {
 export function providerCheckMode(env) {
   const mode = env.PROVIDER_CHECK_MODE ?? 'verify';
   if (!['verify', 'native-recovery-readback', 'render-env-diagnostic', 'render-baseline-diagnostic',
-    'render-commissioned-state-diagnostic'].includes(mode)) denied();
-  if (['render-env-diagnostic', 'render-baseline-diagnostic', 'render-commissioned-state-diagnostic'].includes(mode) &&
+    'render-commissioned-state-diagnostic', 'render-decision-path-diagnostic'].includes(mode)) denied();
+  if (['render-env-diagnostic', 'render-baseline-diagnostic', 'render-commissioned-state-diagnostic',
+    'render-decision-path-diagnostic'].includes(mode) &&
     (!/^[1-9]\d*$/.test(env.GITHUB_RUN_ID ?? '') || env.GITHUB_RUN_ATTEMPT !== '1')) denied();
   return mode;
+}
+
+// One exact service-level variable GET. Neither the value nor the response body
+// enters reports, logs or artifacts. A linked-group value is not asserted here.
+export async function diagnoseRenderDecisionPath(env, { checkoutSha, fetcher = fetch, emit = () => {} }) {
+  providerCheckContext(env, checkoutSha);
+  if (providerCheckMode(env) !== 'render-decision-path-diagnostic') denied();
+  const key = 'App__AQGreenV2__Commissioning__DecisionPath';
+  const expected = 'environment:App:AQGreenV2:Commissioning:DecisionJsonBase64';
+  const path = `/services/${targets.render.id}/env-vars/${key}`;
+  const url = `https://api.render.com/v1${path}`;
+  const report = (result, httpStatus) => emit({ contract: 'aqua.render-decision-path-read-diagnostic', version: 1,
+    executorSha: checkoutSha, runId: env.GITHUB_RUN_ID, runAttempt: 1,
+    renderServiceId: targets.render.id, key, result,
+    configurationSource: result === 'MATCH' || result === 'MISMATCH' ? 'SERVICE_LEVEL' :
+      result === 'MISSING' ? 'SERVICE_LEVEL_ABSENT' : 'NOT_ESTABLISHED',
+    inheritedConfiguration: 'NOT_DETERMINED',
+    ...(httpStatus === undefined ? {} : { httpStatus }) });
+  if (typeof env.RENDER_API_KEY !== 'string' || !env.RENDER_API_KEY.trim()) {
+    report('UNVERIFIED'); return false;
+  }
+  let httpStatus;
+  const transport = async (requestedUrl, options) => {
+    if (requestedUrl !== url || options?.method !== 'GET' || options.body !== undefined ||
+      options.redirect !== 'error') throw Error('FIXED_GET_ONLY_REQUIRED');
+    const response = await fetcher(requestedUrl, options);
+    httpStatus = response.status;
+    return response;
+  };
+  try {
+    const variable = await clients({ RENDER_API_KEY: env.RENDER_API_KEY }, transport).render(path);
+    if (httpStatus === 200 && variable?.key === key && typeof variable.value === 'string' &&
+      !/^(?:\*+|•+|<redacted>|\[REDACTED\])$/.test(variable.value)) {
+      const result = variable.value === expected ? 'MATCH' : 'MISMATCH';
+      report(result, httpStatus); return result === 'MATCH';
+    }
+  } catch { /* The fixed-key 404 and rejected credentials still retain their HTTP status. */ }
+  const result = httpStatus === 404 ? 'MISSING' : 'UNVERIFIED';
+  report(result, httpStatus);
+  return false;
 }
 
 // Fixed-service GET-only comparison for the already failed combined release.
@@ -851,6 +892,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     else if (process.argv[2] === 'verify') {
       const operation = mode === 'render-baseline-diagnostic' ? diagnoseRenderBaseline :
         mode === 'render-commissioned-state-diagnostic' ? diagnoseRenderCommissionedState :
+        mode === 'render-decision-path-diagnostic' ? diagnoseRenderDecisionPath :
         mode === 'render-env-diagnostic' ? diagnoseRenderEnvironment :
         mode === 'native-recovery-readback' ? observeNativeRecoveryBaseline : verifyProviderCredentials;
       if (!await operation(process.env, { checkoutSha, emit: row => console.log(JSON.stringify(row)) })) process.exitCode = 1;
