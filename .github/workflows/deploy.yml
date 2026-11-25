@@ -18,7 +18,7 @@ on:
         type: boolean
         default: false
       release_mode:
-        description: Full cutover, pinned schema-54 member pair, post-Normal frontend-only, ordinary backend successor, or combined backend+frontend successor
+        description: Full cutover, pinned schema-54 member pair, post-Normal frontend-only, ordinary backend successor, combined backend+frontend successor, or exact failed-migration completion
         required: false
         type: choice
         default: full
@@ -28,6 +28,7 @@ on:
           - post-normal-frontend-v1
           - post-normal-backend-v1
           - post-normal-backend-frontend-v1
+          - post-normal-backend-completion-v1
       prospective_mode:
         description: None, capture a read-only baseline, or authorize the pinned prospective release
         required: false
@@ -246,7 +247,7 @@ jobs:
         with:
           node-version: 24
       - name: Build reviewed D10 canonical digest helper
-        if: inputs.release_mode == 'post-normal-backend-v1' || inputs.release_mode == 'post-normal-backend-frontend-v1'
+        if: inputs.release_mode == 'post-normal-backend-v1' || inputs.release_mode == 'post-normal-backend-frontend-v1' || inputs.release_mode == 'post-normal-backend-completion-v1'
         run: dotnet build tools/deployment/d10-decision-digest/D10DecisionDigest.csproj --configuration Release
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:

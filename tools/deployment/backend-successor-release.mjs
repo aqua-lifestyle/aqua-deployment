@@ -14,6 +14,8 @@ import { normalRuntimeSettings } from './runtime-readiness.mjs';
 import { deployCombinedFrontendPhase, verifyFrontendIncumbent } from './frontend-release.mjs';
 import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
 import { canonicalDecisionDigest, verifyDecisionContract } from './d10-decision-digest.mjs';
+import { backendCompletionRecordDigest, backendCompletionPlanProof,
+  validateBackendMigrationFailureRecord } from './historical-release-reconciliation.mjs';
 
 export const backendSuccessorMode = 'post-normal-backend-v1';
 // Combined release mode: one dispatch that performs the full backend successor
@@ -21,6 +23,10 @@ export const backendSuccessorMode = 'post-normal-backend-v1';
 // continues with the frontend release of the same qualified revision on
 // Vercel. A backend failure fails closed before any frontend mutation.
 export const combinedMode = 'post-normal-backend-frontend-v1';
+// Exact failed-migration completion: the initial backend deployment is already
+// live. This mode reuses that deployed runtime, applies the additive schema
+// once and restarts it, then completes the same-revision frontend phase.
+export const backendCompletionMode = 'post-normal-backend-completion-v1';
 export const backendSuccessorPayloadKey = 'App__AQGreenV2__D10__BackendSuccessorJsonBase64';
 export const backendSuccessorPinKey = 'App__AQGreenV2__D10__BackendSuccessorSha256';
 export const backendSuccessorWriteKeys = Object.freeze([backendSuccessorPayloadKey, backendSuccessorPinKey]);
@@ -55,6 +61,7 @@ const additiveStatements = new Set(['CreateTable', 'CreateIndex', 'AddColumn', '
 const identityKeys = ['version', 'repository', 'sha', 'ciRunId', 'ciRunAttempt', 'releaseRunId',
   'releaseRunAttempt', 'policySha256', 'environment', 'profile', 'renderServiceId',
   'vercelProjectId', 'vercelTeamId', 'executorRepository', 'executorSha', 'backendSuccessor'];
+const completionIdentityKeys = [...identityKeys, 'backendCompletion'];
 const baselineSequence = ['evidence-selected', 'backend-baseline-selected', 'backend-decision-verified',
   'backend-classified', 'backend-successor-staging', 'backend-successor-staged', 'backend-render-requesting',
   'backend-render-requested', 'backend-render-ready', 'backend-deployed'];
@@ -62,6 +69,12 @@ const additiveSequence = [...baselineSequence.slice(0, 9), 'backend-schema-job-r
   'backend-schema-job-created', 'backend-schema-job-succeeded', 'backend-successor-restart-staging',
   'backend-successor-restart-staged', 'backend-restart-requesting', 'backend-restart-requested',
   'backend-restart-ready', 'backend-deployed'];
+const completionSequence = ['evidence-selected', 'backend-baseline-selected',
+  'backend-decision-verified', 'backend-classified', 'backend-completion-preconditions-verified',
+  'backend-schema-job-requesting', 'backend-schema-job-created', 'backend-schema-job-succeeded',
+  'backend-successor-restart-staging', 'backend-successor-restart-staged',
+  'backend-restart-requesting', 'backend-restart-requested', 'backend-restart-ready',
+  'backend-deployed'];
 const digestKeys = ['requiredSchemaDigest', 'requiredAssemblyDigest', 'requiredRuntimeAssemblyDigest',
   'requiredDatabaseIdentityDigest', 'requiredConfigurationDigest'];
 const successorDigestKeys = ['successorSchemaSha256', 'successorAssemblySha256',
@@ -210,6 +223,9 @@ const validateHealthObservation = (evidence, sha) => {
 export function validateBackendSuccessorIdentity(q) {
   check(q && typeof q === 'object' && q.backendSuccessor === backendSuccessorMode &&
     (q.combinedRelease === undefined || q.combinedRelease === combinedMode) &&
+    (q.backendCompletion === undefined ||
+      q.backendCompletion === backendCompletionRecordDigest &&
+      q.combinedRelease === combinedMode) &&
     q.memberRelease === undefined && q.frontendRelease === undefined &&
     q.prospectiveMode === undefined && q.prospectiveRecovery === undefined,
   'BACKEND_RELEASE_IDENTITY_MISMATCH');
@@ -362,6 +378,8 @@ export function validateBackendSuccessorReceipt(rows, descriptor, targets) {
 
 export async function deployBackendSuccessorRelease(api, q, report, options) {
   validateBackendSuccessorIdentity(q);
+  if (q.backendCompletion !== undefined)
+    return deployBackendCompletionRelease(api, q, report, options);
   check(q.qualificationOnly === false && q.releaseRunAttempt === 1 && !options.receiptRows &&
     options.evidencePlan && !options.evidencePlan.resume &&
     (options.evidencePlan.backendReleases ?? []).every(row => row.sha !== q.sha) &&
@@ -612,9 +630,9 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
     await guard();
     clock();
     options.validateAdmission();
-    audit({ phase: 'backend-schema-job-requesting', startCommand: 'dotnet migrator/AqualLifeStyle.Migrator.dll' });
+    audit({ phase: 'backend-schema-job-requesting', startCommand: 'dotnet migrator/AqualLifeStyle.Migrator.dll -q' });
     const job = await api.render(`${servicePath}/jobs`,
-      { startCommand: 'dotnet migrator/AqualLifeStyle.Migrator.dll' });
+      { startCommand: 'dotnet migrator/AqualLifeStyle.Migrator.dll -q' });
     check(jobIdPattern.test(job?.id ?? ''), 'BACKEND_SCHEMA_JOB_UNAVAILABLE');
     audit({ phase: 'backend-schema-job-created', jobId: job.id });
     const finished = await waitFor(async () => api.render(`${servicePath}/jobs/${job.id}`),
@@ -686,11 +704,518 @@ export async function deployBackendSuccessorRelease(api, q, report, options) {
       frontendFiles: frontendFiles.length, backendFiles: backendFiles.length, sourceDeltaSha256 });
 }
 
+export async function deployBackendCompletionRelease(api, q, report, options) {
+  validateBackendSuccessorIdentity(q);
+  const record = options.completionRecord ?? validateBackendMigrationFailureRecord();
+  const completion = options.evidencePlan?.backendCompletion;
+  const expectedCompletion = backendCompletionPlanProof(record);
+  check(q.backendCompletion === backendCompletionRecordDigest &&
+    q.backendSuccessor === backendSuccessorMode && q.combinedRelease === combinedMode &&
+    q.qualificationOnly === false && q.releaseRunAttempt === 1 && !options.receiptRows &&
+    options.evidencePlan && !options.evidencePlan.resume &&
+    completion && objectDigest(completion) === objectDigest(expectedCompletion) &&
+    (options.evidencePlan.backendReleases ?? []).every(row => row.sha !== q.sha) &&
+    (options.evidencePlan.combinedReleases ?? []).every(row => row.sha !== q.sha) &&
+    (options.evidencePlan.frontendReleases ?? []).every(row => row.sha !== q.sha),
+  'BACKEND_COMPLETION_NO_RESUME');
+  const { targets, guard, validateRender, validateHealth, deploymentHistory, waitFor, releaseKey } = options;
+  const start = (options.now ?? Date.now)(), end = start + 40 * 60 * 1000;
+  const clock = () => check((options.now ?? Date.now)() < end, 'BACKEND_EXECUTION_WINDOW_EXPIRED');
+  const servicePath = `/services/${targets.render.id}`;
+  const audit = row => report({ ...row, backendCompletion: q.backendCompletion,
+    executionStartedAt: new Date(start).toISOString(), executionDeadline: new Date(end).toISOString() });
+  const historyDigest = rows => sha256(Buffer.from(JSON.stringify(rows.map(row => ({ id: row.id,
+    status: row.status, commitSha: row.commit?.id })).sort((a, b) => a.id.localeCompare(b.id)))));
+  const verifyFailedJob = async () => {
+    const job = await api.render(`${servicePath}/jobs/${expectedCompletion.failedJobId}`);
+    check(job?.id === expectedCompletion.failedJobId && job.status === 'failed',
+      'BACKEND_COMPLETION_FAILED_JOB_CHANGED');
+  };
+  const verifyProviderHistory = async expectedDigest => {
+    const deploys = await deploymentHistory(api, 'render');
+    const inspection = inspectCommissionedDeploymentHistory(deploys);
+    check(inspection.pass && inspection.live.length === 1 &&
+      inspection.live[0].id === expectedCompletion.liveRenderDeployId &&
+      inspection.live[0].commit?.id === expectedCompletion.liveRenderSha &&
+      historyDigest(deploys) === expectedDigest,
+    'BACKEND_COMPLETION_PROVIDER_DRIFT');
+    await verifyFailedJob();
+  };
+  await guard();
+  clock();
+  const service = await api.render(servicePath);
+  assertCommissionedRenderService(inspectCommissionedRenderService(service, validateRender));
+  const readEnvVar = async (key, code = 'BACKEND_RUNTIME_CONFIGURATION_CHANGED') => {
+    const envVar = await api.render(`${servicePath}/env-vars/${key}`);
+    check(envVar?.key === key && typeof envVar.value === 'string', code);
+    return envVar.value;
+  };
+  const readNormalSettingsDigest = async () => {
+    const values = {};
+    for (const [key, allowed] of Object.entries(normalRuntimeSettings)) {
+      const value = await readEnvVar(key);
+      check(allowed.includes(value), 'BACKEND_RUNTIME_CONFIGURATION_CHANGED');
+      values[key] = value;
+    }
+    return sha256(Buffer.from(JSON.stringify(values), 'utf8'));
+  };
+  const providerConfigurationSha256 = await readNormalSettingsDigest();
+  check(providerConfigurationSha256 === record.audit.providerConfigurationSha256,
+    'BACKEND_COMPLETION_CONFIGURATION_CHANGED');
+  const predecessorBuildId = await readEnvVar('Deployment__BuildId');
+  check(predecessorBuildId === expectedCompletion.baselineRenderSha,
+    'BACKEND_COMPLETION_CONFIGURATION_CHANGED');
+  check(await readEnvVar(decisionSelectorKey, 'BACKEND_DECISION_SOURCE_UNVERIFIED') === decisionSelector,
+    'BACKEND_DECISION_SOURCE_UNVERIFIED');
+  const decisionEncoded = await readEnvVar(decisionPayloadKey);
+  const decisionBytes = Buffer.from(decisionEncoded, 'base64');
+  check(decisionEncoded === decisionBytes.toString('base64'), 'BACKEND_COMMISSIONED_STATE_CHANGED');
+  const decisionPin = await readEnvVar(decisionPinKey);
+  const decisionInspection = inspectCommissioningDecision(decisionBytes, decisionPin);
+  const decision = assertCommissioningDecision(decisionInspection);
+  (options.verifyDecisionContract ?? verifyDecisionContract)(options.env?.SOURCE_DIR, q.sha);
+  const predecessorDecisionDigest = canonicalDecisionDigest(decisionBytes);
+  const verifyDecisionBinding = async () => {
+    check(await readEnvVar(decisionSelectorKey, 'BACKEND_DECISION_SOURCE_UNVERIFIED') === decisionSelector &&
+      await readEnvVar(decisionPayloadKey, 'BACKEND_DECISION_SOURCE_UNVERIFIED') === decisionEncoded &&
+      await readEnvVar(decisionPinKey, 'BACKEND_DECISION_SOURCE_UNVERIFIED') === decisionPin,
+    'BACKEND_DECISION_SOURCE_UNVERIFIED');
+    check(inspectCommissioningDecision(decisionBytes, decisionPin).pinMatches,
+      'BACKEND_DECISION_SOURCE_UNVERIFIED');
+  };
+  check(sha256(decisionBytes) === record.audit.decisionSha256 &&
+    decision.requiredConfigurationDigest === record.audit.requiredConfigurationDigest &&
+    decision.requiredSchemaDigest === record.audit.requiredSchemaDigest &&
+    decision.requiredAssemblyDigest === record.audit.requiredAssemblyDigest &&
+    decision.requiredRuntimeAssemblyDigest === record.audit.requiredRuntimeAssemblyDigest &&
+    decision.requiredDatabaseIdentityDigest === record.audit.requiredDatabaseIdentityDigest,
+  'BACKEND_COMPLETION_DECISION_CHANGED');
+  const initialPayloadEncoded = await readEnvVar(backendSuccessorPayloadKey,
+    'BACKEND_COMPLETION_STAGING_CHANGED');
+  const initialPin = await readEnvVar(backendSuccessorPinKey,
+    'BACKEND_COMPLETION_STAGING_CHANGED');
+  const initialPayloadBytes = Buffer.from(initialPayloadEncoded, 'base64');
+  check(initialPayloadEncoded === initialPayloadBytes.toString('base64') &&
+    initialPayloadBytes.length > 0 && initialPin === expectedCompletion.initialPayloadPinSha256 &&
+    sha256(initialPayloadBytes) === initialPin,
+  'BACKEND_COMPLETION_STAGING_CHANGED');
+  const deploys = await deploymentHistory(api, 'render');
+  const historyInspection = inspectCommissionedDeploymentHistory(deploys);
+  assertCommissionedDeploymentHistory(historyInspection);
+  check(historyInspection.live.length === 1 &&
+    historyInspection.live[0].id === expectedCompletion.liveRenderDeployId &&
+    historyInspection.live[0].commit?.id === q.sha,
+  'BACKEND_COMPLETION_PROVIDER_DRIFT');
+  const providerHistorySha256 = historyDigest(deploys);
+  await verifyFailedJob();
+  const health = await api.health();
+  const healthInspection = inspectCommissionedHealth(health, q.sha, validateHealth);
+  assertCommissionedHealth(healthInspection);
+  const state = (health.body.result ?? health.body).paymentAvailability;
+  const servingHealthObservation = healthObservation(health);
+  const compare = await api.gh(`/compare/${expectedCompletion.baselineRenderSha}...${q.sha}`);
+  const frontendPrefix = `${targets.vercel.rootDirectory}/`;
+  const backendFiles = compare.files.filter(file => file.filename.startsWith(backendRoot));
+  const frontendFiles = compare.files.filter(file => file.filename.startsWith(frontendPrefix));
+  check(frontendFiles.length > 0, 'COMBINED_RELEASE_REQUIRES_FRONTEND_DELTA');
+  check(compare.status === 'ahead' && compare.base_commit?.sha === expectedCompletion.baselineRenderSha &&
+    compare.merge_base_commit?.sha === expectedCompletion.baselineRenderSha &&
+    Array.isArray(compare.files) && compare.files.length > 0 && compare.files.length < 300 &&
+    backendFiles.length > 0 && compare.files.every(file =>
+      ['added', 'modified', 'removed'].includes(file.status) &&
+      typeof file.filename === 'string' && !file.filename.includes('..')),
+  'BACKEND_SOURCE_DELTA_UNAUTHORIZED');
+  const migrationFiles = compare.files.filter(file => file.filename.startsWith(migrationsPath));
+  const sourceDir = options.env?.SOURCE_DIR;
+  for (const file of migrationFiles) {
+    check(migrationFilePattern.test(file.filename), 'BACKEND_SCHEMA_DELTA_UNAUTHORIZED');
+    check(file.status === 'added' ||
+      (file.status === 'modified' && file.filename.endsWith('DbContextModelSnapshot.cs') &&
+        (file.previous_filename === undefined || file.previous_filename === file.filename)),
+    'BACKEND_SCHEMA_DELTA_UNAUTHORIZED');
+  }
+  const addedMigrations = migrationFiles.filter(file => file.status === 'added');
+  const addedPaths = new Set(addedMigrations.map(file => file.filename));
+  check(addedMigrations.every(file => file.filename.endsWith('.Designer.cs') ?
+    addedPaths.has(file.filename.replace(/\.Designer\.cs$/, '.cs')) :
+    !file.filename.endsWith('DbContextModelSnapshot.cs')),
+  'BACKEND_SCHEMA_DELTA_UNAUTHORIZED');
+  const schemaTransition = addedMigrations.length > 0 ? 'additive' : 'none';
+  check(schemaTransition === record.audit.schemaTransition, 'BACKEND_COMPLETION_CLASSIFICATION_CHANGED');
+  if (schemaTransition === 'additive') {
+    check(typeof sourceDir === 'string' && sourceDir.length > 0, 'BACKEND_SCHEMA_DELTA_UNAUTHORIZED');
+    for (const file of addedMigrations) {
+      const source = readMigrationSource(sourceDir, q.sha, file.filename);
+      check(file.filename.endsWith('.Designer.cs') ?
+        !/\bvoid\s+(?:Up|Down)\s*\(/.test(source) : additiveOnlyUp(source),
+      'BACKEND_SCHEMA_DELTA_UNAUTHORIZED');
+    }
+  }
+  const artifactName = `backend-successor-integrity-${q.sha}-${q.ciRunId}-${q.ciRunAttempt}`;
+  const inventory = await api.gh(`/actions/runs/${q.ciRunId}/artifacts?per_page=100`);
+  check(inventory?.total_count === inventory.artifacts?.length && inventory.total_count <= 100,
+    'BACKEND_INTEGRITY_EVIDENCE_UNAVAILABLE');
+  const matches = inventory.artifacts.filter(row => row.name === artifactName);
+  check(matches.length === 1, 'BACKEND_INTEGRITY_EVIDENCE_UNAVAILABLE');
+  const repository = await api.gh('');
+  let descriptor, integrity;
+  try {
+    descriptor = validateArtifact(matches[0], q.ciRunId, q.sha, artifactName, repository.id);
+    integrity = JSON.parse((await readGitHubArtifact(api, 'source', descriptor,
+      'backend-successor-integrity.json')).toString('utf8'));
+  } catch { throw new BackendSuccessorReleaseDenied('BACKEND_INTEGRITY_EVIDENCE_UNAVAILABLE'); }
+  check(integrity && typeof integrity === 'object' && !Array.isArray(integrity) &&
+    Object.keys(integrity).sort().join() === ['contract', 'repository', 'sha', 'ciRunId', 'ciRunAttempt',
+      ...successorDigestKeys].sort().join() &&
+    integrity.contract === 'aqua.backend-successor-integrity-v1' && integrity.repository === q.repository &&
+    integrity.sha === q.sha && integrity.ciRunId === q.ciRunId && integrity.ciRunAttempt === q.ciRunAttempt &&
+    successorDigestKeys.every(key => nonzeroHash(integrity[key])) &&
+    integrity.successorSchemaSha256 === record.audit.successorSchemaSha256 &&
+    integrity.successorAssemblySha256 === record.audit.successorAssemblySha256 &&
+    integrity.successorApplicationSha256 === record.audit.successorApplicationSha256 &&
+    integrity.successorCoreSha256 === record.audit.successorCoreSha256,
+  'BACKEND_INTEGRITY_EVIDENCE_MISMATCH');
+  const buildPayload = transition => {
+    const payload = { contractVersion: successorContract, predecessorDecisionSha256: predecessorDecisionDigest,
+      predecessorSchemaSha256: decision.requiredSchemaDigest,
+      predecessorAssemblySha256: decision.requiredAssemblyDigest,
+      predecessorRuntimeAssemblySha256: decision.requiredRuntimeAssemblyDigest,
+      predecessorDatabaseIdentitySha256: decision.requiredDatabaseIdentityDigest,
+      predecessorBuildId, successorRevisionSha256: q.sha,
+      successorSchemaSha256: transition === 'additive' ? integrity.successorSchemaSha256 : decision.requiredSchemaDigest,
+      successorAssemblySha256: integrity.successorAssemblySha256,
+      successorApplicationSha256: integrity.successorApplicationSha256,
+      successorCoreSha256: integrity.successorCoreSha256, schemaTransition: transition,
+      releaseRunId: Number(q.releaseRunId), releaseRunAttempt: q.releaseRunAttempt,
+      ciRunId: Number(q.ciRunId), ciRunAttempt: q.ciRunAttempt,
+      executorSha256: sha256(Buffer.from(q.executorSha, 'utf8')) };
+    const bytes = Buffer.from(JSON.stringify(payload), 'utf8');
+    check(bytes.length > 0 && bytes.length <= 16384, 'BACKEND_STAGING_UNVERIFIED');
+    return { bytes, pin: sha256(bytes) };
+  };
+  let stagedInitial;
+  try { stagedInitial = JSON.parse(initialPayloadBytes.toString('utf8')); }
+  catch { throw new BackendSuccessorReleaseDenied('BACKEND_COMPLETION_STAGING_CHANGED'); }
+  check(stagedInitial && typeof stagedInitial === 'object' && !Array.isArray(stagedInitial) &&
+    Object.keys(stagedInitial).sort().join() === ['contractVersion', 'predecessorDecisionSha256',
+      'predecessorSchemaSha256', 'predecessorAssemblySha256', 'predecessorRuntimeAssemblySha256',
+      'predecessorDatabaseIdentitySha256', 'predecessorBuildId', 'successorRevisionSha256',
+      'successorSchemaSha256', 'successorAssemblySha256', 'successorApplicationSha256',
+      'successorCoreSha256', 'schemaTransition', 'releaseRunId', 'releaseRunAttempt',
+      'ciRunId', 'ciRunAttempt', 'executorSha256'].sort().join() &&
+    stagedInitial.contractVersion === successorContract &&
+    stagedInitial.predecessorDecisionSha256 === predecessorDecisionDigest &&
+    stagedInitial.predecessorSchemaSha256 === record.audit.requiredSchemaDigest &&
+    stagedInitial.predecessorAssemblySha256 === record.audit.requiredAssemblyDigest &&
+    stagedInitial.predecessorRuntimeAssemblySha256 === record.audit.requiredRuntimeAssemblyDigest &&
+    stagedInitial.predecessorDatabaseIdentitySha256 === record.audit.requiredDatabaseIdentityDigest &&
+    stagedInitial.predecessorBuildId === record.audit.predecessorBuildId &&
+    stagedInitial.successorRevisionSha256 === q.sha &&
+    stagedInitial.successorSchemaSha256 === record.audit.requiredSchemaDigest &&
+    stagedInitial.successorAssemblySha256 === record.audit.successorAssemblySha256 &&
+    stagedInitial.successorApplicationSha256 === record.audit.successorApplicationSha256 &&
+    stagedInitial.successorCoreSha256 === record.audit.successorCoreSha256 &&
+    stagedInitial.schemaTransition === 'none' &&
+    stagedInitial.releaseRunId === Number(record.run.id) && stagedInitial.releaseRunAttempt === 1 &&
+    stagedInitial.ciRunId === Number(record.source.ciRunId) &&
+    stagedInitial.ciRunAttempt === record.source.ciRunAttempt &&
+    stagedInitial.executorSha256 === sha256(Buffer.from(record.run.executorSha, 'utf8')),
+  'BACKEND_COMPLETION_STAGING_CHANGED');
+  const sourceDeltaSha256 = sha256(Buffer.from(JSON.stringify({
+    base: expectedCompletion.baselineRenderSha, head: q.sha,
+    files: compare.files.map(file => ({ filename: file.filename, status: file.status,
+      additions: file.additions, deletions: file.deletions, changes: file.changes })) })));
+  audit({ phase: 'backend-baseline-selected',
+    baselineRenderDeployId: expectedCompletion.baselineRenderDeployId,
+    baselineRenderSha: expectedCompletion.baselineRenderSha,
+    servingRenderDeployId: expectedCompletion.liveRenderDeployId,
+    servingRenderSha: expectedCompletion.liveRenderSha,
+    paymentAvailability: state, servingHealthObservation,
+    providerConfigurationSha256, failedRunId: expectedCompletion.failedRunId,
+    failedRunAttempt: 1, baselineRenderProvenance: 'FAILED_MIGRATION_RECONCILIATION' });
+  audit({ phase: 'backend-decision-verified', decisionSha256: sha256(decisionBytes),
+    decisionPin, decisionContract, requiredConfigurationDigest: decision.requiredConfigurationDigest,
+    requiredSchemaDigest: decision.requiredSchemaDigest, requiredAssemblyDigest: decision.requiredAssemblyDigest,
+    requiredRuntimeAssemblyDigest: decision.requiredRuntimeAssemblyDigest,
+    requiredDatabaseIdentityDigest: decision.requiredDatabaseIdentityDigest,
+    predecessorBuildId, baselineRenderSha: expectedCompletion.baselineRenderSha,
+    paymentAvailability: state });
+  audit({ phase: 'backend-classified', schemaTransition, backendFiles: backendFiles.length,
+    frontendFiles: frontendFiles.length, migrationFiles: migrationFiles.length, sourceDeltaSha256,
+    integrityArtifactId: descriptor.id, integrityArtifactSha256: descriptor.digest.slice(7), ...integrity });
+  audit({ phase: 'backend-completion-preconditions-verified',
+    failedRunId: expectedCompletion.failedRunId, failedRunAttempt: 1,
+    failedJobId: expectedCompletion.failedJobId, failedJobStatus: 'failed',
+    initialPayloadPinSha256: initialPin, liveRenderDeployId: expectedCompletion.liveRenderDeployId,
+    liveRenderSha: expectedCompletion.liveRenderSha,
+    baselineRenderDeployId: expectedCompletion.baselineRenderDeployId,
+    baselineRenderSha: expectedCompletion.baselineRenderSha, stagedSchemaTransition: 'none',
+    schemaJobSuccessEstablished: false, restartEstablished: false,
+    providerHistorySha256 });
+  const incumbent = await verifyFrontendIncumbent(api, q, options);
+  await guard();
+  clock();
+  options.validateAdmission();
+  await verifyProviderHistory(providerHistorySha256);
+  await verifyDecisionBinding();
+  audit({ phase: 'backend-schema-job-requesting',
+    startCommand: 'dotnet migrator/AqualLifeStyle.Migrator.dll -q',
+    renderDeployId: expectedCompletion.liveRenderDeployId });
+  const job = await api.render(`${servicePath}/jobs`,
+    { startCommand: 'dotnet migrator/AqualLifeStyle.Migrator.dll -q' });
+  check(jobIdPattern.test(job?.id ?? ''), 'BACKEND_SCHEMA_JOB_UNAVAILABLE');
+  audit({ phase: 'backend-schema-job-created', jobId: job.id });
+  const finished = await waitFor(async () => api.render(`${servicePath}/jobs/${job.id}`),
+    row => row.status, 'succeeded', new Set(['pending', 'running']), options);
+  check(finished.id === job.id, 'BACKEND_SCHEMA_JOB_UNAVAILABLE');
+  audit({ phase: 'backend-schema-job-succeeded', jobId: job.id });
+  await guard();
+  clock();
+  options.validateAdmission();
+  await verifyProviderHistory(providerHistorySha256);
+  await verifyDecisionBinding();
+  const stage = async (intentPhase, stagedPhase, transition) => {
+    const payload = buildPayload(transition);
+    options.validateAdmission();
+    audit({ phase: intentPhase, payloadPinSha256: payload.pin, stagedSchemaTransition: transition,
+      payloadBytes: payload.bytes.length });
+    const encoded = payload.bytes.toString('base64');
+    for (const [key, value] of [[backendSuccessorPayloadKey, encoded], [backendSuccessorPinKey, payload.pin]]) {
+      await api.render(`${servicePath}/env-vars/${key}`, { value });
+      const readback = await api.render(`${servicePath}/env-vars/${key}`);
+      check(readback?.key === key && readback.value === value, 'BACKEND_STAGING_UNVERIFIED');
+    }
+    audit({ phase: stagedPhase, payloadPinSha256: payload.pin });
+    return payload;
+  };
+  const additiveStage = await stage('backend-successor-restart-staging',
+    'backend-successor-restart-staged', 'additive');
+  await guard();
+  clock();
+  options.validateAdmission();
+  await verifyFailedJob();
+  await verifyDecisionBinding();
+  audit({ phase: 'backend-restart-requesting' });
+  const restart = await api.render(`${servicePath}/deploys`, { deployMode: 'deploy_only' });
+  check(deployIdPattern.test(restart?.id ?? ''), 'BACKEND_RENDER_DEPLOYMENT_ID_UNAVAILABLE');
+  audit({ phase: 'backend-restart-requested', renderDeployId: restart.id });
+  const ready = await waitFor(async () => api.render(`${servicePath}/deploys/${restart.id}`),
+    row => row.status, 'live', activeRender, options);
+  check(ready.id === restart.id, 'BACKEND_DEPLOYMENT_UNVERIFIABLE');
+  audit({ phase: 'backend-restart-ready', renderDeployId: restart.id, renderSha: q.sha });
+  clock();
+  const endHistory = await deploymentHistory(api, 'render');
+  const endLive = endHistory.filter(row => row.status === 'live');
+  const failedRender = options.evidencePlan.historicalReconciliations?.filter(row => row.runId === '45098115310') ?? [];
+  const acknowledgedFailed = failedRender.length === 1 ? row => row.id === failedRender[0].renderDeployId &&
+    row.status === 'update_failed' && row.commit?.id === q.sha : () => false;
+  check(endHistory.every(row => !activeRender.has(row.status)) && endLive.length === 1 &&
+    endLive[0].id === restart.id && endLive[0].commit?.id === q.sha &&
+    endHistory.filter(row => row.commit?.id === q.sha && !acknowledgedFailed(row)).length === 2 &&
+    (failedRender.length === 0 || endHistory.filter(acknowledgedFailed).length === 1),
+  'BACKEND_DEPLOYMENT_UNVERIFIABLE');
+  const endHealth = await api.health();
+  try { validateHealth(endHealth, q.sha); }
+  catch { throw new BackendSuccessorReleaseDenied('BACKEND_DEPLOYMENT_UNVERIFIABLE'); }
+  check((endHealth.body.result ?? endHealth.body).paymentAvailability === state,
+    'BACKEND_DEPLOYMENT_UNVERIFIABLE');
+  const endHealthObservation = healthObservation(endHealth);
+  let finalProviderConfigurationSha256;
+  try { finalProviderConfigurationSha256 = await readNormalSettingsDigest(); }
+  catch { throw new BackendSuccessorReleaseDenied('BACKEND_DEPLOYMENT_UNVERIFIABLE'); }
+  check(finalProviderConfigurationSha256 === providerConfigurationSha256,
+    'BACKEND_DEPLOYMENT_UNVERIFIABLE');
+  const successorEvidence = { healthObservation: endHealthObservation,
+    providerConfigurationSha256: finalProviderConfigurationSha256,
+    commissioningDecisionSha256: sha256(decisionBytes), qualifiedBuildSha: q.sha,
+    integrityArtifactSha256: descriptor.digest.slice(7),
+    successorAssemblyArtifactSha256: integrity.successorAssemblySha256 };
+  check(await api.web() === 200, 'WEB_READINESS_FAILED');
+  const proxy = await api.webHealth(q.sha, state);
+  check(proxy?.status === 'Healthy' && proxy.buildId === q.sha && proxy.paymentAvailability === state,
+    'BACKEND_DEPLOYMENT_UNVERIFIABLE');
+  audit({ phase: 'backend-deployed', renderDeployId: restart.id, renderSha: q.sha,
+    paymentAvailability: state, successorEvidence, payloadPinSha256: additiveStage.pin,
+    releaseIdentity: releaseKey(q), schemaTransition,
+    failedRunId: expectedCompletion.failedRunId, failedRunAttempt: 1,
+    failedJobId: expectedCompletion.failedJobId });
+  await deployCombinedFrontendPhase(api, q, report, options, {
+    baselineRenderDeployId: expectedCompletion.baselineRenderDeployId,
+    baselineRenderSha: expectedCompletion.baselineRenderSha,
+    baselineVercelDeployId: incumbent.vercelDeployId,
+    renderDeployId: restart.id, renderSha: q.sha, paymentAvailability: state,
+    frontendFiles: frontendFiles.length, backendFiles: backendFiles.length, sourceDeltaSha256 });
+}
+
+export function validateBackendCompletionReceipt(rows, descriptor, targets,
+  record = validateBackendMigrationFailureRecord()) {
+  check(Array.isArray(rows) && rows.length === completionSequence.length &&
+    rows.map(row => row.phase).join() === completionSequence.join(),
+  'BACKEND_AUDIT_SEQUENCE_INVALID');
+  const first = rows[0], baseline = rows[1], decision = rows[2], classified = rows[3],
+    pre = rows[4], jobRequesting = rows[5], jobCreated = rows[6], jobSucceeded = rows[7],
+    staged = rows[9], restartRequested = rows[11], restartReady = rows[12], last = rows[13];
+  validateBackendSuccessorIdentity({ ...first, qualificationOnly: false });
+  check(first.backendSuccessor === backendSuccessorMode && first.combinedRelease === combinedMode &&
+    first.backendCompletion === backendCompletionRecordDigest &&
+    first.memberRelease === undefined && first.frontendRelease === undefined &&
+    first.releaseRunAttempt === 1 && first.releaseRunId === descriptor.runId &&
+    first.releaseRunAttempt === descriptor.runAttempt && first.executorSha === descriptor.sha &&
+    descriptor.backendCompletion === first.backendCompletion &&
+    rows.every(row => completionIdentityKeys.every(key => row[key] === first[key])),
+  'BACKEND_AUDIT_IDENTITY_MISMATCH');
+  check(hashPattern.test(first.authorizationId ?? '') && hashPattern.test(first.evidenceSha256 ?? '') &&
+    hashPattern.test(first.inventorySha256 ?? '') && /^\d+$/.test(String(first.evidenceArtifactId ?? '')),
+  'BACKEND_AUDIT_IDENTITY_MISMATCH');
+  check(baseline.baselineRenderDeployId === record.audit.baselineRenderDeployId &&
+    baseline.baselineRenderSha === record.audit.baselineRenderSha &&
+    baseline.servingRenderDeployId === record.audit.liveRenderDeployId &&
+    baseline.servingRenderSha === first.sha &&
+    baseline.servingRenderSha === record.audit.liveRenderSha &&
+    baseline.failedRunId === record.run.id && baseline.failedRunAttempt === 1 &&
+    baseline.baselineRenderProvenance === 'FAILED_MIGRATION_RECONCILIATION' &&
+    baseline.paymentAvailability === 'Available' &&
+    baseline.providerConfigurationSha256 === record.audit.providerConfigurationSha256,
+  'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  validateHealthObservation(baseline.servingHealthObservation, first.sha);
+  check(decision.decisionContract === decisionContract && decision.decisionSha256 === decision.decisionPin &&
+    decision.decisionSha256 === record.audit.decisionSha256 &&
+    digestKeys.every(key => nonzeroHash(decision[key])) &&
+    decision.requiredConfigurationDigest === record.audit.requiredConfigurationDigest &&
+    decision.requiredSchemaDigest === record.audit.requiredSchemaDigest &&
+    decision.requiredAssemblyDigest === record.audit.requiredAssemblyDigest &&
+    decision.requiredRuntimeAssemblyDigest === record.audit.requiredRuntimeAssemblyDigest &&
+    decision.requiredDatabaseIdentityDigest === record.audit.requiredDatabaseIdentityDigest &&
+    decision.predecessorBuildId === baseline.baselineRenderSha &&
+    decision.baselineRenderSha === baseline.baselineRenderSha &&
+    decision.paymentAvailability === baseline.paymentAvailability,
+  'BACKEND_AUDIT_DECISION_MISMATCH');
+  check(classified.schemaTransition === 'additive' && classified.migrationFiles > 0 &&
+    classified.migrationFiles === record.audit.migrationFiles &&
+    classified.backendFiles === record.audit.backendFiles &&
+    classified.frontendFiles === record.audit.frontendFiles &&
+    classified.sourceDeltaSha256 === record.audit.sourceDeltaSha256 &&
+    classified.integrityArtifactId === record.audit.integrityArtifactId &&
+    classified.integrityArtifactSha256 === record.audit.integrityArtifactSha256 &&
+    classified.contract === 'aqua.backend-successor-integrity-v1' &&
+    classified.repository === first.repository && classified.sha === first.sha &&
+    classified.ciRunId === first.ciRunId && classified.ciRunAttempt === first.ciRunAttempt &&
+    successorDigestKeys.every(key => nonzeroHash(classified[key])) &&
+    classified.successorSchemaSha256 === record.audit.successorSchemaSha256 &&
+    classified.successorAssemblySha256 === record.audit.successorAssemblySha256 &&
+    classified.successorApplicationSha256 === record.audit.successorApplicationSha256 &&
+    classified.successorCoreSha256 === record.audit.successorCoreSha256 &&
+    classified.successorSchemaSha256 !== decision.requiredSchemaDigest,
+  'BACKEND_AUDIT_CLASSIFICATION_MISMATCH');
+  check(pre.failedRunId === record.run.id && pre.failedRunAttempt === 1 &&
+    pre.failedJobId === record.audit.jobId && pre.failedJobStatus === 'failed' &&
+    pre.initialPayloadPinSha256 === record.audit.initialPayloadPinSha256 &&
+    pre.liveRenderDeployId === record.audit.liveRenderDeployId &&
+    pre.liveRenderSha === first.sha && pre.liveRenderSha === record.audit.liveRenderSha &&
+    pre.baselineRenderDeployId === baseline.baselineRenderDeployId &&
+    pre.baselineRenderSha === baseline.baselineRenderSha &&
+    pre.stagedSchemaTransition === 'none' && pre.schemaJobSuccessEstablished === false &&
+    pre.restartEstablished === false && nonzeroHash(pre.providerHistorySha256),
+  'BACKEND_AUDIT_COMPLETION_PRECONDITION_MISMATCH');
+  check(hashPattern.test(rows[8].payloadPinSha256 ?? '') && rows[8].payloadPinSha256 === staged.payloadPinSha256 &&
+    rows[8].payloadPinSha256 !== pre.initialPayloadPinSha256 &&
+    rows[8].stagedSchemaTransition === 'additive' &&
+    last.payloadPinSha256 === staged.payloadPinSha256,
+  'BACKEND_AUDIT_STAGING_MISMATCH');
+  check(jobRequesting.startCommand === 'dotnet migrator/AqualLifeStyle.Migrator.dll -q' &&
+    jobCreated.jobId === jobSucceeded.jobId && jobIdPattern.test(jobCreated.jobId ?? ''),
+  'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  check(deployIdPattern.test(restartRequested.renderDeployId ?? '') &&
+    restartReady.renderDeployId === restartRequested.renderDeployId &&
+    restartReady.renderSha === first.sha && last.renderDeployId === restartReady.renderDeployId &&
+    last.renderSha === first.sha,
+  'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  const successorEvidence = last.successorEvidence;
+  check(successorEvidence && typeof successorEvidence === 'object' && !Array.isArray(successorEvidence) &&
+    Object.keys(successorEvidence).sort().join() === ['healthObservation', 'providerConfigurationSha256',
+      'commissioningDecisionSha256', 'qualifiedBuildSha', 'integrityArtifactSha256',
+      'successorAssemblyArtifactSha256'].sort().join() &&
+    successorEvidence.providerConfigurationSha256 === baseline.providerConfigurationSha256 &&
+    successorEvidence.commissioningDecisionSha256 === decision.decisionSha256 &&
+    successorEvidence.qualifiedBuildSha === first.sha &&
+    successorEvidence.integrityArtifactSha256 === classified.integrityArtifactSha256 &&
+    successorEvidence.successorAssemblyArtifactSha256 === classified.successorAssemblySha256 &&
+    nonzeroHash(last.releaseIdentity ?? '') && last.failedRunId === record.run.id &&
+    last.failedRunAttempt === 1 && last.failedJobId === record.audit.jobId,
+  'BACKEND_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  validateHealthObservation(successorEvidence.healthObservation, first.sha);
+  return { ...descriptor, sha: first.sha, ciRunId: first.ciRunId, ciRunAttempt: first.ciRunAttempt,
+    renderDeployId: last.renderDeployId, renderSha: last.renderSha,
+    schemaTransition: classified.schemaTransition, backendSuccessor: first.backendSuccessor,
+    backendCompletion: first.backendCompletion, payloadPinSha256: last.payloadPinSha256,
+    receiptSha256: objectDigest(rows) };
+}
+
+export function validateCombinedCompletionReceipt(rows, descriptor, targets, record) {
+  check(Array.isArray(rows) && rows.length === 21 &&
+    rows.map(row => row.phase).join() === [...completionSequence,
+      'frontend-baseline-selected', 'frontend-classified',
+      'frontend-vercel-files-requesting', 'frontend-vercel-files-uploaded',
+      'frontend-vercel-requesting', 'frontend-vercel-requested', 'frontend-deployed'].join(),
+  'COMBINED_AUDIT_SEQUENCE_INVALID');
+  const backendLen = 14;
+  const backendReceipt = validateBackendCompletionReceipt(rows.slice(0, backendLen), descriptor, targets, record);
+  const first = rows[0], classified = rows[3], baseline = rows[backendLen],
+    deployed = rows.at(-1);
+  check(first.combinedRelease === combinedMode &&
+    rows.every(row => row.combinedRelease === first.combinedRelease &&
+      row.backendSuccessor === first.backendSuccessor &&
+      row.backendCompletion === first.backendCompletion),
+    'COMBINED_AUDIT_IDENTITY_MISMATCH');
+  check(rows[backendLen - 1].phase === 'backend-deployed' &&
+    rows[backendLen - 1].renderSha === first.sha &&
+    rows[backendLen - 1].renderDeployId === backendReceipt.renderDeployId &&
+    hashPattern.test(rows[backendLen - 1].releaseIdentity ?? ''),
+    'COMBINED_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  check(/^dpl_[A-Za-z0-9]+$/.test(baseline.baselineVercelDeployId ?? '') &&
+    baseline.baselineRenderSha === rows[1].baselineRenderSha &&
+    baseline.baselineRenderDeployId === rows[1].baselineRenderDeployId &&
+    baseline.baselineRenderSha !== first.sha && baseline.servingRenderSha === first.sha &&
+    baseline.servingRenderDeployId === backendReceipt.renderDeployId &&
+    baseline.paymentAvailability === 'Available' &&
+    baseline.paymentAvailability === rows[1].paymentAvailability &&
+    baseline.paymentAvailability === deployed.paymentAvailability &&
+    ['GIT_SOURCE', 'UNVERIFIED_LEGACY', 'RECONCILED_FRONTEND_EFFECT', 'PRIOR_RELEASE_RECEIPT']
+      .includes(baseline.baselineVercelSourceProvenance),
+  'COMBINED_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  const frontendClassified = rows[backendLen + 1];
+  check(frontendClassified.phase === 'frontend-classified' &&
+    frontendClassified.frontendFiles === rows[3].frontendFiles &&
+    frontendClassified.backendFiles === rows[3].backendFiles &&
+    frontendClassified.sourceDeltaSha256 === rows[3].sourceDeltaSha256,
+    'COMBINED_AUDIT_CLASSIFICATION_MISMATCH');
+  const vercelDeployId = rows[backendLen + 5].vercelDeployId;
+  check(typeof vercelDeployId === 'string' && /^dpl_[A-Za-z0-9]+$/.test(vercelDeployId) &&
+    rows[backendLen + 6].vercelDeployId === vercelDeployId &&
+    rows[backendLen + 6].renderSha === first.sha &&
+    rows[backendLen + 6].webSha256 === first.sha && rows[backendLen + 6].webStatus === 200,
+    'COMBINED_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  check(deployed.phase === 'frontend-deployed' && deployed.renderSha === first.sha &&
+    deployed.vercelSha === first.sha && deployed.webSha256 === first.sha &&
+    deployed.paymentAvailability === baseline.paymentAvailability,
+    'COMBINED_AUDIT_PROVIDER_IDENTITY_MISMATCH');
+  return { ...backendReceipt, sha: first.sha, ciRunId: first.ciRunId, ciRunAttempt: first.ciRunAttempt,
+    renderDeployId: backendReceipt.renderDeployId, renderSha: first.sha,
+    vercelDeployId, combinedRelease: first.combinedRelease, backendSuccessor: first.backendSuccessor,
+    backendCompletion: first.backendCompletion, payloadPinSha256: backendReceipt.payloadPinSha256,
+    receiptSha256: objectDigest(rows) };
+}
+
 // Combined audit receipt: the 10- or 18-row backend successor sequence is
 // validated by the ordinary backend receipt logic, then the seven-row frontend
 // suffix is bound to that backend result. The frontend phase never re-runs the
 // backend comparison; it inherits the backend classification.
-export function validateCombinedReceipt(rows, descriptor, targets) {
+export function validateCombinedReceipt(rows, descriptor, targets, record) {
+  if (rows?.[0]?.backendCompletion !== undefined) {
+    check(descriptor?.backendCompletion === rows[0].backendCompletion,
+      'COMBINED_AUDIT_IDENTITY_MISMATCH');
+    return validateCombinedCompletionReceipt(rows, descriptor, targets, record);
+  }
   check(Array.isArray(rows) && (rows.length === 17 || rows.length === 25) &&
     rows.map(row => row.phase).join() ===
       [...(rows.length === 17 ? baselineSequence : additiveSequence),

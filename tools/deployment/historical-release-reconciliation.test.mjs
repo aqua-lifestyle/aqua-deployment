@@ -10,7 +10,9 @@ import { evidencePlan, targets, standingPolicy, policyDigest, admissionJobName,
 import { validateMemberReceipt } from './member-release.mjs';
 import { objectDigest, sha256 } from './github-evidence.mjs';
 import { isReconciledHistoricalRun, validateReconciliationRecords, validateHistoricalContext,
-  validateHistoricalArtifact, validateHistoricalAudit, validateFailedRenderReconciliation } from './historical-release-reconciliation.mjs';
+  validateHistoricalArtifact, validateHistoricalAudit, validateFailedRenderReconciliation,
+  validateBackendMigrationFailureRecord, backendCompletionPlanProof,
+  backendCompletionRecordDigest } from './historical-release-reconciliation.mjs';
 
 const record = validateReconciliationRecords();
 const archives = ['member-interrupted-audit.zip', 'member-frontend-failed-audit.zip'].map(name =>
@@ -330,4 +332,35 @@ test('a second attempt on either historical run is not recognized as the settled
         ].map(j => ({ ...j, run_id: f.runs[i].id, run_attempt: 1, status: 'completed' })) } : read(path);
     await assert.rejects(evidencePlan(f.api, f.q, standingPolicy), /FAILED_RUN_OR_EXECUTION_CHANGED/);
   }
+});
+
+
+test('exact failed backend migration requires its pinned completion mode and preserves the original failure', () => {
+  const r = validateBackendMigrationFailureRecord(), x = r.run;
+  assert.equal(isReconciledHistoricalRun(x.id), true);
+  assert.equal(isReconciledHistoricalRun('999'), false);
+  assert.equal(backendCompletionPlanProof().failedJobId, r.audit.jobId);
+  const run = { id: Number(x.id), run_number: x.number, run_attempt: 1,
+    created_at: x.createdAt, head_sha: x.executorSha, status: 'completed', conclusion: 'failure',
+    actor: { login: x.actor.login, id: x.actor.id },
+    repository: { full_name: 'aqua-lifestyle/aqua-deployment' },
+    head_repository: { full_name: 'aqua-lifestyle/aqua-deployment' } };
+  const prod = { id: Number(x.productionJobId), run_id: run.id, run_attempt: 1,
+    status: 'completed', conclusion: 'failure', steps: [
+      { name: 'Revalidate policy, provenance, providers and recovery before automatic deployment',
+        conclusion: 'failure' }] };
+  const q = { ...candidate(), sha: r.source.sha, ciRunId: r.source.ciRunId,
+    ciRunAttempt: r.source.ciRunAttempt, releaseRunId: '999', executorSha: 'f'.repeat(40),
+    policySha256: r.source.policySha256, qualificationOnly: false,
+    backendSuccessor: 'post-normal-backend-v1',
+    combinedRelease: 'post-normal-backend-frontend-v1',
+    backendCompletion: backendCompletionRecordDigest };
+  assert.deepEqual(validateHistoricalContext(run, 1, prod, q, targets), x);
+  assert.throws(() => validateHistoricalContext(run, 1, prod,
+    { ...q, backendCompletion: undefined }, targets), /BACKEND_COMPLETION_REQUIRED/);
+  assert.throws(() => validateHistoricalContext({ ...run, created_at: '2026-11-24T10:16:09Z' },
+    1, prod, q, targets), /BACKEND_MIGRATION_FAILURE_EXECUTION_CHANGED/);
+  assert.throws(() => validateHistoricalContext(run, 1,
+    { ...prod, steps: [{ name: 'Other', conclusion: 'failure' }] }, q, targets),
+  /BACKEND_MIGRATION_FAILURE_EXECUTION_CHANGED/);
 });

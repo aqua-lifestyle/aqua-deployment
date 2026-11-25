@@ -25,6 +25,10 @@ const authenticatedSuccessorDiagnostics = new WeakSet();
 export const failedSuccessorRenderRunId = '45098115310';
 const failedSuccessorRenderDigest = '16590aedacff9774dee37594174a5e5deb72af4c95d2c878b631357343c056eb';
 const authenticatedFailedRenderAdmissions = new WeakSet();
+export const backendMigrationFailureRunId = '45373150714';
+export const backendCompletionRecordDigest =
+  '84d41b083048a2ac0a200a04b3b10aa79cdd5240fe0c658d7bfca2bce1ad5846';
+const authenticatedBackendMigrationAdmissions = new WeakSet();
 
 export function validateFailedSuccessorRenderRecord(bytes = readFileSync(
   new URL('../../governance/render-update-failed-reconciliation-45098115310.json', import.meta.url))) {
@@ -91,6 +95,98 @@ export function validateFailedSuccessorRenderRecord(bytes = readFileSync(
   return r;
 }
 
+export function validateBackendMigrationFailureRecord(bytes = readFileSync(
+  new URL('../../governance/backend-successor-migration-failed-reconciliation-45373150714.json', import.meta.url))) {
+  check(Buffer.isBuffer(bytes) && sha256(bytes) === backendCompletionRecordDigest,
+    'BACKEND_MIGRATION_FAILURE_RECORD_CHANGED');
+  const r = JSON.parse(bytes), x = r.run, s = r.source, a = r.audit, m = r.admission,
+    f = r.failedMigration, scope = r.scope, e = scope.completionEligibility;
+  check(r.contract === 'aqua.exact-failed-backend-successor-migration-reconciliation' && r.version === 1 &&
+    x.id === backendMigrationFailureRunId && x.number === 90 && x.attempt === 1 &&
+    x.executorSha === 'd86ae6d326d5f3b4070b70140e216d6eb5b73f9c' &&
+    x.actor?.login === 'Xolani-M' && x.actor.id === 86495928 &&
+    x.createdAt === '2026-11-24T10:16:08Z' && x.conclusion === 'failure' &&
+    x.productionJobId === '138373327199' && x.productionConclusion === 'failure' &&
+    x.terminalCode === 'PROVIDER_DEPLOYMENT_FAILED_INSPECT_RELEASE_REPORT' &&
+    s.repository === 'aqua-lifestyle/aqua-lifestyle' &&
+    s.sha === '58b18b2f5a76769a660c2ae834bd6e0c02263ebf' &&
+    s.ciRunId === '44236824305' && s.ciRunAttempt === 4 &&
+    s.policySha256 === 'e95602526973af088b512801f084616f31187ebe5acb20584ff3df0ba6e4020e' &&
+    s.backendSuccessor === 'post-normal-backend-v1' &&
+    s.combinedRelease === 'post-normal-backend-frontend-v1' &&
+    m.artifactId === '14909133666' &&
+    m.archiveSha256 === '71db9ed31f22be78fe19e284a1b5c29b8ef56673b12040362f7c0c56c88cbab2' &&
+    m.receiptSha256 === '59d7ea8ac65391d71b652cca7f752f88ce8903b4ccc136c4518e6ddde3671f88' &&
+    m.planSha256 === 'e9f50f57dfd04803cc9f4063b9e7d03ff9858352141ac74d37ddf13d34da7caf' &&
+    m.authorizationId === '4afd4e34501fc93ead8097f4ebca3aab784286b5a01f191eeda42da621c02b6b' &&
+    m.evidenceSha256 === '98406620d9686068b6ad11481f3ef8c2b5878b8ca4a97b0b575a10245c2a2e77' &&
+    m.inventorySha256 === '2bedab20a4fe26c07a8ca027a52dfb2d3db60e21ee69f627775f6efe928a7239' &&
+    m.evidenceArtifactId === '14905822502' &&
+    m.issuedAt === '2026-11-24T10:17:58.779Z' && m.expiresAt === '2026-11-24T11:17:58.779Z' &&
+    a.artifactId === '14910512012' &&
+    a.archiveSha256 === 'b8aa760b8d4f9f36c341bfd25150cdc1eba75aab4a8f8de58b50ec0b3a7f2c9d' &&
+    a.reportSha256 === '3d1824828fc8ee4ab2f9bb487affa59a72a8bf2a7001e52d8b2613ee7eb68103' &&
+    a.rowsSha256 === 'cce315c4c3294d5ab097f5b914b9b094e54f0f68e479a58837e4026414b7f2d7' &&
+    objectDigest(a.phases) === objectDigest(['evidence-selected','backend-baseline-selected',
+      'backend-decision-verified','backend-classified','backend-successor-staging',
+      'backend-successor-staged','backend-render-requesting','backend-render-requested',
+      'backend-render-ready','backend-schema-job-requesting','backend-schema-job-created','failed']) &&
+    a.initialPayloadPinSha256 === '7d444cef2f389504b4ef90df4eb720c23f576e0e137119abe8e2dd9066e740a4' &&
+    a.payloadBytes === 1238 && a.schemaTransition === 'additive' && a.stagedSchemaTransition === 'none' &&
+    a.baselineRenderDeployId === 'dep-dbru710n74is738ah8bg' &&
+    a.baselineRenderSha === 'b8d86e5e60997483423b273d5f426c08b411f573' &&
+    a.liveRenderDeployId === 'dep-dc2mac6c6qcc73ff3ij0' && a.liveRenderSha === s.sha &&
+    a.jobId === 'job-dc2maq3rjlhs73d5jo60' &&
+    a.startCommand === 'dotnet migrator/AqualLifeStyle.Migrator.dll' &&
+    a.migrationFiles === 3 && a.backendFiles === 23 && a.frontendFiles === 17 &&
+    a.sourceDeltaSha256 === '63153999ce261afa2fe9c2bee743d38c5d14c30b69e1c5a52ea38336ce8bee0b' &&
+    a.integrityArtifactId === '14905993961' &&
+    a.integrityArtifactSha256 === '1732f832e3f013333180b1a2d68a377fc2bab82ad48403d0f3b02e669d8d6647' &&
+    a.successorSchemaSha256 === '27c55cd3dfbb93319aeeb17b463912fc7c366367a056aee7d0fc7aa629ad3664' &&
+    a.successorAssemblySha256 === 'fa1ad737b500c7254b620a549d773dede76997300e4971b06f10b80c5d1b2d97' &&
+    a.successorApplicationSha256 === '4deede312059d7263b22e9c295fa199a993be3f59a62cb0d44194578ddcedb7f' &&
+    a.successorCoreSha256 === 'f6bd2b6831524827e77d77663d88529b1db1034c4e54b6c5e58b05d515db0860' &&
+    a.decisionSha256 === 'e6ea39b8b0bd7f518f39b7275dc53cce8f9304eadce27628a5dfd9da6b8cea4e' &&
+    a.requiredConfigurationDigest === 'abeed0ec071ff8d300337c7da5f212e0479ad002203306d221e2ac1b937aebc3' &&
+    a.requiredSchemaDigest === '38f3a011ba150bc6074b3e7742ecb1a3032658a632f9011829b4e809c3f1007e' &&
+    a.requiredAssemblyDigest === 'cd7ae851d640b40a2761c3838282e7d367103bfedccd265f73c0c628d31f9a35' &&
+    a.requiredRuntimeAssemblyDigest === '8865ebcd4a7762e70a730864ced879f19997dd3a3657cc1140b6bb0ca9a7c4d6' &&
+    a.requiredDatabaseIdentityDigest === '1be505af7b4ba8efd991448f8ab301c771deb4c962c5eb02c459b14bd6f0c6fe' &&
+    a.predecessorBuildId === a.baselineRenderSha &&
+    a.providerConfigurationSha256 === '5cb83d7388d247006a9618e4a8faaeec4a1f04c49d0d6c7746d6d0a2cabdf2bd' &&
+    a.paymentAvailability === 'Available' &&
+    f.jobId === a.jobId && f.startCommand === a.startCommand &&
+    f.schemaJobSuccessRowEstablished === false && f.additiveRestartRowEstablished === false &&
+    f.frontendRowEstablished === false && f.initialDeploymentLiveAtFailure === true &&
+    f.initialPayloadStaged === true && f.initialPayloadPinSha256 === a.initialPayloadPinSha256 &&
+    f.stagedSchemaTransition === 'none' &&
+    scope.outcome === 'ACKNOWLEDGED_MIGRATION_JOB_NOT_CONFIRMED_SUCCESS_WITH_LIVE_PRE_SCHEMA_BACKEND' &&
+    scope.environment === 'production-release' && scope.profile === 'normal-integrated' &&
+    scope.renderServiceId === 'srv-d9f0k8e1a83c73d8n1b0' &&
+    scope.vercelProjectId === 'prj_6qL1e43KhsWrRshY5GxdmGl3HGMz' &&
+    scope.vercelTeamId === 'team_Hc3BWfhTLfwLzwbgbtaasBUY' &&
+    scope.originalFailurePreserved === true && scope.currentStagedConfiguration === 'UNVERIFIED' &&
+    scope.migrationState === 'UNVERIFIED_BY_DIRECT_CATALOG' &&
+    scope.schemaJobSuccessEstablished === false &&
+    scope.databaseWriteAbsenceEstablishedByHealth === false &&
+    scope.restartAbsenceEstablishedByAudit === true && scope.frontendAbsenceEstablishedByAudit === true &&
+    objectDigest(e) === objectDigest({
+      exactFailedRunId: x.id, exactFailedRunAttempt: 1, failedExecutorSha: x.executorSha,
+      requiredBaselineRenderDeployId: a.baselineRenderDeployId, requiredBaselineRenderSha: a.baselineRenderSha,
+      requiredLiveRenderDeployId: a.liveRenderDeployId, requiredLiveRenderSha: a.liveRenderSha,
+      requiredInitialPayloadPinSha256: a.initialPayloadPinSha256, requiredSchemaTransition: 'additive',
+      requiredStagedSchemaTransition: 'none', requiredSuccessorSchemaSha256: a.successorSchemaSha256,
+      initialDeploymentMayNotBeRepeated: true, failedJobMustRemainFailedBeforeRestart: true,
+      additiveRestartRequired: true, combinedFrontendAfterBackendRequired: true,
+      providerHistoryMustRemainUnchangedBeforeRestart: true, automaticRetryAuthorized: false,
+      separateOwnerAuthorizationRequired: true }) &&
+    ['successfulReleasePredecessor','automaticResumeAuthorized','replayAuthorized',
+      'providerDeploymentAuthorized','migrationAuthorized','financialActivationAuthorized',
+      'futureReleaseTechnicallyJustified'].every(key => scope[key] === false),
+  'BACKEND_MIGRATION_FAILURE_RECORD_INVALID');
+  return r;
+}
+
 // The original GitHub admission is operational evidence, never proof that a
 // separate business-owner release decision existed before this dispatch.
 export async function authenticateFailedSuccessorAdmission(api, r = validateFailedSuccessorRenderRecord()) {
@@ -136,6 +232,75 @@ export async function authenticateFailedSuccessorAdmission(api, r = validateFail
     authorizationId: a.authorizationId, priorOwnerReleaseAuthorization: 'UNVERIFIED' });
   authenticatedFailedRenderAdmissions.add(proof);
   return proof;
+}
+
+export async function authenticateBackendMigrationAdmission(api,
+  r = validateBackendMigrationFailureRecord()) {
+  const o = r.run, a = r.admission, s = r.source;
+  const repository = await api.executor('');
+  const page = await api.executor(`/actions/runs/${o.id}/artifacts?per_page=100`);
+  const name = `verified-admission-${o.id}-1`;
+  const found = page?.artifacts?.filter(row => String(row.id) === a.artifactId && row.name === name);
+  check(repository?.full_name === 'aqua-lifestyle/aqua-deployment' && repository.id === 1423239668 &&
+    Array.isArray(page?.artifacts) && page.total_count === page.artifacts.length &&
+    page.total_count <= 100 && found.length === 1,
+  'BACKEND_MIGRATION_ADMISSION_ARTIFACT_UNVERIFIABLE');
+  const descriptor = validateArtifact(found[0], o.id, o.executorSha, name, repository.id);
+  check(descriptor.digest === 'sha256:' + a.archiveSha256,
+    'BACKEND_MIGRATION_ADMISSION_ARTIFACT_CHANGED');
+  const files = await readGitHubArtifactFiles(api, 'executor', descriptor,
+    ['admission-receipt.json','evidence-plan.json']);
+  check(sha256(files['admission-receipt.json']) === a.receiptSha256 &&
+    sha256(files['evidence-plan.json']) === a.planSha256,
+  'BACKEND_MIGRATION_ADMISSION_CONTENT_CHANGED');
+  let receipt, plan;
+  try {
+    receipt = JSON.parse(files['admission-receipt.json']);
+    plan = JSON.parse(files['evidence-plan.json']);
+  } catch { throw new HistoricalReconciliationDenied('BACKEND_MIGRATION_ADMISSION_CONTENT_CHANGED'); }
+  check(receipt?.contract === 'aqua.github-evidence-admission' && receipt.version === 2 &&
+    receipt.releaseRunId === o.id && receipt.releaseRunAttempt === 1 &&
+    receipt.executorRepository === 'aqua-lifestyle/aqua-deployment' && receipt.executorSha === o.executorSha &&
+    receipt.repository === s.repository && receipt.sha === s.sha &&
+    receipt.ciRunId === s.ciRunId && receipt.ciRunAttempt === s.ciRunAttempt &&
+    receipt.policySha256 === s.policySha256 && receipt.environment === r.scope.environment &&
+    receipt.profile === r.scope.profile && receipt.renderServiceId === r.scope.renderServiceId &&
+    receipt.vercelProjectId === r.scope.vercelProjectId && receipt.vercelTeamId === r.scope.vercelTeamId &&
+    receipt.qualificationOnly === false && receipt.backendSuccessor === s.backendSuccessor &&
+    receipt.combinedRelease === s.combinedRelease && receipt.authorizationId === a.authorizationId &&
+    receipt.evidenceSha256 === a.evidenceSha256 && receipt.inventorySha256 === a.inventorySha256 &&
+    receipt.issuedAt === a.issuedAt && receipt.expiresAt === a.expiresAt &&
+    plan?.policySha256 === s.policySha256 && plan.baseline?.runId === '43429695806' &&
+    plan.resume === null && Array.isArray(plan.historicalReconciliations) &&
+    plan.historicalReconciliations.filter(row => row.runId === failedSuccessorRenderRunId &&
+      row.originalConclusion === 'failure').length === 1 &&
+    plan.historicalReconciliations.filter(row => row.runId === interruptedSuccessorRunId &&
+      row.originalConclusion === 'failure').length === 1,
+  'BACKEND_MIGRATION_ADMISSION_PURPOSE_CHANGED');
+  const proof = Object.freeze({ runId: o.id, artifactId: a.artifactId,
+    receiptSha256: a.receiptSha256, planSha256: a.planSha256,
+    authorizationId: a.authorizationId, evidenceSha256: a.evidenceSha256,
+    inventorySha256: a.inventorySha256 });
+  authenticatedBackendMigrationAdmissions.add(proof);
+  return proof;
+}
+
+export function backendCompletionPlanProof(r = validateBackendMigrationFailureRecord()) {
+  return Object.freeze({ failedRunId: r.run.id, failedRunAttempt: 1,
+    failedRunConclusion: r.run.conclusion, failedExecutorSha: r.run.executorSha,
+    failedSourceSha: r.source.sha, auditArtifactId: r.audit.artifactId,
+    auditArchiveSha256: r.audit.archiveSha256, auditRowsSha256: r.audit.rowsSha256,
+    admissionArtifactId: r.admission.artifactId,
+    admissionArchiveSha256: r.admission.archiveSha256,
+    admissionReceiptSha256: r.admission.receiptSha256,
+    admissionPlanSha256: r.admission.planSha256,
+    baselineRenderDeployId: r.audit.baselineRenderDeployId,
+    baselineRenderSha: r.audit.baselineRenderSha,
+    liveRenderDeployId: r.audit.liveRenderDeployId,
+    liveRenderSha: r.audit.liveRenderSha, failedJobId: r.audit.jobId,
+    initialPayloadPinSha256: r.audit.initialPayloadPinSha256,
+    successorSchemaSha256: r.audit.successorSchemaSha256,
+    terminalCode: r.run.terminalCode, outcome: r.scope.outcome });
 }
 
 export function validateInterruptedSuccessorRecord(bytes = readFileSync(
@@ -520,10 +685,48 @@ export function validateReconciliationRecords(bytes = Object.fromEntries(Object.
 
 export function isReconciledHistoricalRun(runId) {
   return ['40850715880', '40883686654', '41527223264', '41822854444', '41868204651',
-    reconciledTargetFailureRunId, interruptedSuccessorRunId, failedSuccessorRenderRunId].includes(String(runId));
+    reconciledTargetFailureRunId, interruptedSuccessorRunId, failedSuccessorRenderRunId,
+    backendMigrationFailureRunId].includes(String(runId));
 }
 
 export function validateHistoricalContext(run, attempt, production, candidate, targets) {
+  if (String(run.id) === backendMigrationFailureRunId) {
+    const r = validateBackendMigrationFailureRecord(), x = r.run, s = r.source;
+    check(candidate.backendCompletion === backendCompletionRecordDigest,
+      'BACKEND_COMPLETION_REQUIRED');
+    check(run.id === Number(x.id) && run.run_number === x.number && run.run_attempt === 1 &&
+      attempt === 1 && run.created_at === x.createdAt && run.head_sha === x.executorSha &&
+      run.status === 'completed' && run.conclusion === x.conclusion &&
+      run.actor?.login === x.actor.login && run.actor?.id === x.actor.id &&
+      run.repository?.full_name === 'aqua-lifestyle/aqua-deployment' &&
+      run.head_repository?.full_name === 'aqua-lifestyle/aqua-deployment' &&
+      production.id === Number(x.productionJobId) && production.run_id === run.id &&
+      production.run_attempt === attempt && production.status === 'completed' &&
+      production.conclusion === x.productionConclusion &&
+      production.steps?.filter(step => step.conclusion === 'failure').length === 1 &&
+      production.steps.filter(step => step.name ===
+        'Revalidate policy, provenance, providers and recovery before automatic deployment' &&
+        step.conclusion === 'failure').length === 1,
+    'BACKEND_MIGRATION_FAILURE_EXECUTION_CHANGED');
+    check(candidate.qualificationOnly === false && candidate.memberRelease === undefined &&
+      candidate.frontendRelease === undefined && candidate.backendSuccessor === s.backendSuccessor &&
+      candidate.combinedRelease === s.combinedRelease && candidate.sha === s.sha &&
+      candidate.repository === s.repository && candidate.releaseRunAttempt === 1 &&
+      candidate.releaseRunId !== x.id && candidate.executorSha !== x.executorSha &&
+      candidate.policySha256 === s.policySha256 &&
+      candidate.environment === r.scope.environment && candidate.profile === r.scope.profile &&
+      candidate.renderServiceId === r.scope.renderServiceId &&
+      candidate.vercelProjectId === r.scope.vercelProjectId &&
+      candidate.vercelTeamId === r.scope.vercelTeamId &&
+      candidate.executorRepository === 'aqua-lifestyle/aqua-deployment' &&
+      targets.repository === s.repository &&
+      targets.executor?.repository === candidate.executorRepository &&
+      targets.render.id === r.scope.renderServiceId &&
+      targets.vercel.id === r.scope.vercelProjectId &&
+      targets.vercel.teamId === r.scope.vercelTeamId,
+    'BACKEND_MIGRATION_FAILURE_CANDIDATE_OR_TARGET_CHANGED');
+    return x;
+  }
   if (String(run.id) === failedSuccessorRenderRunId) {
     const r = validateFailedSuccessorRenderRecord(), x = r.run, s = r.source;
     check(run.id === Number(x.id) && run.run_number === x.number && run.run_attempt === 1 && attempt === 1 &&
@@ -623,6 +826,22 @@ export function validateHistoricalContext(run, attempt, production, candidate, t
 }
 
 export function validateHistoricalArtifact(pin, descriptor, metadata) {
+  if (pin.id === backendMigrationFailureRunId) {
+    const r = validateBackendMigrationFailureRecord(), x = r.run, a = r.audit;
+    check(objectDigest(pin) === objectDigest(x) && descriptor.runId === x.id &&
+      descriptor.runAttempt === x.attempt && descriptor.sha === x.executorSha &&
+      descriptor.artifactId === a.artifactId &&
+      String(metadata?.id) === a.artifactId &&
+      metadata.name === `production-release-audit-${x.id}-1` &&
+      metadata.expired === false && metadata.digest === 'sha256:' + a.archiveSha256 &&
+      metadata.workflow_run?.id === Number(x.id) &&
+      metadata.workflow_run.head_sha === x.executorSha &&
+      metadata.workflow_run.head_branch === 'main' &&
+      metadata.workflow_run.repository_id === 1423239668 &&
+      metadata.workflow_run.head_repository_id === 1423239668,
+    'BACKEND_MIGRATION_FAILURE_ARTIFACT_CHANGED');
+    return;
+  }
   if (pin.id === failedSuccessorRenderRunId) {
     const r = validateFailedSuccessorRenderRecord(), x = r.run, a = r.audit;
     check(objectDigest(pin) === objectDigest(x) && descriptor.runId === x.id &&
@@ -758,7 +977,70 @@ export function validateFailedSuccessorRenderAudit(rows, descriptor, pin, target
     migrationAuthority: false, financialAuthority: false });
 }
 
+export function validateBackendMigrationFailureAudit(rows, descriptor, pin, targets, admissionProof,
+  r = validateBackendMigrationFailureRecord()) {
+  const x = r.run, s = r.source, a = r.audit, m = r.admission;
+  const identity = { version: 4, repository: s.repository, sha: s.sha, ciRunId: s.ciRunId,
+    ciRunAttempt: s.ciRunAttempt, releaseRunId: x.id, releaseRunAttempt: 1,
+    executorRepository: 'aqua-lifestyle/aqua-deployment', executorSha: x.executorSha,
+    policySha256: s.policySha256, environment: r.scope.environment, profile: r.scope.profile,
+    renderServiceId: r.scope.renderServiceId, vercelProjectId: r.scope.vercelProjectId,
+    vercelTeamId: r.scope.vercelTeamId, backendSuccessor: s.backendSuccessor,
+    combinedRelease: s.combinedRelease };
+  const approvedAdmission = { runId: x.id, artifactId: m.artifactId,
+    receiptSha256: m.receiptSha256, planSha256: m.planSha256,
+    authorizationId: m.authorizationId, evidenceSha256: m.evidenceSha256,
+    inventorySha256: m.inventorySha256 };
+  check(objectDigest(pin) === objectDigest(x) && descriptor.runId === x.id &&
+    descriptor.runAttempt === x.attempt && descriptor.sha === x.executorSha &&
+    descriptor.artifactId === a.artifactId && Array.isArray(rows) &&
+    rows.length === a.phases.length && objectDigest(rows) === a.rowsSha256 &&
+    rows.every((row, index) => row.phase === a.phases[index] &&
+      Object.entries(identity).every(([key, value]) => row[key] === value) &&
+      row.backendCompletion === undefined && row.vercelDeployId === undefined) &&
+    rows[0].authorizationId === m.authorizationId &&
+    rows[1].baselineRenderDeployId === a.baselineRenderDeployId &&
+    rows[1].baselineRenderSha === a.baselineRenderSha &&
+    rows[1].paymentAvailability === 'Available' &&
+    rows[3].schemaTransition === a.schemaTransition && rows[3].migrationFiles === 3 &&
+    rows[4].stagedSchemaTransition === 'none' &&
+    rows[4].payloadPinSha256 === a.initialPayloadPinSha256 &&
+    rows[4].payloadBytes === a.payloadBytes &&
+    rows[5].payloadPinSha256 === a.initialPayloadPinSha256 &&
+    rows[6].renderDeployId === undefined &&
+    rows[7].renderDeployId === a.liveRenderDeployId &&
+    rows[8].renderDeployId === a.liveRenderDeployId &&
+    rows[8].renderSha === a.liveRenderSha &&
+    rows[9].startCommand === a.startCommand &&
+    rows[9].renderDeployId === a.liveRenderDeployId &&
+    rows[10].jobId === a.jobId && rows[10].renderDeployId === a.liveRenderDeployId &&
+    rows[11].jobId === undefined && rows[11].renderDeployId === a.liveRenderDeployId &&
+    rows[11].code === x.terminalCode &&
+    targets.render.id === r.scope.renderServiceId &&
+    targets.vercel.id === r.scope.vercelProjectId &&
+    targets.vercel.teamId === r.scope.vercelTeamId &&
+    authenticatedBackendMigrationAdmissions.has(admissionProof) &&
+    objectDigest(admissionProof) === objectDigest(approvedAdmission),
+  'BACKEND_MIGRATION_FAILURE_EFFECT_UNVERIFIABLE');
+  return Object.freeze({ runId: x.id, runAttempt: x.attempt, executorSha: x.executorSha,
+    artifactId: a.artifactId, archiveSha256: a.archiveSha256, rowsSha256: a.rowsSha256,
+    originalConclusion: 'failure', terminalFailureCode: x.terminalCode, outcome: r.scope.outcome,
+    renderDeployId: a.liveRenderDeployId, sourceSha: a.liveRenderSha,
+    baselineRenderDeployId: a.baselineRenderDeployId,
+    baselineRenderSha: a.baselineRenderSha, jobId: a.jobId,
+    schemaJobSuccessEstablished: false, additiveRestartEstablished: false,
+    frontendDeploymentEstablished: false,
+    configurationTriggeredRestartAbsenceEstablished: true,
+    databaseWriteAbsenceEstablishedByHealth: false,
+    reconciliationSha256: backendCompletionRecordDigest,
+    successfulFullReleasePredecessor: false, automaticResumeAuthorized: false,
+    replayAuthority: false, deploymentAuthority: false, migrationAuthority: false,
+    financialAuthority: false });
+}
+
 export function validateHistoricalAudit(rows, descriptor, pin, targets, diagnosticProof) {
+  if (pin.id === backendMigrationFailureRunId)
+    return validateBackendMigrationFailureAudit(rows, descriptor, pin, targets, diagnosticProof);
   if (pin.id === failedSuccessorRenderRunId)
     return validateFailedSuccessorRenderAudit(rows, descriptor, pin, targets, diagnosticProof);
   if (pin.id === interruptedSuccessorRunId)
