@@ -9,8 +9,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { backendSuccessorMode, backendSuccessorPayloadKey, backendSuccessorPinKey,
-  combinedMode, deployBackendSuccessorRelease, validateBackendSuccessorIdentity,
-  validateBackendSuccessorReceipt, validateCombinedReceipt } from './backend-successor-release.mjs';
+  combinedMode, backendCompletionMode, deployBackendSuccessorRelease, validateBackendSuccessorIdentity,
+  validateBackendSuccessorReceipt, validateCombinedReceipt, validateBackendCompletionReceipt,
+  validateCombinedCompletionReceipt } from './backend-successor-release.mjs';
 import { freezeCandidate, validateDispatchInputs, verifyCandidate, createAuditWriter, releaseKey,
   standingPolicy, targets, clients, validateRender, validateVercel, validateHealth,
   validateBaselineReceipt, deploymentHistory, waitFor, deploy, evidencePlan } from './release-control.mjs';
@@ -21,6 +22,8 @@ import { sha256, objectDigest, verifyGitHubEvidence, createGitHubAdmission } fro
 import { validateFailedFrontendRecord } from './failed-frontend-release.mjs';
 import { schemaSource } from './commission-schema-first.mjs';
 import { canonicalDecisionDigest } from './d10-decision-digest.mjs';
+import { validateBackendMigrationFailureRecord, backendCompletionRecordDigest,
+  backendCompletionPlanProof } from './historical-release-reconciliation.mjs';
 
 const baselineSha = 'b8d86e5e60997483423b273d5f426c08b411f573';
 const executorSha = 'd'.repeat(40);
@@ -463,7 +466,7 @@ test('additive successor runs the candidate migrator once-off and restarts on th
     await f.execute();
     assert.equal(f.s.posts.length, 3, 'deploy, one-off job and deploy_only restart');
     assert.equal(f.s.posts[0].body.commitId, f.candidateSha);
-    assert.equal(f.s.posts[1].body.startCommand, 'dotnet migrator/AqualLifeStyle.Migrator.dll');
+    assert.equal(f.s.posts[1].body.startCommand, 'dotnet migrator/AqualLifeStyle.Migrator.dll -q');
     assert.deepEqual(f.s.posts[2].body, { deployMode: 'deploy_only' });
     assert.equal(f.s.puts.length, 4, 'two staging rounds overwrite payload and pin');
     const firstPayload = JSON.parse(Buffer.from(f.s.puts[0].value, 'base64').toString('utf8'));
@@ -784,13 +787,15 @@ test('render client restricts env access to the settings and successor allowlist
 // authenticated audit receipt spanning both providers.
 function combinedFixture({ files = [
     { filename: `${targets.vercel.rootDirectory}/app/page.tsx`, status: 'modified' },
-    { filename: backendModifiedPath, status: 'modified' }], failedVercel = false, repo = null } = {}) {
+    { filename: backendModifiedPath, status: 'modified' }], failedVercel = false, repo = null,
+  completion = false } = {}) {
   const s = { vars: Object.fromEntries(Object.entries(normalRuntimeSettings).map(([key, allowed]) =>
       [key, allowed[0]])), posts: [], puts: [], audit: [], uploads: 0, vercelPosts: [],
     deployed: null, failedVercel, alias: 'dpl_Legacy', jobReads: 0, deployReads: {}, readinessCalls: 0 };
   const candidateSha = repo?.sha ?? 'a'.repeat(40);
   const q = freezeCandidate({ repository: targets.repository, sha: candidateSha,
-    ciRunId: '43597833118', ciRunAttempt: 1 }, runnerEnv(), standingPolicy, false, combinedMode);
+    ciRunId: '43597833118', ciRunAttempt: 1 }, runnerEnv(), standingPolicy, false,
+  completion ? backendCompletionMode : combinedMode);
   assert.equal(q.backendSuccessor, backendSuccessorMode);
   assert.equal(q.combinedRelease, combinedMode);
   const integrityName = `backend-successor-integrity-${q.sha}-${q.ciRunId}-${q.ciRunAttempt}`;
@@ -951,9 +956,151 @@ function combinedFixture({ files = [
   const report = createAuditWriter(q, row => s.audit.push(row));
   report({ phase: 'evidence-selected', authorizationId: 'a'.repeat(64), evidenceSha256: 'b'.repeat(64),
     inventorySha256: 'c'.repeat(64), evidenceArtifactId: '123' });
-  return { s, q, api, options, candidateSha, repo, execute: () =>
-    deployBackendSuccessorRelease(api, q, report, options) };
+  return { s, q, api, options, candidateSha, repo, decisionBytes, integrity, artifact, archive, files,
+    execute: () => deployBackendSuccessorRelease(api, q, report, options) };
 }
+
+function completionSuccessFixture() {
+  const migration56 = `${migrationsDir}/20261115113914_AddAQGreenIndependentRootRequests.cs`;
+  const repo = sourceRepository(additiveMigrationSource.replaceAll('MembershipNote',
+    'AddAQGreenIndependentRootRequests'), migration56);
+  const f = combinedFixture({ repo, completion: true, files: [
+    { filename: `${targets.vercel.rootDirectory}/app/page.tsx`, status: 'modified' },
+    { filename: migration56, status: 'added' },
+    { filename: repo.designerPath.replace(`${repo.dir}/`, ''), status: 'added' },
+    { filename: snapshotPath, status: 'modified' },
+    { filename: backendModifiedPath, status: 'modified' }
+  ] });
+  const decision = { contractVersion: 'AQGreenD10CutoverV2', decisionId: 'D10-COMPLETION-TEST',
+    requiredSchemaDigest: '1'.repeat(64), requiredAssemblyDigest: '2'.repeat(64),
+    requiredRuntimeAssemblyDigest: '3'.repeat(64), requiredDatabaseIdentityDigest: '4'.repeat(64),
+    requiredConfigurationDigest: '6'.repeat(64) };
+  const decisionBytes = Buffer.from(JSON.stringify(decision), 'utf8');
+  const decisionPin = sha256(decisionBytes);
+  f.s.vars.App__AQGreenV2__Commissioning__DecisionPath =
+    'environment:App:AQGreenV2:Commissioning:DecisionJsonBase64';
+  f.s.vars.App__AQGreenV2__Commissioning__DecisionJsonBase64 = decisionBytes.toString('base64');
+  f.s.vars.App__AQGreenV2__Commissioning__DecisionSha256 = decisionPin;
+  const liveId = 'dep-completionlive', baselineId = 'dep-completionbaseline';
+  f.s.deploys = [{ id: liveId, status: 'live', commit: { id: f.q.sha } },
+    { id: baselineId, status: 'deactivated', commit: { id: baselineSha } }];
+  const providerConfiguration = Object.fromEntries(Object.entries(normalRuntimeSettings)
+    .map(([key, allowed]) => [key, allowed[0]]));
+  const providerConfigurationSha256 = sha256(Buffer.from(JSON.stringify(providerConfiguration), 'utf8'));
+  const migrationFiles = f.files.filter(file => file.filename.startsWith(`${migrationsDir}/`)).length;
+  const backendFiles = f.files.filter(file =>
+    file.filename.startsWith('AqualLifeStyle/9.4.2/aspnet-core/')).length;
+  const frontendFiles = f.files.filter(file =>
+    file.filename.startsWith(`${targets.vercel.rootDirectory}/`)).length;
+  const sourceDeltaSha256 = sha256(Buffer.from(JSON.stringify({
+    base: baselineSha, head: f.q.sha,
+    files: f.files.map(file => ({ filename: file.filename, status: file.status,
+      additions: file.additions, deletions: file.deletions, changes: file.changes })) })));
+  const initialPayload = { contractVersion: 'AQGreenD10BackendSuccessorV1',
+    predecessorDecisionSha256: canonicalDecisionDigest(decisionBytes),
+    predecessorSchemaSha256: decision.requiredSchemaDigest,
+    predecessorAssemblySha256: decision.requiredAssemblyDigest,
+    predecessorRuntimeAssemblySha256: decision.requiredRuntimeAssemblyDigest,
+    predecessorDatabaseIdentitySha256: decision.requiredDatabaseIdentityDigest,
+    predecessorBuildId: baselineSha, successorRevisionSha256: f.q.sha,
+    successorSchemaSha256: decision.requiredSchemaDigest,
+    successorAssemblySha256: f.integrity.successorAssemblySha256,
+    successorApplicationSha256: f.integrity.successorApplicationSha256,
+    successorCoreSha256: f.integrity.successorCoreSha256, schemaTransition: 'none',
+    releaseRunId: 999, releaseRunAttempt: 1,
+    ciRunId: Number(f.q.ciRunId), ciRunAttempt: f.q.ciRunAttempt,
+    executorSha256: sha256(Buffer.from(f.q.executorSha, 'utf8')) };
+  const initialBytes = Buffer.from(JSON.stringify(initialPayload), 'utf8');
+  const initialPin = sha256(initialBytes);
+  f.s.vars[backendSuccessorPayloadKey] = initialBytes.toString('base64');
+  f.s.vars[backendSuccessorPinKey] = initialPin;
+  const jobId = 'job-' + 'f'.repeat(20);
+  const record = {
+    contract: 'aqua.exact-failed-backend-successor-migration-reconciliation', version: 1,
+    run: { id: '999', number: 90, attempt: 1, executorSha: f.q.executorSha, conclusion: 'failure',
+      terminalCode: 'PROVIDER_DEPLOYMENT_FAILED_INSPECT_RELEASE_REPORT' },
+    source: { repository: f.q.repository, sha: f.q.sha, ciRunId: f.q.ciRunId,
+      ciRunAttempt: f.q.ciRunAttempt, policySha256: f.q.policySha256,
+      backendSuccessor: backendSuccessorMode, combinedRelease: combinedMode },
+    admission: { artifactId: '1', archiveSha256: 'a'.repeat(64), receiptSha256: 'b'.repeat(64),
+      planSha256: 'c'.repeat(64) },
+    audit: { artifactId: '2', archiveSha256: 'd'.repeat(64), rowsSha256: 'e'.repeat(64),
+      phases: [], initialPayloadPinSha256: initialPin, payloadBytes: initialBytes.length,
+      schemaTransition: 'additive', stagedSchemaTransition: 'none',
+      baselineRenderDeployId: baselineId, baselineRenderSha: baselineSha,
+      liveRenderDeployId: liveId, liveRenderSha: f.q.sha, jobId,
+      startCommand: 'dotnet migrator/AqualLifeStyle.Migrator.dll',
+      migrationFiles, backendFiles, frontendFiles, sourceDeltaSha256,
+      integrityArtifactId: String(f.artifact.id), integrityArtifactSha256: sha256(f.archive),
+      successorSchemaSha256: f.integrity.successorSchemaSha256,
+      successorAssemblySha256: f.integrity.successorAssemblySha256,
+      successorApplicationSha256: f.integrity.successorApplicationSha256,
+      successorCoreSha256: f.integrity.successorCoreSha256,
+      decisionSha256: decisionPin, requiredConfigurationDigest: decision.requiredConfigurationDigest,
+      requiredSchemaDigest: decision.requiredSchemaDigest,
+      requiredAssemblyDigest: decision.requiredAssemblyDigest,
+      requiredRuntimeAssemblyDigest: decision.requiredRuntimeAssemblyDigest,
+      requiredDatabaseIdentityDigest: decision.requiredDatabaseIdentityDigest,
+      predecessorBuildId: baselineSha, providerConfigurationSha256,
+      paymentAvailability: 'Available' },
+    scope: { outcome: 'ACKNOWLEDGED_MIGRATION_JOB_NOT_CONFIRMED_SUCCESS_WITH_LIVE_PRE_SCHEMA_BACKEND' }
+  };
+  f.options.completionRecord = record;
+  f.options.evidencePlan.backendCompletion = backendCompletionPlanProof(record);
+  const servicePath = `/services/${targets.render.id}`;
+  const events = [];
+  const render = f.api.render;
+  f.api.render = async (route, body) => {
+    if (body !== undefined) events.push({ route, body });
+    if (route === `${servicePath}/jobs/${jobId}` && body === undefined)
+      return { id: jobId, status: 'failed' };
+    return render(route, body);
+  };
+  return { f, record, events, descriptor: { runId: f.q.releaseRunId, runAttempt: 1,
+    sha: f.q.executorSha, backendCompletion: backendCompletionRecordDigest } };
+}
+
+test('completion executor runs the job-before-staging sequence and authenticates the final receipt', async () => {
+  const { f, record, events, descriptor } = completionSuccessFixture();
+  try {
+    await f.execute();
+    assert.equal(f.s.readinessCalls, 0);
+    assert.deepEqual(events.map(event => event.body.startCommand ? 'job' :
+      event.body.deployMode ? 'restart' : 'stage'), ['job', 'stage', 'stage', 'restart']);
+    assert.deepEqual(f.s.posts.map(row => row.body), [
+      { startCommand: 'dotnet migrator/AqualLifeStyle.Migrator.dll -q' },
+      { deployMode: 'deploy_only' }
+    ]);
+    assert.equal(f.s.puts.length, 2);
+    assert.deepEqual(f.s.audit.map(row => row.phase), [
+      'evidence-selected', 'backend-baseline-selected', 'backend-decision-verified',
+      'backend-classified', 'backend-completion-preconditions-verified',
+      'backend-schema-job-requesting', 'backend-schema-job-created', 'backend-schema-job-succeeded',
+      'backend-successor-restart-staging', 'backend-successor-restart-staged',
+      'backend-restart-requesting', 'backend-restart-requested', 'backend-restart-ready',
+      'backend-deployed', 'frontend-baseline-selected', 'frontend-classified',
+      'frontend-vercel-files-requesting', 'frontend-vercel-files-uploaded',
+      'frontend-vercel-requesting', 'frontend-vercel-requested', 'frontend-deployed'
+    ]);
+    assert.equal(f.s.audit[5].startCommand, 'dotnet migrator/AqualLifeStyle.Migrator.dll -q');
+    assert.equal(f.s.audit[7].jobId, 'job-a'.padEnd(24, '0'));
+    assert.equal(f.s.audit[8].stagedSchemaTransition, 'additive');
+    assert.equal(f.s.audit[13].renderDeployId, 'dep-new');
+    const receipt = validateCombinedCompletionReceipt(f.s.audit, descriptor, targets, record);
+    assert.equal(receipt.sha, f.q.sha);
+    assert.equal(receipt.renderDeployId, 'dep-new');
+    assert.equal(receipt.vercelDeployId, 'dpl_New');
+    assert.equal(receipt.backendCompletion, backendCompletionRecordDigest);
+    assert.equal(validateCombinedReceipt(f.s.audit, descriptor, targets, record).vercelDeployId, 'dpl_New');
+    for (const mutate of [rows => rows.splice(20, 1),
+      rows => rows[7].jobId = 'job-other',
+      rows => rows[8].payloadPinSha256 = rows[4].initialPayloadPinSha256,
+      rows => rows[13].renderSha = '0'.repeat(40)]) {
+      const rows = structuredClone(f.s.audit); mutate(rows);
+      assert.throws(() => validateCombinedCompletionReceipt(rows, descriptor, targets, record));
+    }
+  } finally { f.repo.close(); }
+});
 
 test('combined release verifies the backend on Render then continues with the frontend phase', async () => {
   const f = combinedFixture();
@@ -1048,7 +1195,7 @@ test('combined release crosses additive migration 56, restart, backend verificat
     assert.equal(f.s.readinessCalls, 0);
     assert.equal(f.s.posts.length, 3, 'candidate deploy, migration job, additive restart');
     assert.equal(f.s.posts[0].body.commitId, f.candidateSha);
-    assert.equal(f.s.posts[1].body.startCommand, 'dotnet migrator/AqualLifeStyle.Migrator.dll');
+    assert.equal(f.s.posts[1].body.startCommand, 'dotnet migrator/AqualLifeStyle.Migrator.dll -q');
     assert.deepEqual(f.s.posts[2].body, { deployMode: 'deploy_only' });
     assert.equal(f.s.puts.length, 4, 'initial and additive successor payloads are pinned');
     assert.equal(f.s.audit[3].schemaTransition, 'additive');
@@ -1285,4 +1432,206 @@ test('combined release failure in the frontend phase leaves the released backend
   assert.equal(f.s.audit.some(row => row.phase === 'frontend-deployed'), false);
   const descriptor = { runId: f.q.releaseRunId, runAttempt: 1, sha: f.q.executorSha };
   assert.throws(() => validateCombinedReceipt(f.s.audit, descriptor, targets));
+});
+
+function completionReceiptFixture() {
+  const r = validateBackendMigrationFailureRecord();
+  const q = { runId: '999', runAttempt: 1, sha: r.source.sha, executorSha: 'f'.repeat(40),
+    ciRunId: r.source.ciRunId, ciRunAttempt: r.source.ciRunAttempt };
+  const health = buildId => ({ status: 'Healthy', buildId, environment: 'Production',
+    databaseStatus: 'Healthy', redisStatus: 'Healthy',
+    dataProtectionKeyStoreStatus: 'Healthy', paymentAvailability: 'Available' });
+  const identity = { version: 4, repository: r.source.repository, sha: q.sha,
+    ciRunId: q.ciRunId, ciRunAttempt: q.ciRunAttempt, releaseRunId: q.runId,
+    releaseRunAttempt: 1, policySha256: r.source.policySha256,
+    environment: r.scope.environment, profile: r.scope.profile,
+    renderServiceId: r.scope.renderServiceId, vercelProjectId: r.scope.vercelProjectId,
+    vercelTeamId: r.scope.vercelTeamId,
+    executorRepository: 'aqua-lifestyle/aqua-deployment', executorSha: q.executorSha,
+    backendSuccessor: backendSuccessorMode, combinedRelease: combinedMode,
+    backendCompletion: backendCompletionRecordDigest };
+  const row = (phase, extra = {}) => ({ phase, ...identity, ...extra });
+  const jobId = 'job-' + 'a'.repeat(20);
+  const additivePin = '9'.repeat(64);
+  const rows = [
+    row('evidence-selected', { authorizationId: 'a'.repeat(64),
+      evidenceSha256: 'b'.repeat(64), inventorySha256: 'c'.repeat(64), evidenceArtifactId: '123' }),
+    row('backend-baseline-selected', {
+      baselineRenderDeployId: r.audit.baselineRenderDeployId,
+      baselineRenderSha: r.audit.baselineRenderSha,
+      servingRenderDeployId: r.audit.liveRenderDeployId, servingRenderSha: q.sha,
+      failedRunId: r.run.id, failedRunAttempt: 1,
+      baselineRenderProvenance: 'FAILED_MIGRATION_RECONCILIATION',
+      paymentAvailability: 'Available',
+      providerConfigurationSha256: r.audit.providerConfigurationSha256,
+      servingHealthObservation: health(q.sha) }),
+    row('backend-decision-verified', {
+      decisionContract: 'AQGreenD10CutoverV2', decisionSha256: r.audit.decisionSha256,
+      decisionPin: r.audit.decisionSha256,
+      requiredConfigurationDigest: r.audit.requiredConfigurationDigest,
+      requiredSchemaDigest: r.audit.requiredSchemaDigest,
+      requiredAssemblyDigest: r.audit.requiredAssemblyDigest,
+      requiredRuntimeAssemblyDigest: r.audit.requiredRuntimeAssemblyDigest,
+      requiredDatabaseIdentityDigest: r.audit.requiredDatabaseIdentityDigest,
+      predecessorBuildId: r.audit.predecessorBuildId,
+      baselineRenderSha: r.audit.baselineRenderSha, paymentAvailability: 'Available' }),
+    row('backend-classified', {
+      schemaTransition: 'additive', migrationFiles: r.audit.migrationFiles,
+      backendFiles: r.audit.backendFiles, frontendFiles: r.audit.frontendFiles,
+      sourceDeltaSha256: r.audit.sourceDeltaSha256,
+      integrityArtifactId: r.audit.integrityArtifactId,
+      integrityArtifactSha256: r.audit.integrityArtifactSha256,
+      contract: 'aqua.backend-successor-integrity-v1',
+      successorSchemaSha256: r.audit.successorSchemaSha256,
+      successorAssemblySha256: r.audit.successorAssemblySha256,
+      successorApplicationSha256: r.audit.successorApplicationSha256,
+      successorCoreSha256: r.audit.successorCoreSha256 }),
+    row('backend-completion-preconditions-verified', {
+      failedRunId: r.run.id, failedRunAttempt: 1, failedJobId: r.audit.jobId,
+      failedJobStatus: 'failed', initialPayloadPinSha256: r.audit.initialPayloadPinSha256,
+      liveRenderDeployId: r.audit.liveRenderDeployId, liveRenderSha: q.sha,
+      baselineRenderDeployId: r.audit.baselineRenderDeployId,
+      baselineRenderSha: r.audit.baselineRenderSha, stagedSchemaTransition: 'none',
+      schemaJobSuccessEstablished: false, restartEstablished: false,
+      providerHistorySha256: '1'.repeat(64) }),
+    row('backend-schema-job-requesting', {
+      startCommand: 'dotnet migrator/AqualLifeStyle.Migrator.dll -q' }),
+    row('backend-schema-job-created', { jobId }),
+    row('backend-schema-job-succeeded', { jobId }),
+    row('backend-successor-restart-staging', { payloadPinSha256: additivePin,
+      stagedSchemaTransition: 'additive' }),
+    row('backend-successor-restart-staged', { payloadPinSha256: additivePin }),
+    row('backend-restart-requesting'),
+    row('backend-restart-requested', { renderDeployId: 'dep-restart' }),
+    row('backend-restart-ready', { renderDeployId: 'dep-restart', renderSha: q.sha }),
+    row('backend-deployed', { renderDeployId: 'dep-restart', renderSha: q.sha,
+      paymentAvailability: 'Available', payloadPinSha256: additivePin,
+      releaseIdentity: 'e'.repeat(64), failedRunId: r.run.id, failedRunAttempt: 1,
+      failedJobId: r.audit.jobId, successorEvidence: {
+        healthObservation: health(q.sha),
+        providerConfigurationSha256: r.audit.providerConfigurationSha256,
+        commissioningDecisionSha256: r.audit.decisionSha256, qualifiedBuildSha: q.sha,
+        integrityArtifactSha256: r.audit.integrityArtifactSha256,
+        successorAssemblyArtifactSha256: r.audit.successorAssemblySha256 } })
+  ];
+  return { rows, q, r, descriptor: { runId: q.runId, runAttempt: 1,
+    sha: q.executorSha, backendCompletion: backendCompletionRecordDigest }, identity, health };
+}
+
+test('exact completion receipt authenticates the 14-row backend sequence and rejects semantic tampering', () => {
+  const f = completionReceiptFixture();
+  const receipt = validateBackendCompletionReceipt(f.rows, f.descriptor, targets);
+  assert.equal(receipt.sha, f.q.sha);
+  assert.equal(receipt.backendCompletion, backendCompletionRecordDigest);
+  assert.equal(receipt.renderDeployId, 'dep-restart');
+  assert.equal(receipt.schemaTransition, 'additive');
+  assert.equal(receipt.payloadPinSha256, '9'.repeat(64));
+  for (const mutate of [rows => rows.splice(13, 1),
+    rows => rows[0].backendCompletion = '0'.repeat(64),
+    rows => rows[3].sourceDeltaSha256 = '0'.repeat(64),
+    rows => rows[4].failedJobStatus = 'succeeded',
+    rows => rows[4].initialPayloadPinSha256 = '0'.repeat(64),
+    rows => rows[8].payloadPinSha256 = rows[4].initialPayloadPinSha256,
+    rows => rows[5].startCommand = 'dotnet migrator/AqualLifeStyle.Migrator.dll',
+    rows => rows[6].jobId = 'job-short',
+    rows => rows[12].renderSha = '0'.repeat(40),
+    rows => rows[13].successorEvidence.healthObservation.buildId = '0'.repeat(40),
+    rows => rows[13].failedJobId = 'job-different']) {
+    const rows = structuredClone(f.rows); mutate(rows);
+    assert.throws(() => validateBackendCompletionReceipt(rows, f.descriptor, targets));
+  }
+  assert.throws(() => validateBackendCompletionReceipt(f.rows,
+    { ...f.descriptor, backendCompletion: undefined }, targets));
+});
+
+test('combined completion receipt binds the backend completion to the seven-row frontend suffix', () => {
+  const f = completionReceiptFixture();
+  const frontend = [
+    { phase: 'frontend-baseline-selected', ...f.identity,
+      baselineVercelDeployId: 'dpl_Old',
+      baselineRenderDeployId: f.r.audit.baselineRenderDeployId,
+      baselineRenderSha: f.r.audit.baselineRenderSha, servingRenderSha: f.q.sha,
+      servingRenderDeployId: 'dep-restart', paymentAvailability: 'Available',
+      baselineVercelSourceProvenance: 'GIT_SOURCE' },
+    { phase: 'frontend-classified', ...f.identity, frontendFiles: f.r.audit.frontendFiles,
+      backendFiles: f.r.audit.backendFiles, sourceDeltaSha256: f.r.audit.sourceDeltaSha256 },
+    { phase: 'frontend-vercel-files-requesting', ...f.identity },
+    { phase: 'frontend-vercel-files-uploaded', ...f.identity },
+    { phase: 'frontend-vercel-requesting', ...f.identity },
+    { phase: 'frontend-vercel-requested', ...f.identity, vercelDeployId: 'dpl_New' },
+    { phase: 'frontend-deployed', ...f.identity, vercelDeployId: 'dpl_New',
+      renderSha: f.q.sha, webSha256: f.q.sha, webStatus: 200, vercelSha: f.q.sha,
+      paymentAvailability: 'Available' }
+  ];
+  const rows = [...f.rows, ...frontend];
+  const receipt = validateCombinedCompletionReceipt(rows, f.descriptor, targets);
+  assert.equal(receipt.vercelDeployId, 'dpl_New');
+  assert.equal(receipt.renderDeployId, 'dep-restart');
+  assert.equal(receipt.backendCompletion, backendCompletionRecordDigest);
+  assert.equal(validateCombinedReceipt(rows, f.descriptor, targets).vercelDeployId, 'dpl_New');
+  for (const mutate of [rows => rows.splice(20, 1),
+    rows => rows[13].renderDeployId = 'dep-other',
+    rows => rows[14].baselineRenderSha = '0'.repeat(40),
+    rows => rows[15].frontendFiles = 0,
+    rows => rows[20].vercelSha = '0'.repeat(40)]) {
+    const copy = structuredClone(rows); mutate(copy);
+    assert.throws(() => validateCombinedCompletionReceipt(copy, f.descriptor, targets));
+  }
+  assert.throws(() => validateCombinedReceipt(rows,
+    { ...f.descriptor, backendCompletion: undefined }, targets));
+});
+
+test('completion mode is a distinct frozen purpose and requires its exact evidence plan', async () => {
+  const qualified = { repository: targets.repository, sha: 'a'.repeat(40),
+    ciRunId: '43597833117', ciRunAttempt: 1 };
+  const q = freezeCandidate(qualified, runnerEnv(), standingPolicy, false, backendCompletionMode);
+  assert.equal(q.backendCompletion, backendCompletionRecordDigest);
+  assert.equal(q.backendSuccessor, backendSuccessorMode);
+  assert.equal(q.combinedRelease, combinedMode);
+  assert.notEqual(releaseKey({ ...q, backendCompletion: undefined }), releaseKey(q));
+  const emitted = [];
+  createAuditWriter(q, row => emitted.push(row))({ phase: 'evidence-selected' });
+  assert.equal(emitted[0].backendCompletion, backendCompletionRecordDigest);
+  assert.equal(validateDispatchInputs({ ci_run_id: qualified.ciRunId, ci_run_attempt: '1',
+    sha: qualified.sha, release_mode: backendCompletionMode }).releaseMode, backendCompletionMode);
+  assert.throws(() => validateBackendSuccessorIdentity({ ...q,
+    backendCompletion: '0'.repeat(64) }), /BACKEND_RELEASE_IDENTITY_MISMATCH/);
+  await assert.rejects(deployBackendSuccessorRelease({}, q, () => {}, {
+    evidencePlan: { policySha256: q.policySha256, backendReleases: [],
+      combinedReleases: [], frontendReleases: [] } }), /BACKEND_COMPLETION_NO_RESUME/);
+  await assert.rejects(deployBackendSuccessorRelease({}, q, () => {}, {
+    evidencePlan: { policySha256: q.policySha256, backendCompletion: {
+      ...completionReceiptFixture().descriptor }, backendReleases: [],
+      combinedReleases: [], frontendReleases: [] } }), /BACKEND_COMPLETION_NO_RESUME/);
+});
+
+test('completion executor fails closed when the live provider configuration differs from the failed record', async () => {
+  const record = validateBackendMigrationFailureRecord();
+  const q = { repository: targets.repository, sha: record.audit.liveRenderSha,
+    ciRunId: record.source.ciRunId, ciRunAttempt: record.source.ciRunAttempt,
+    executorSha: record.run.executorSha, releaseRunId: record.run.id, releaseRunAttempt: 1,
+    backendCompletion: backendCompletionRecordDigest, backendSuccessor: backendSuccessorMode,
+    combinedRelease: combinedMode, qualificationOnly: false };
+  const servicePath = `/services/${targets.render.id}`;
+  const service = { id: targets.render.id, name: targets.render.name,
+    repo: `https://github.com/${targets.repository}`, branch: 'main', suspended: 'not_suspended',
+    autoDeploy: 'no', autoDeployTrigger: 'off', rootDir: '',
+    serviceDetails: { runtime: 'docker', plan: 'starter', buildPlan: 'starter', numInstances: 1,
+      region: 'frankfurt', maintenanceMode: { enabled: false }, healthCheckPath: '/api/health',
+      envSpecificDetails: { dockerContext: '.', dockerfilePath: './docker/api/Dockerfile',
+        preDeployCommand: '', dockerCommand: '' } } };
+  const api = { render: async route => {
+    if (route === servicePath) return structuredClone(service);
+    assert.ok(route.startsWith(`${servicePath}/env-vars/`));
+    const key = route.slice(`${servicePath}/env-vars/`.length);
+    if (key === 'Deployment__BuildId') return { key, value: 'c'.repeat(40) };
+    const allowed = normalRuntimeSettings[key];
+    assert.ok(allowed);
+    return { key, value: allowed[0] };
+  } };
+  await assert.rejects(deployBackendSuccessorRelease(api, q, () => {}, {
+    targets, guard: async () => {}, validateRender, validateHealth, deploymentHistory, waitFor,
+    now, env: {}, evidencePlan: { backendCompletion: backendCompletionPlanProof(record),
+      backendReleases: [], combinedReleases: [], frontendReleases: [] } }),
+  /BACKEND_COMPLETION_CONFIGURATION_CHANGED/);
 });

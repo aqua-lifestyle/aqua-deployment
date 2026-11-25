@@ -11,7 +11,7 @@ import { runtimeSettings, cleanStartRuntimeSettings, protectedReadiness, validat
 import { frontendReleaseMode, frontendReleaseRecordDigest, frontendSuccessorCandidateSha,
   validateFrontendSuccessorIdentity } from './aqgreen-frontend-source-successor.mjs';
 import { FrontendReleaseDenied, deployFrontendRelease, validateFrontendReceipt } from './frontend-release.mjs';
-import { backendSuccessorMode, combinedMode, backendSuccessorPayloadKey, backendSuccessorPinKey,
+import { backendSuccessorMode, combinedMode, backendCompletionMode, backendSuccessorPayloadKey, backendSuccessorPinKey,
   backendSuccessorWriteKeys, backendSuccessorReadKeys, BackendSuccessorReleaseDenied,
   deployBackendSuccessorRelease, validateBackendSuccessorIdentity,
   validateBackendSuccessorReceipt, validateCombinedReceipt } from './backend-successor-release.mjs';
@@ -29,7 +29,9 @@ import { HistoricalReconciliationDenied, isReconciledHistoricalRun, validateHist
   validateHistoricalArtifact, validateHistoricalAudit, selectTargetFailure,
   interruptedSuccessorRunId, validateInterruptedSuccessorRecord,
   authenticateInterruptedSuccessorDiagnostic, failedSuccessorRenderRunId,
-  authenticateFailedSuccessorAdmission } from './historical-release-reconciliation.mjs';
+  authenticateFailedSuccessorAdmission, backendMigrationFailureRunId,
+  backendCompletionRecordDigest, backendCompletionPlanProof,
+  authenticateBackendMigrationAdmission } from './historical-release-reconciliation.mjs';
 import { partialReleaseRunId, reconcilePartialRelease, partialRenderReuse,
   validatePartialRenderOrigin } from './partial-release-reconciliation.mjs';
 import { readinessCandidateSha, readinessStartingBackend, validateReadinessStartingBackend,
@@ -201,7 +203,8 @@ export function validateDispatchInputs(inputs) {
   const mode = Object.hasOwn(inputs, 'qualification_only') ? inputs.qualification_only : false;
   requireThat([true, false, 'true', 'false'].includes(mode), 'EXECUTOR_INPUT_INVALID');
   const releaseMode = Object.hasOwn(inputs, 'release_mode') ? inputs.release_mode : 'full';
-  requireThat(['full', memberPolicy.mode, frontendReleaseMode, backendSuccessorMode, combinedMode]
+  requireThat(['full', memberPolicy.mode, frontendReleaseMode, backendSuccessorMode, combinedMode,
+      backendCompletionMode]
       .includes(releaseMode) &&
     (releaseMode !== memberPolicy.mode || inputs.sha === memberPolicy.frontendSha),
   'EXECUTOR_INPUT_INVALID');
@@ -283,7 +286,8 @@ export async function loadProspectiveRecovery(api, inputs, qualified, releaseRun
 export function freezeCandidate(qualified, env, policy = standingPolicy, qualificationOnly = false,
   releaseMode = 'full', prospectiveMode = 'none') {
   requireThat(typeof qualificationOnly === 'boolean', 'EXECUTOR_INPUT_INVALID');
-  requireThat(['full', memberPolicy.mode, frontendReleaseMode, backendSuccessorMode, combinedMode]
+  requireThat(['full', memberPolicy.mode, frontendReleaseMode, backendSuccessorMode, combinedMode,
+      backendCompletionMode]
     .includes(releaseMode), 'EXECUTOR_INPUT_INVALID');
   requireThat(['none', 'capture-baseline', 'authorize'].includes(prospectiveMode) &&
     (prospectiveMode === 'none' || qualified.sha === prospectiveRecovery.targetSha && releaseMode === 'full'),
@@ -305,6 +309,8 @@ export function freezeCandidate(qualified, env, policy = standingPolicy, qualifi
     ...(releaseMode === backendSuccessorMode ? { backendSuccessor: backendSuccessorMode } : {}),
     ...(releaseMode === combinedMode ?
       { backendSuccessor: backendSuccessorMode, combinedRelease: combinedMode } : {}),
+    ...(releaseMode === backendCompletionMode ? { backendSuccessor: backendSuccessorMode,
+      combinedRelease: combinedMode, backendCompletion: backendCompletionRecordDigest } : {}),
     ...(external ? { executorRepository: execution.repository, executorSha: env.GITHUB_SHA } : {}), releaseRunId: env.GITHUB_RUN_ID,
     releaseRunAttempt: Number(env.GITHUB_RUN_ATTEMPT), policySha256: policyDigest(policy), ...targetIdentity };
   validateReleaseIdentity(candidate);
@@ -327,6 +333,10 @@ function validateReleaseIdentity(identity) {
       identity.backendSuccessor === backendSuccessorMode &&
       identity.frontendRelease === undefined && identity.memberRelease === undefined,
     'RELEASE_IDENTITY_UNVERIFIABLE');
+  if (identity.backendCompletion !== undefined)
+    requireThat(identity.backendCompletion === backendCompletionRecordDigest &&
+      identity.combinedRelease === combinedMode,
+    'RELEASE_IDENTITY_UNVERIFIABLE');
 }
 
 export function releaseKey(identity) {
@@ -335,7 +345,8 @@ export function releaseKey(identity) {
     [...releaseIdentityFields, ...(identity.memberRelease !== undefined ? ['memberRelease'] : []),
       ...(identity.frontendRelease !== undefined ? ['frontendRelease'] : []),
       ...(identity.backendSuccessor !== undefined ? ['backendSuccessor'] : []),
-      ...(identity.combinedRelease !== undefined ? ['combinedRelease'] : [])]
+      ...(identity.combinedRelease !== undefined ? ['combinedRelease'] : []),
+      ...(identity.backendCompletion !== undefined ? ['backendCompletion'] : [])]
       .map(key => [key, identity[key]]))).digest('hex');
 }
 
@@ -346,7 +357,8 @@ export function verifyCandidate(candidate, qualified, archive, trustedArchive) {
     candidate.memberRelease === qualified.memberRelease &&
     candidate.frontendRelease === qualified.frontendRelease &&
     candidate.backendSuccessor === qualified.backendSuccessor &&
-    candidate.combinedRelease === qualified.combinedRelease, 'CANDIDATE_PURPOSE_MISMATCH');
+    candidate.combinedRelease === qualified.combinedRelease &&
+    candidate.backendCompletion === qualified.backendCompletion, 'CANDIDATE_PURPOSE_MISMATCH');
   for (const key of releaseIdentityFields)
     requireThat(candidate[key] === qualified[key], 'CANDIDATE_PROVENANCE_MISMATCH');
   requireThat(candidate.sourceSha256 === createHash('sha256').update(archive).digest('hex'),
@@ -819,7 +831,9 @@ export function createAuditWriter(identity, emit) {
       ...(identity.memberRelease !== undefined ? { memberRelease: identity.memberRelease } : {}),
       ...(identity.frontendRelease !== undefined ? { frontendRelease: identity.frontendRelease } : {}),
       ...(identity.backendSuccessor !== undefined ? { backendSuccessor: identity.backendSuccessor } : {}),
-      ...(identity.combinedRelease !== undefined ? { combinedRelease: identity.combinedRelease } : {}), ...known });
+      ...(identity.combinedRelease !== undefined ? { combinedRelease: identity.combinedRelease } : {}),
+      ...(identity.backendCompletion !== undefined ? { backendCompletion: identity.backendCompletion } : {}),
+      ...known });
   };
 }
 
@@ -1012,7 +1026,8 @@ export async function evidencePlan(api, candidate, policy) {
       continue;
     }
     if (rows[0]?.combinedRelease !== undefined) {
-      const receipt = validateCombinedReceipt(rows, descriptor, targets);
+      const receipt = validateCombinedReceipt(rows, rows[0]?.backendCompletion !== undefined ?
+        { ...descriptor, backendCompletion: rows[0].backendCompletion } : descriptor, targets);
       requireThat(receipt.sha !== candidate.sha, 'SOURCE_ALREADY_VERIFIED');
       combinedReleases.push(receipt);
       continue;
@@ -1117,6 +1132,11 @@ export async function evidencePlan(api, candidate, policy) {
             policySha256: candidate.policySha256 }, policy);
           diagnosticProof = await authenticateFailedSuccessorAdmission(api);
         }
+        if (String(run.id) === backendMigrationFailureRunId) {
+          await validateExecutorApproval(api, { executorSha: run.head_sha,
+            policySha256: candidate.policySha256 }, policy);
+          diagnosticProof = await authenticateBackendMigrationAdmission(api);
+        }
         const proof = validateHistoricalAudit(await readReleaseAudit(api, descriptor), descriptor, pin, targets, diagnosticProof);
         historicalReconciliations.push(proof);
         if (proof.renderContinuation === true) readinessRenderContinuation = proof;
@@ -1186,6 +1206,8 @@ export async function evidencePlan(api, candidate, policy) {
     ...(acknowledgedBackend ? { acknowledgedBackend } : {}),
     ...(readinessRenderContinuation ? { readinessRenderContinuation } : {}),
     ...(historicalReconciliations.length ? { historicalReconciliations } : {}),
+    ...(candidate.backendCompletion !== undefined ?
+      { backendCompletion: backendCompletionPlanProof() } : {}),
     ...(continuation ? { memberContinuation: continuation } : {}),
     ...(memberReleases.length ? { memberReleases } : {}),
     ...(frontendReleases.length ? { frontendReleases } : {}),
